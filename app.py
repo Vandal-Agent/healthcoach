@@ -9,6 +9,7 @@ import pytz
 import requests
 from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
+from loseit_coaching import build_food_coaching
 
 app = Flask(__name__)
 
@@ -74,6 +75,13 @@ def send_telegram_msg(message, chat_id=None):
         print(f"Telegram error: {e}", flush=True)
         return False
 
+def send_food_coaching_message():
+    try:
+        msg = build_food_coaching()
+        return send_telegram_msg(msg)
+    except Exception as e:
+        print(f"Food coaching error: {e}", flush=True)
+        return False
 
 def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_PATH, SCOPE)
@@ -835,6 +843,7 @@ def add_data():
                         save_state(state)
                         sent_message = True
                         sent_type = window_name
+                        send_food_coaching_message()
 
         elif window_name == "midday":
             msg = build_midday_message(
