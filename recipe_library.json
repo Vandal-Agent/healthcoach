@@ -1,0 +1,27 @@
+{
+  "Tortilla Pizza": {
+    "category": "custom_recipe",
+    "notes": "Usually a decent dinner choice when the rest of the day is controlled.",
+    "tags": ["dinner", "repeat_food", "higher_satiety"]
+  },
+  "Protien Bar Home Made": {
+    "category": "custom_recipe",
+    "notes": "Convenient protein option, but may be less filling than whole-food protein.",
+    "tags": ["snack", "protein", "convenience_food"]
+  },
+  "Bar, Pure Protein": {
+    "category": "packaged_food",
+    "notes": "Useful for protein, but not always the most filling choice.",
+    "tags": ["snack", "protein", "packaged_food"]
+  },
+  "Protein Shake": {
+    "category": "custom_recipe",
+    "notes": "Good protein booster, especially when earlier meals are light in protein.",
+    "tags": ["protein", "liquid_calories", "supplement"]
+  },
+  "Salad": {
+    "category": "custom_recipe",
+    "notes": "Generally a positive volume food if toppings and dressings stay controlled.",
+    "tags": ["vegetables", "volume_food", "meal_support"]
+  }
+}
