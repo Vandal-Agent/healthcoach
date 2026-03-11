@@ -744,6 +744,7 @@ def add_data():
 
     sheet = get_current_sheet()
 
+
     # 1. Capture today's incoming metrics
     steps = safe_int(data.get("steps"), 0)
     total_cals = safe_float(data.get("total_calories"), 0)
@@ -751,6 +752,10 @@ def add_data():
 
     sleep_hours_raw = data.get("sleep_hours")
     sleep_hours = parse_sleep(sleep_hours_raw)
+
+    # sanity check for sleep values
+    if sleep_hours is not None and (sleep_hours < 0 or sleep_hours > 14):
+        sleep_hours = None
 
     rhr = safe_float(data.get("rhr"), 0)
     weight = safe_float(data.get("weight"), None)
