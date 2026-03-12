@@ -27,7 +27,17 @@ def parse_loseit_csv(csv_path=CSV_PATH):
         "sodium": 0.0,
     }
 
-    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+    try:
+        f = open(csv_path, newline="", encoding="utf-8-sig")
+    except FileNotFoundError:
+        return {
+            "totals": totals,
+            "meal_totals": {},
+            "top_calorie_foods": [],
+            "foods": [],
+        }
+
+    with f:
         reader = csv.DictReader(f)
         for row in reader:
             food = {
@@ -69,6 +79,16 @@ def parse_loseit_csv(csv_path=CSV_PATH):
             "sugar": sum(i["sugar"] for i in items),
             "items": items,
         }
+
+    totals = {
+        "calories": round(totals["calories"], 0),
+        "protein": round(totals["protein"], 1),
+        "carbs": round(totals["carbs"], 1),
+        "fat": round(totals["fat"], 1),
+        "fiber": round(totals["fiber"], 1),
+        "sugar": round(totals["sugar"], 1),
+        "sodium": round(totals["sodium"], 0),
+    }
 
     return {
         "totals": totals,
