@@ -75,13 +75,28 @@ def send_telegram_msg(message, chat_id=None):
         print(f"Telegram error: {e}", flush=True)
         return False
 
-def send_food_coaching_message():
+
+def send_food_coaching_message(
+    total_burn=None,
+    steps=None,
+    weight_today=None,
+    recent_weight_avg=None,
+    sleep=None,
+    chat_id=None,
+):
     try:
-        msg = build_food_coaching()
-        return send_telegram_msg(msg)
+        msg = build_food_coaching(
+            total_burn=total_burn,
+            steps=steps,
+            weight_today=weight_today,
+            recent_weight_avg=recent_weight_avg,
+            sleep=sleep,
+        )
+        return send_telegram_msg(msg, chat_id=chat_id)
     except Exception as e:
         print(f"Food coaching error: {e}", flush=True)
         return False
+
 
 def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_PATH, SCOPE)
@@ -358,6 +373,18 @@ def collect_recent_numeric_values(rows, col_index, limit=7, minimum_valid=None, 
 
 def average_or_default(values, default):
     return sum(values) / len(values) if values else default
+
+
+def get_recent_average_weight(reference_date, days_back=10, limit=7):
+    recent_rows = get_recent_rows(
+        reference_date=reference_date,
+        days_back=days_back,
+        exclude_dates={reference_date},
+    )
+    weight_values = collect_recent_numeric_values(
+        recent_rows, 6, limit=limit, minimum_valid=50
+    )
+    return average_or_default(weight_values, None)
 
 
 def build_midday_message(steps, active_cals, protein, dietary_cals):
@@ -677,6 +704,19 @@ def handle_sleep_reply(text, chat_id):
     msg = build_today_morning_message()
     if msg:
         send_telegram_msg(msg, chat_id=chat_id)
+
+        ctx = get_today_metrics_and_context()
+        recent_weight_avg = get_recent_average_weight(ctx["today_date"])
+
+        send_food_coaching_message(
+            total_burn=ctx["today_metrics"]["total_cals"] if ctx["today_metrics"] else None,
+            steps=ctx["today_metrics"]["steps"] if ctx["today_metrics"] else None,
+            weight_today=ctx["today_metrics"]["weight"] if ctx["today_metrics"] else None,
+            recent_weight_avg=recent_weight_avg,
+            sleep=ctx["today_metrics"]["sleep_hours"] if ctx["today_metrics"] else None,
+            chat_id=chat_id,
+        )
+
         state = mark_window_sent(state, "morning")
         state["awaiting_sleep_date"] = None
         save_state(state)
@@ -751,7 +791,6 @@ def add_data():
     timestamp = now.strftime("%m/%d/%Y %I:%M %p")
 
     sheet = get_current_sheet()
-
 
     # 1. Capture today's incoming metrics
     steps = safe_int(data.get("steps"), 0)
@@ -843,7 +882,16 @@ def add_data():
                         save_state(state)
                         sent_message = True
                         sent_type = window_name
-                        send_food_coaching_message()
+
+                        recent_weight_avg = get_recent_average_weight(today_date)
+
+                        send_food_coaching_message(
+                            total_burn=current_today_metrics["total_cals"] if current_today_metrics else None,
+                            steps=current_today_metrics["steps"] if current_today_metrics else None,
+                            weight_today=current_today_metrics["weight"] if current_today_metrics else None,
+                            recent_weight_avg=recent_weight_avg,
+                            sleep=current_today_metrics["sleep_hours"] if current_today_metrics else None,
+                        )
 
         elif window_name == "midday":
             msg = build_midday_message(
