@@ -10,6 +10,36 @@ def _safe_number(value, default=0):
         return default
 
 
+def _safe_avg(values, default=None):
+    clean = [float(v) for v in values if v is not None]
+    return sum(clean) / len(clean) if clean else default
+
+
+def _trend_delta(values):
+    clean = [float(v) for v in values if v is not None]
+    if len(clean) < 2:
+        return None
+    return clean[-1] - clean[0]
+
+
+def _count_hits(values, threshold=None, comparator=">="):
+    clean = [float(v) for v in values if v is not None]
+    if threshold is None:
+        return len(clean)
+
+    count = 0
+    for value in clean:
+        if comparator == ">=" and value >= threshold:
+            count += 1
+        elif comparator == ">" and value > threshold:
+            count += 1
+        elif comparator == "<=" and value <= threshold:
+            count += 1
+        elif comparator == "<" and value < threshold:
+            count += 1
+    return count
+
+
 def _build_deficit_note(deficit):
     if deficit is None:
         return None
@@ -293,3 +323,190 @@ def build_food_coaching(total_burn=None, steps=None, weight_today=None, recent_w
         sleep=sleep,
     )
     return format_food_coaching_message(coaching_data)
+
+
+def build_weekly_health_report(week_rows, title="Weekly health report"):
+    """
+    week_rows is expected to be a list of dicts like:
+    {
+        "date": "2026-03-19",
+        "steps": 8000 or None,
+        "total_cals": 3000 or None,
+        "dietary_cals": 2100 or None,
+        "protein": 125 or None,
+        "sleep_hours": 6.8 or None,
+        "weight": 224.1 or None,
+    }
+
+    Missing values must be passed as None, not zero.
+    """
+
+    if not week_rows:
+        return f"{title}\nNo weekly data available."
+
+    weights = [row.get("weight") for row in week_rows if row.get("weight") is not None]
+    steps = [row.get("steps") for row in week_rows if row.get("steps") is not None]
+    burns = [row.get("total_cals") for row in week_rows if row.get("total_cals") is not None]
+    dietary = [row.get("dietary_cals") for row in week_rows if row.get("dietary_cals") is not None]
+    protein = [row.get("protein") for row in week_rows if row.get("protein") is not None]
+    sleep = [row.get("sleep_hours") for row in week_rows if row.get("sleep_hours") is not None]
+
+    deficits = []
+    for row in week_rows:
+        burn = row.get("total_cals")
+        food = row.get("dietary_cals")
+        if burn is None or food is None:
+            continue
+        deficits.append(burn - food)
+
+    avg_weight = _safe_avg(weights, None)
+    avg_steps = _safe_avg(steps, None)
+    avg_burn = _safe_avg(burns, None)
+    avg_food = _safe_avg(dietary, None)
+    avg_protein = _safe_avg(protein, None)
+    avg_sleep = _safe_avg(sleep, None)
+    avg_deficit = _safe_avg(deficits, None)
+
+    weight_delta = _trend_delta(weights)
+    steps_hit_days = _count_hits(steps, 8000, ">=")
+    protein_hit_days = _count_hits(protein, 100, ">=")
+    sleep_hit_days = _count_hits(sleep, 7, ">=")
+
+    observations = []
+
+    if weight_delta is not None:
+        if weight_delta <= -0.8:
+            observations.append(
+                f"Weight trended down by {abs(weight_delta):.1f} lb across the week, which suggests the week was generally moving in the right direction."
+            )
+        elif weight_delta >= 0.8:
+            observations.append(
+                f"Weight trended up by {weight_delta:.1f} lb across the week. That may reflect higher intake, lower activity, water retention, or some combination."
+            )
+        else:
+            observations.append(
+                "Weight was fairly stable across the week."
+            )
+
+    if avg_deficit is not None:
+        if avg_deficit >= 400:
+            observations.append(
+                f"Average calorie deficit on days with both burn and intake data was about {avg_deficit:.0f}, which is meaningful for fat loss."
+            )
+        elif avg_deficit >= 100:
+            observations.append(
+                f"Average calorie deficit on tracked days was about {avg_deficit:.0f}. That supports slower progress, but still points in a good direction."
+            )
+        else:
+            observations.append(
+                "Tracked calorie balance was close to maintenance on average."
+            )
+
+    if avg_protein is not None:
+        if avg_protein < 90:
+            observations.append(
+                f"Protein averaged {avg_protein:.0f}g on logged days, which is likely too low for your current goals."
+            )
+        elif avg_protein >= 120:
+            observations.append(
+                f"Protein averaged {avg_protein:.0f}g on logged days, which is a real strength."
+            )
+        else:
+            observations.append(
+                f"Protein averaged {avg_protein:.0f}g on logged days. That is workable, but there is room to tighten it up."
+            )
+
+    if avg_sleep is not None:
+        if avg_sleep < 6.5:
+            observations.append(
+                f"Sleep averaged {avg_sleep:.2f} hours on recorded days. That is low enough to affect hunger, recovery, and consistency."
+            )
+        elif avg_sleep >= 7:
+            observations.append(
+                f"Sleep averaged {avg_sleep:.2f} hours on recorded days, which supports recovery and appetite control."
+            )
+
+    if avg_steps is not None:
+        if avg_steps < 6000:
+            observations.append(
+                f"Steps averaged {avg_steps:.0f} on logged days, which is a lower-activity week."
+            )
+        elif avg_steps >= 9000:
+            observations.append(
+                f"Steps averaged {avg_steps:.0f} on logged days, which is a strong activity baseline."
+            )
+
+    action_items = []
+
+    if avg_protein is not None and avg_protein < 100:
+        action_items.append(
+            "Set one repeatable protein anchor before 1 PM each day, and make it the same easy choice most weekdays."
+        )
+
+    if avg_sleep is not None and avg_sleep < 6.5:
+        action_items.append(
+            "Treat sleep entry as part of your morning routine and aim to bring your weekly average up by at least 20 to 30 minutes per night."
+        )
+
+    if avg_steps is not None and avg_steps < 7000:
+        action_items.append(
+            "Add one deliberate movement block on your lowest-activity days instead of trying to force a big step count every day."
+        )
+
+    if avg_deficit is not None and avg_deficit < 150:
+        action_items.append(
+            "Tighten one calorie leak that repeats during the week rather than trying to overhaul the whole plan."
+        )
+
+    if not action_items:
+        action_items.append(
+            "Keep the current routine steady for another week and focus on consistency rather than adding new rules."
+        )
+
+    message = [title]
+
+    message.append("")
+    message.append("Summary")
+    if avg_weight is not None:
+        message.append(f"- Average weight: {avg_weight:.1f}")
+    if avg_burn is not None:
+        message.append(f"- Average burn: {avg_burn:.0f}")
+    if avg_food is not None:
+        message.append(f"- Average calories eaten: {avg_food:.0f}")
+    if avg_deficit is not None:
+        message.append(f"- Average deficit: {avg_deficit:.0f}")
+    if avg_protein is not None:
+        message.append(f"- Average protein: {avg_protein:.0f}g")
+    if avg_sleep is not None:
+        message.append(f"- Average sleep: {avg_sleep:.2f}h")
+    if avg_steps is not None:
+        message.append(f"- Average steps: {avg_steps:.0f}")
+    if weights:
+        message.append(f"- Weight entries used: {len(weights)}")
+    if protein:
+        message.append(f"- Protein days used: {len(protein)}")
+    if sleep:
+        message.append(f"- Sleep days used: {len(sleep)}")
+    if steps:
+        message.append(f"- Step days used: {len(steps)}")
+
+    message.append("")
+    message.append("What mattered this week")
+    for note in observations[:4]:
+        message.append(f"- {note}")
+
+    message.append("")
+    message.append("Consistency checks")
+    if steps:
+        message.append(f"- Days at or above 8,000 steps: {steps_hit_days}/{len(steps)}")
+    if protein:
+        message.append(f"- Days at or above 100g protein: {protein_hit_days}/{len(protein)}")
+    if sleep:
+        message.append(f"- Days at or above 7 hours sleep: {sleep_hit_days}/{len(sleep)}")
+
+    message.append("")
+    message.append("Next-week focus")
+    for item in action_items[:3]:
+        message.append(f"- {item}")
+
+    return "\n".join(message)
