@@ -1,0 +1,45 @@
+# HealthCoach
+
+Personal health coaching bot running on a DigitalOcean Ubuntu server.
+
+## Current Capabilities
+
+- Receives health data from an iPhone Shortcut
+- Updates the Google Sheet named `Health Tracker`
+- Tracks steps, protein, sleep, weight, HRV, and calorie data
+- Reads Lose It CSV summaries from Gmail
+- Sends daily and weekly coaching through Telegram
+- Runs scheduled health checks and reminders
+
+## Project Location
+
+/home/vandal/bots/healthcoach
+
+## Service
+
+/etc/systemd/system/healthcoach.service
+
+Useful commands:
+
+- sudo systemctl status healthcoach
+- sudo systemctl restart healthcoach
+- sudo journalctl -u healthcoach -f
+
+## Configuration
+
+Live environment variables are stored centrally in:
+
+/home/vandal/.env
+
+Do not commit the real .env file or any secrets to GitHub.
+
+## Documentation
+
+- ARCHITECTURE.md
+- PROJECT_WORKFLOW.md
+- PROJECT_NOTES.md
+- /home/vandal/BOT_SYSTEM.md
+
+## Status
+
+Active and currently in an observation phase before the next round of improvements.
