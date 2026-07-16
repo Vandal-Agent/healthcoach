@@ -301,3 +301,203 @@ def list_open_cases() -> list[dict[str, Any]]:
         ).fetchall()
 
     return [dict(row) for row in rows]
+
+def close_case(
+    *,
+    case_id: int,
+    followed_status: str,
+    follow_through_evidence: str | None,
+    follow_through_confidence: float | None,
+    actual_result: str,
+    actual_value: float | None,
+    successful: bool,
+    outcome_confidence: float,
+    evaluator_source: str = "rules",
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Evaluate and close one open Case."""
+    allowed_followed = {
+        "yes",
+        "no",
+        "partial",
+        "likely",
+        "unknown",
+    }
+    allowed_sources = {
+        "rules",
+        "ai",
+        "hybrid",
+        "user",
+    }
+
+    if followed_status not in allowed_followed:
+        raise ValueError("Invalid followed_status.")
+
+    if evaluator_source not in allowed_sources:
+        raise ValueError("Invalid evaluator_source.")
+
+    if not actual_result.strip():
+        raise ValueError("actual_result is required.")
+
+    follow_confidence = None
+    if follow_through_confidence is not None:
+        follow_confidence = validate_confidence(
+            follow_through_confidence,
+            "follow_through_confidence",
+        )
+
+    result_confidence = validate_confidence(
+        outcome_confidence,
+        "outcome_confidence",
+    )
+
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        existing = connection.execute(
+            """
+            SELECT *
+            FROM cases
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        ).fetchone()
+
+        if existing is None:
+            raise ValueError(f"Case not found: {case_id}")
+
+        if existing["status"] != "open":
+            return {
+                "updated": False,
+                "case": dict(existing),
+            }
+
+        connection.execute(
+            """
+            UPDATE cases
+            SET
+                status = 'closed',
+                followed_status = ?,
+                follow_through_evidence = ?,
+                follow_through_confidence = ?,
+                actual_result = ?,
+                actual_value = ?,
+                successful = ?,
+                outcome_confidence = ?,
+                evaluated_at = ?,
+                closed_at = ?,
+                evaluator_source = ?,
+                notes = COALESCE(?, notes),
+                updated_at = ?
+            WHERE case_id = ?
+            """,
+            (
+                followed_status,
+                follow_through_evidence,
+                follow_confidence,
+                actual_result,
+                actual_value,
+                1 if successful else 0,
+                result_confidence,
+                timestamp,
+                timestamp,
+                evaluator_source,
+                notes,
+                timestamp,
+                case_id,
+            ),
+        )
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM cases
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "Case was updated but could not be retrieved."
+        )
+
+    return {
+        "updated": True,
+        "case": dict(row),
+    }
+
+
+def evaluate_missing_data_cases(
+    *,
+    case_date: date | str,
+    nutrition_data_available: bool,
+    dietary_cals: float,
+    protein: float,
+    latest_update: str | None,
+) -> list[dict[str, Any]]:
+    """Evaluate and close open missing-data Cases for one date."""
+    normalized_case_date = normalize_date(case_date)
+
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM cases
+            WHERE status = 'open'
+              AND case_type = 'missing_data'
+              AND case_date = ?
+            ORDER BY case_id
+            """,
+            (normalized_case_date,),
+        ).fetchall()
+
+    results: list[dict[str, Any]] = []
+
+    for row in rows:
+        case = dict(row)
+
+        if nutrition_data_available:
+            result = close_case(
+                case_id=case["case_id"],
+                followed_status="likely",
+                follow_through_evidence=(
+                    "Nutrition data appeared after the midday reminder."
+                ),
+                follow_through_confidence=0.85,
+                actual_result=(
+                    "Nutrition data was available by the evening check."
+                ),
+                actual_value=float(dietary_cals),
+                successful=True,
+                outcome_confidence=0.95,
+                evaluator_source="rules",
+                notes=(
+                    f"Latest update: {latest_update}; "
+                    f"protein: {float(protein):.1f}g"
+                ),
+            )
+        else:
+            result = close_case(
+                case_id=case["case_id"],
+                followed_status="unknown",
+                follow_through_evidence=(
+                    "Nutrition data was still unavailable at the evening check."
+                ),
+                follow_through_confidence=0.90,
+                actual_result=(
+                    "Nutrition data was still missing by the evening check."
+                ),
+                actual_value=None,
+                successful=False,
+                outcome_confidence=0.95,
+                evaluator_source="rules",
+                notes=f"Latest update: {latest_update}",
+            )
+
+        results.append(result)
+
+    return results

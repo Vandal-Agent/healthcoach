@@ -15,7 +15,10 @@ from oauth2client.service_account import ServiceAccountCredentials
 from loseit_coaching import build_food_coaching, build_weekly_health_report
 from loseit_email_reader import download_latest_loseit_csv
 from loseit_parser import parse_loseit_csv
-from memory.cases import create_case
+from memory.cases import (
+    create_case,
+    evaluate_missing_data_cases,
+)
 
 app = Flask(__name__)
 
@@ -908,9 +911,57 @@ def send_midday_update():
 
 
 def send_evening_update():
-    today_row = get_row_for_date(datetime.now(PACIFIC_TZ).date())
+    now = datetime.now(PACIFIC_TZ)
+    today = now.date()
+
+    today_row = get_row_for_date(today)
     metrics = row_to_metrics(today_row)
-    return send_telegram_msg(build_progress_message("7:00 update", metrics))
+
+    latest_update = None
+    nutrition_data_available = False
+    dietary_cals = 0.0
+    protein = 0.0
+
+    if metrics:
+        parsed_update = parse_timestamp(metrics.get("timestamp"))
+        latest_update = (
+            parsed_update.isoformat(timespec="seconds")
+            if parsed_update
+            else None
+        )
+        dietary_cals = metrics.get("dietary_cals", 0)
+        protein = metrics.get("protein", 0)
+
+        cutoff = now.replace(
+            hour=13,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        nutrition_data_available = bool(
+            parsed_update and parsed_update >= cutoff
+        )
+
+    try:
+        evaluation_results = evaluate_missing_data_cases(
+            case_date=today,
+            nutrition_data_available=nutrition_data_available,
+            dietary_cals=dietary_cals,
+            protein=protein,
+            latest_update=latest_update,
+        )
+        logging.info(
+            "Evaluated %s missing-data Memory Cases",
+            len(evaluation_results),
+        )
+    except Exception:
+        logging.exception(
+            "Could not evaluate missing-data Memory Cases"
+        )
+
+    return send_telegram_msg(
+        build_progress_message("7:00 update", metrics)
+    )
 
 
 def send_sleep_reminder_if_missing():
