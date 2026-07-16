@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 
-from memory.database import DATABASE_PATH, get_connection, initialize_database
+from memory.database import (
+    DATABASE_PATH,
+    get_connection,
+    initialize_database,
+)
 
 
 def inspect_memory() -> dict[str, object]:
@@ -37,6 +41,7 @@ def inspect_memory() -> dict[str, object]:
                 case_type,
                 observation_code,
                 recommendation_code,
+                followed_status,
                 successful,
                 created_at,
                 closed_at
@@ -54,6 +59,67 @@ def inspect_memory() -> dict[str, object]:
             """
         ).fetchone()[0]
 
+        performance_rows = connection.execute(
+            """
+            SELECT
+                recommendation_code,
+                COUNT(*) AS times_used,
+                SUM(
+                    CASE
+                        WHEN status = 'open' THEN 1
+                        ELSE 0
+                    END
+                ) AS open_cases,
+                SUM(
+                    CASE
+                        WHEN successful = 1 THEN 1
+                        ELSE 0
+                    END
+                ) AS successful_cases,
+                SUM(
+                    CASE
+                        WHEN successful = 0 THEN 1
+                        ELSE 0
+                    END
+                ) AS unsuccessful_cases,
+                SUM(
+                    CASE
+                        WHEN followed_status IN (
+                            'yes',
+                            'likely',
+                            'partial'
+                        )
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS followed_or_likely_cases
+            FROM cases
+            GROUP BY recommendation_code
+            ORDER BY recommendation_code
+            """
+        ).fetchall()
+
+    recommendation_performance = []
+
+    for row in performance_rows:
+        item = dict(row)
+
+        evaluated_count = (
+            item["successful_cases"]
+            + item["unsuccessful_cases"]
+        )
+
+        item["success_rate"] = (
+            round(
+                item["successful_cases"] / evaluated_count,
+                3,
+            )
+            if evaluated_count
+            else None
+        )
+
+        recommendation_performance.append(item)
+
     return {
         "database_path": str(DATABASE_PATH),
         "case_counts_by_status": {
@@ -63,6 +129,7 @@ def inspect_memory() -> dict[str, object]:
             row["case_type"]: row["count"] for row in type_rows
         },
         "enabled_recommendations": recommendation_count,
+        "recommendation_performance": recommendation_performance,
         "recent_cases": [dict(row) for row in recent_rows],
     }
 
