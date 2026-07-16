@@ -15,6 +15,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from loseit_coaching import build_food_coaching, build_weekly_health_report
 from loseit_email_reader import download_latest_loseit_csv
 from loseit_parser import parse_loseit_csv
+from memory.cases import create_case
 
 app = Flask(__name__)
 
@@ -791,6 +792,50 @@ def run_130_goal_check():
     cutoff = now.replace(hour=13, minute=0, second=0, microsecond=0)
 
     if not last_update or last_update < cutoff:
+        evaluation_due = now.replace(
+            hour=19,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+        try:
+            case_result = create_case(
+                case_date=today,
+                case_type="missing_data",
+                priority="medium",
+                observation_code="food_data_missing_after_midday",
+                observation=(
+                    "No food update was available after the midday check."
+                ),
+                supporting_data={
+                    "check_time": now.isoformat(timespec="seconds"),
+                    "last_food_update": (
+                        last_update.isoformat(timespec="seconds")
+                        if last_update
+                        else None
+                    ),
+                    "dietary_cals": metrics.get("dietary_cals", 0),
+                    "protein": metrics.get("protein", 0),
+                },
+                data_confidence=0.95,
+                recommendation_code="update_missing_data",
+                expected_result="Nutrition data appears later today.",
+                evaluation_due_at=evaluation_due.isoformat(
+                    timespec="seconds"
+                ),
+                tags=["midday", "missing_data"],
+            )
+            logging.info(
+                "Missing-data Memory Case %s: case_id=%s",
+                "created" if case_result["created"] else "already exists",
+                case_result["case"]["case_id"],
+            )
+        except Exception:
+            logging.exception(
+                "Could not create missing-data Memory Case"
+            )
+
         return send_telegram_msg(
             "1:30 check\nI do not see a food update after 1:00 PM yet. Update your spreadsheet food totals and I will check your goals."
         )
