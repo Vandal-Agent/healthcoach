@@ -32,6 +32,7 @@ STATE_FILE = "/home/vandal/bots/healthcoach/logs/state.json"
 LOG_FILE = "/home/vandal/bots/healthcoach/logs/healthcoach.log"
 GOALS_FILE = "/home/vandal/bots/healthcoach/goals.json"
 LOSEIT_HISTORY_FILE = "/home/vandal/bots/healthcoach/data/loseit_history.json"
+MEMORY_START_DATE = os.getenv("HEALTH_MEMORY_START_DATE", "")
 
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
@@ -795,6 +796,21 @@ def run_130_goal_check():
     cutoff = now.replace(hour=13, minute=0, second=0, microsecond=0)
 
     if not last_update or last_update < cutoff:
+        memory_enabled = True
+
+        if MEMORY_START_DATE:
+            try:
+                configured_start = datetime.strptime(
+                    MEMORY_START_DATE,
+                    "%Y-%m-%d",
+                ).date()
+                memory_enabled = today >= configured_start
+            except ValueError:
+                logging.error(
+                    "Invalid HEALTH_MEMORY_START_DATE: %s",
+                    MEMORY_START_DATE,
+                )
+
         evaluation_due = now.replace(
             hour=19,
             minute=0,
@@ -802,41 +818,51 @@ def run_130_goal_check():
             microsecond=0,
         )
 
-        try:
-            case_result = create_case(
-                case_date=today,
-                case_type="missing_data",
-                priority="medium",
-                observation_code="food_data_missing_after_midday",
-                observation=(
-                    "No food update was available after the midday check."
-                ),
-                supporting_data={
-                    "check_time": now.isoformat(timespec="seconds"),
-                    "last_food_update": (
-                        last_update.isoformat(timespec="seconds")
-                        if last_update
-                        else None
+        if memory_enabled:
+            try:
+                case_result = create_case(
+                    case_date=today,
+                    case_type="missing_data",
+                    priority="medium",
+                    observation_code="food_data_missing_after_midday",
+                    observation=(
+                        "No food update was available after the midday check."
                     ),
-                    "dietary_cals": metrics.get("dietary_cals", 0),
-                    "protein": metrics.get("protein", 0),
-                },
-                data_confidence=0.95,
-                recommendation_code="update_missing_data",
-                expected_result="Nutrition data appears later today.",
-                evaluation_due_at=evaluation_due.isoformat(
-                    timespec="seconds"
-                ),
-                tags=["midday", "missing_data"],
-            )
+                    supporting_data={
+                        "check_time": now.isoformat(timespec="seconds"),
+                        "last_food_update": (
+                            last_update.isoformat(timespec="seconds")
+                            if last_update
+                            else None
+                        ),
+                        "dietary_cals": metrics.get("dietary_cals", 0),
+                        "protein": metrics.get("protein", 0),
+                    },
+                    data_confidence=0.95,
+                    recommendation_code="update_missing_data",
+                    expected_result="Nutrition data appears later today.",
+                    evaluation_due_at=evaluation_due.isoformat(
+                        timespec="seconds"
+                    ),
+                    tags=["midday", "missing_data"],
+                )
+                logging.info(
+                    "Missing-data Memory Case %s: case_id=%s",
+                    (
+                        "created"
+                        if case_result["created"]
+                        else "already exists"
+                    ),
+                    case_result["case"]["case_id"],
+                )
+            except Exception:
+                logging.exception(
+                    "Could not create missing-data Memory Case"
+                )
+        else:
             logging.info(
-                "Missing-data Memory Case %s: case_id=%s",
-                "created" if case_result["created"] else "already exists",
-                case_result["case"]["case_id"],
-            )
-        except Exception:
-            logging.exception(
-                "Could not create missing-data Memory Case"
+                "Memory Case collection begins on %s",
+                MEMORY_START_DATE,
             )
 
         return send_telegram_msg(
