@@ -1,0 +1,162 @@
+# HealthCoach Food System
+
+## Vision
+
+Build a trustworthy food logging system that understands natural language, verifies nutrition, and learns over time.
+
+---
+
+# Core Principles
+
+1. Never invent nutrition.
+2. AI interprets food, never supplies nutrition.
+3. Verify before saving.
+4. If unsure, ask.
+5. Every nutrition value has a source.
+6. Every change is versioned.
+7. Historical entries never change.
+
+---
+
+# Architecture
+
+Telegram
+↓
+Conversation Engine
+↓
+AI Interpreter
+↓
+Nutrition Providers
+↓
+Food Library
+↓
+Food Ledger
+↓
+Memory
+↓
+Coaching
+
+---
+
+# AI Responsibilities
+
+Allowed:
+- Understand food descriptions
+- Extract structured data
+- Ask for missing information
+
+Not Allowed:
+- Guess nutrition
+- Invent foods
+- Invent serving sizes
+- Pretend confidence
+
+---
+
+# Nutrition Provider Priority
+
+1. Official restaurant
+2. USDA FoodData Central
+3. Open Food Facts
+4. Other approved providers
+
+If nothing can be verified:
+- Tell the user
+- Do not invent values
+
+---
+
+# Food Library
+
+Each food has one permanent ID.
+
+Stores:
+- Name
+- Restaurant
+- Brand
+- Serving
+- Verification source
+- Verification date
+- Nutrition versions
+- Usage count
+
+---
+
+# Nutrition Versions
+
+Never overwrite.
+
+Create a new version when nutrition changes.
+
+Historical entries continue using the version that existed when they were logged.
+
+---
+
+# Food Entries
+
+Each entry stores:
+- Date
+- Meal
+- Food ID
+- Nutrition Version
+- Quantity
+- Logging source
+- Original text
+
+---
+
+# Portion Profiles
+
+Remember user-confirmed estimates.
+
+Example:
+- Medium handful pretzels
+- Large bowl cereal
+
+---
+
+# Reverification
+
+Recheck when:
+- 20 uses AND 30+ days since last verification
+OR
+- 6 months since verification
+
+Never overwrite previous versions.
+
+---
+
+# Logging Sources
+
+- Telegram AI
+- Telegram Manual
+- Lose It
+- Barcode
+- Recipe
+- Manual
+
+---
+
+# Future Features
+
+- Voice logging
+- Barcode scanner
+- Meal photos
+- Recipe builder
+- Same as yesterday
+- Favorites
+- Restaurant history
+- Grocery suggestions
+- AI meal planning
+
+---
+
+# Design Philosophy
+
+HealthCoach values trust over convenience.
+
+If it knows, it answers.
+
+If it isn't sure, it asks.
+
+If it cannot verify, it says so.
