@@ -15,6 +15,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from loseit_coaching import build_food_coaching, build_weekly_health_report
 from loseit_email_reader import download_latest_loseit_csv
 from loseit_parser import parse_loseit_csv
+from food.interpreter import interpret_food_message
 from memory.cases import (
     create_case,
     evaluate_missing_data_cases,
@@ -648,6 +649,50 @@ def is_run_weekly_report_command(text):
     }
 
 
+def format_food_interpretation(interpretation):
+    """Format a food interpretation for Telegram review."""
+    lines = ["I interpreted this as:"]
+
+    fields = (
+        ("Restaurant", interpretation.restaurant),
+        ("Brand", interpretation.brand),
+        ("Food", interpretation.food_name),
+        ("Size", interpretation.size),
+        ("Quantity", interpretation.quantity),
+        ("Amount", interpretation.quantity_description),
+        ("Meal", interpretation.meal_category),
+        ("Drink", interpretation.drink),
+    )
+
+    for label, value in fields:
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+
+    if interpretation.assumptions:
+        lines.append("")
+        lines.append("Assumptions:")
+        for assumption in interpretation.assumptions:
+            lines.append(f"- {assumption}")
+
+    if interpretation.missing_fields:
+        lines.append("")
+        lines.append(
+            "Still needed: "
+            + ", ".join(interpretation.missing_fields)
+        )
+
+    if interpretation.clarification_question:
+        lines.append("")
+        lines.append(interpretation.clarification_question)
+
+    lines.append("")
+    lines.append(
+        "Nutrition has not been looked up or saved yet."
+    )
+
+    return "\n".join(lines)
+
+
 def build_help_message():
     return (
         "I can currently help with:\n"
@@ -1106,6 +1151,18 @@ def process_telegram_update(update):
     if is_run_weekly_report_command(text):
         send_weekly_report(chat_id=chat_id)
         return
+
+    try:
+        interpretation = interpret_food_message(text)
+
+        if interpretation.is_food_logging_request:
+            send_telegram_msg(
+                format_food_interpretation(interpretation),
+                chat_id=chat_id,
+            )
+            return
+    except Exception:
+        logging.exception("Food interpretation failed")
 
     send_telegram_msg(build_help_message(), chat_id=chat_id)
 
