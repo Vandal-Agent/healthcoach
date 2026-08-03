@@ -16,6 +16,12 @@ from loseit_coaching import build_food_coaching, build_weekly_health_report
 from loseit_email_reader import download_latest_loseit_csv
 from loseit_parser import parse_loseit_csv
 from food.interpreter import interpret_food_message
+from conversation_engine import (
+    cancel_conversation,
+    complete_conversation,
+    get_active_conversation,
+    start_conversation,
+)
 from memory.cases import (
     create_case,
     evaluate_missing_data_cases,
@@ -690,6 +696,12 @@ def format_food_interpretation(interpretation):
         "Nutrition has not been looked up or saved yet."
     )
 
+    if not interpretation.missing_fields:
+        lines.append("")
+        lines.append("1. Correct")
+        lines.append("2. Edit")
+        lines.append("3. Cancel")
+
     return "\n".join(lines)
 
 
@@ -1135,7 +1147,55 @@ def process_telegram_update(update):
 
     if text == "/status":
         metrics = get_today_metrics()
-        send_telegram_msg(build_progress_message("Current status", metrics), chat_id=chat_id)
+        send_telegram_msg(
+            build_progress_message("Current status", metrics),
+            chat_id=chat_id,
+        )
+        return
+
+    active_conversation = get_active_conversation(chat_id)
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "food_interpretation"
+        and active_conversation.get("current_step")
+        == "confirmation"
+    ):
+        lowered = text.lower().strip()
+
+        if lowered in {"1", "correct", "yes"}:
+            complete_conversation(chat_id)
+            send_telegram_msg(
+                "Food interpretation confirmed.\n\n"
+                "Nutrition lookup and saving are not connected yet.",
+                chat_id=chat_id,
+            )
+            return
+
+        if lowered in {"2", "edit"}:
+            cancel_conversation(chat_id)
+            send_telegram_msg(
+                "Send the corrected food description as a new message.",
+                chat_id=chat_id,
+            )
+            return
+
+        if lowered in {"3", "cancel", "no"}:
+            cancel_conversation(chat_id)
+            send_telegram_msg(
+                "Food entry cancelled.",
+                chat_id=chat_id,
+            )
+            return
+
+        send_telegram_msg(
+            "Please reply:\n"
+            "1. Correct\n"
+            "2. Edit\n"
+            "3. Cancel",
+            chat_id=chat_id,
+        )
         return
 
     sleep_value = extract_sleep_value_from_text(text)
@@ -1156,6 +1216,16 @@ def process_telegram_update(update):
         interpretation = interpret_food_message(text)
 
         if interpretation.is_food_logging_request:
+            if not interpretation.missing_fields:
+                start_conversation(
+                    chat_id=chat_id,
+                    conversation_type="food_interpretation",
+                    current_step="confirmation",
+                    known_data=interpretation.model_dump(),
+                    missing_fields=[],
+                    original_message=text,
+                )
+
             send_telegram_msg(
                 format_food_interpretation(interpretation),
                 chat_id=chat_id,
