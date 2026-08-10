@@ -1076,3 +1076,146 @@ def get_pending_unresolved_foods() -> list[dict[str, object]]:
         ).fetchall()
 
     return [dict(row) for row in rows]
+
+
+def get_unresolved_food(
+    unresolved_food_id: int,
+) -> dict[str, object] | None:
+    """Return one unresolved Food queue record by ID."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM unresolved_foods
+            WHERE unresolved_food_id = ?
+            """,
+            (int(unresolved_food_id),),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
+
+def set_unresolved_food_status(
+    unresolved_food_id: int,
+    *,
+    status: str,
+) -> dict[str, object]:
+    """Set one unresolved Food queue record's lifecycle status."""
+    initialize_database()
+
+    normalized_status = status.strip().lower()
+
+    if normalized_status not in {
+        "pending",
+        "resolved",
+        "cancelled",
+    }:
+        raise ValueError("Unsupported unresolved Food status.")
+
+    timestamp = current_timestamp()
+    resolved_at = (
+        timestamp if normalized_status == "resolved" else None
+    )
+
+    with get_connection(DATABASE_PATH) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE unresolved_foods
+            SET status = ?,
+                updated_at = ?,
+                resolved_at = ?
+            WHERE unresolved_food_id = ?
+            """,
+            (
+                normalized_status,
+                timestamp,
+                resolved_at,
+                int(unresolved_food_id),
+            ),
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError("Unresolved Food was not found.")
+
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM unresolved_foods
+            WHERE unresolved_food_id = ?
+            """,
+            (int(unresolved_food_id),),
+        ).fetchone()
+
+    return dict(row)
+
+
+def update_unresolved_food_details(
+    unresolved_food_id: int,
+    *,
+    original_text: str,
+    meal_category: str | None,
+    food_name: str | None,
+    brand: str | None,
+    restaurant: str | None,
+    size: str | None,
+    quantity: float | None,
+    quantity_description: str | None,
+) -> dict[str, object]:
+    """Replace the interpreted details for one pending queue item."""
+    initialize_database()
+
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE unresolved_foods
+            SET original_text = ?,
+                meal_category = ?,
+                food_name = ?,
+                brand = ?,
+                restaurant = ?,
+                size = ?,
+                quantity = ?,
+                quantity_description = ?,
+                updated_at = ?
+            WHERE unresolved_food_id = ?
+              AND status = 'pending'
+            """,
+            (
+                original_text.strip(),
+                meal_category.strip() if meal_category else None,
+                food_name.strip() if food_name else None,
+                brand.strip() if brand else None,
+                restaurant.strip() if restaurant else None,
+                size.strip() if size else None,
+                float(quantity) if quantity is not None else None,
+                (
+                    quantity_description.strip()
+                    if quantity_description
+                    else None
+                ),
+                timestamp,
+                int(unresolved_food_id),
+            ),
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError("Pending unresolved Food was not found.")
+
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM unresolved_foods
+            WHERE unresolved_food_id = ?
+            """,
+            (int(unresolved_food_id),),
+        ).fetchone()
+
+    return dict(row)
