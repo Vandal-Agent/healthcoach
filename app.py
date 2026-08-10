@@ -2089,14 +2089,23 @@ def show_unresolved_food_review(
     chat_id: int | str,
     pending: list[dict] | None = None,
     unresolved_food_id: int | None = None,
+    skipped_ids: list[int] | None = None,
 ) -> bool:
     """Start review state and display one pending unresolved Food."""
     items = pending or get_pending_unresolved_foods()
 
-    if not items:
+    skipped = {int(value) for value in (skipped_ids or [])}
+    available = [
+        item
+        for item in items
+        if int(item["unresolved_food_id"]) not in skipped
+    ]
+
+    if not available:
         cancel_conversation(chat_id)
         send_telegram_msg(
-            "There are no unknown foods waiting for nutrition.",
+            "There are no more unreviewed unknown foods "
+            "in this session.",
             chat_id=chat_id,
         )
         return False
@@ -2104,14 +2113,14 @@ def show_unresolved_food_review(
     position = 0
 
     if unresolved_food_id is not None:
-        for index, candidate in enumerate(items):
+        for index, candidate in enumerate(available):
             if int(candidate["unresolved_food_id"]) == int(
                 unresolved_food_id
             ):
                 position = index
                 break
 
-    item = items[position]
+    item = available[position]
 
     start_conversation(
         chat_id=chat_id,
@@ -2119,6 +2128,7 @@ def show_unresolved_food_review(
         current_step="menu",
         known_data={
             "_unresolved_food_id": item["unresolved_food_id"],
+            "_skipped_unresolved_food_ids": sorted(skipped),
         },
         missing_fields=[],
         original_message=str(item.get("original_text") or ""),
@@ -2128,7 +2138,7 @@ def show_unresolved_food_review(
         format_unresolved_food_review(
             item,
             position=position + 1,
-            total=len(items),
+            total=len(available),
         ),
         chat_id=chat_id,
     )
@@ -2195,6 +2205,9 @@ def process_telegram_update(update):
         unresolved_food_id = known_data.get(
             "_unresolved_food_id"
         )
+        skipped_ids = list(
+            known_data.get("_skipped_unresolved_food_ids") or []
+        )
 
         try:
             interpretation = interpret_food_message(text)
@@ -2251,6 +2264,7 @@ def process_telegram_update(update):
             unresolved_food_id=int(
                 updated["unresolved_food_id"]
             ),
+            skipped_ids=skipped_ids,
         )
         return
 
@@ -2266,6 +2280,9 @@ def process_telegram_update(update):
         )
         unresolved_food_id = known_data.get(
             "_unresolved_food_id"
+        )
+        skipped_ids = list(
+            known_data.get("_skipped_unresolved_food_ids") or []
         )
         item = (
             get_unresolved_food(int(unresolved_food_id))
@@ -2284,6 +2301,7 @@ def process_telegram_update(update):
                     "_unresolved_food_id": unresolved_food_id,
                     "_entry_date": item.get("entry_date"),
                     "_manual_label_field": "serving_size",
+                    "_skipped_unresolved_food_ids": skipped_ids,
                 }
             )
 
@@ -2315,6 +2333,14 @@ def process_telegram_update(update):
             send_telegram_msg(
                 "Send the complete corrected food description.\n\n"
                 "Example: For breakfast I had one medium apple.",
+                chat_id=chat_id,
+            )
+            return
+
+        if lowered in {"exit", "quit", "stop reviewing"}:
+            cancel_conversation(chat_id)
+            send_telegram_msg(
+                "Unknown-food review closed. No foods were changed.",
                 chat_id=chat_id,
             )
             return
@@ -2421,6 +2447,7 @@ def process_telegram_update(update):
                 "_unresolved_food_id": unresolved_food_id,
                 "_entry_date": item.get("entry_date"),
                 "_pending_components": pending_components,
+                "_skipped_unresolved_food_ids": skipped_ids,
             }
 
             start_conversation(
@@ -2454,25 +2481,13 @@ def process_telegram_update(update):
             return
 
         if lowered in {"4", "skip", "skip for now"}:
-            pending = [
-                candidate
-                for candidate in get_pending_unresolved_foods()
-                if int(candidate["unresolved_food_id"])
-                != int(unresolved_food_id)
-            ]
-
-            if not pending:
-                cancel_conversation(chat_id)
-                send_telegram_msg(
-                    "Skipped for now. There are no other "
-                    "unknown foods waiting.",
-                    chat_id=chat_id,
-                )
-                return
+            skipped_ids.append(int(unresolved_food_id))
+            pending = get_pending_unresolved_foods()
 
             show_unresolved_food_review(
                 chat_id=chat_id,
                 pending=pending,
+                skipped_ids=skipped_ids,
             )
             return
 
@@ -2492,6 +2507,7 @@ def process_telegram_update(update):
                 show_unresolved_food_review(
                     chat_id=chat_id,
                     pending=pending,
+                    skipped_ids=skipped_ids,
                 )
             else:
                 cancel_conversation(chat_id)
@@ -3507,11 +3523,18 @@ def process_telegram_update(update):
                 )
 
                 pending = get_pending_unresolved_foods()
+                skipped_ids = list(
+                    known_data.get(
+                        "_skipped_unresolved_food_ids"
+                    )
+                    or []
+                )
 
                 if pending:
                     show_unresolved_food_review(
                         chat_id=chat_id,
                         pending=pending,
+                        skipped_ids=skipped_ids,
                     )
                 else:
                     cancel_conversation(chat_id)
