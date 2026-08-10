@@ -18,8 +18,11 @@ from loseit_parser import parse_loseit_csv
 from food.database import (
     get_pending_unresolved_foods,
     get_portion_profile,
+    get_unresolved_food,
     save_portion_profile,
     save_unresolved_food,
+    set_unresolved_food_status,
+    update_unresolved_food_details,
 )
 from food.interpreter import (
     FoodInterpretation,
@@ -2029,6 +2032,109 @@ def format_pending_nutrition_confirmation(
     return "\n".join(lines)
 
 
+def format_unresolved_food_review(
+    item: dict,
+    *,
+    position: int,
+    total: int,
+) -> str:
+    """Format one queued unresolved Food review prompt."""
+    lines = [
+        f"Unknown food {position} of {total}",
+        "",
+        f"Date: {item.get('entry_date') or 'Unknown'}",
+        (
+            "Meal: "
+            + str(item.get("meal_category") or "Unknown").title()
+        ),
+        (
+            "Food: "
+            + str(item.get("food_name") or "Unknown food")
+        ),
+    ]
+
+    if item.get("brand"):
+        lines.append(f"Brand: {item['brand']}")
+
+    if item.get("restaurant"):
+        lines.append(f"Restaurant: {item['restaurant']}")
+
+    if item.get("quantity_description"):
+        lines.append(f"Amount: {item['quantity_description']}")
+    elif item.get("quantity") is not None:
+        lines.append(
+            "Quantity: "
+            + format_display_number(float(item["quantity"]))
+        )
+
+    lines.extend(
+        [
+            "",
+            "Original message:",
+            str(item.get("original_text") or ""),
+            "",
+            "1. Enter nutrition",
+            "2. Change name/details",
+            "3. Try automatic lookup again",
+            "4. Skip for now",
+            "5. Cancel this food",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
+def show_unresolved_food_review(
+    *,
+    chat_id: int | str,
+    pending: list[dict] | None = None,
+    unresolved_food_id: int | None = None,
+) -> bool:
+    """Start review state and display one pending unresolved Food."""
+    items = pending or get_pending_unresolved_foods()
+
+    if not items:
+        cancel_conversation(chat_id)
+        send_telegram_msg(
+            "There are no unknown foods waiting for nutrition.",
+            chat_id=chat_id,
+        )
+        return False
+
+    position = 0
+
+    if unresolved_food_id is not None:
+        for index, candidate in enumerate(items):
+            if int(candidate["unresolved_food_id"]) == int(
+                unresolved_food_id
+            ):
+                position = index
+                break
+
+    item = items[position]
+
+    start_conversation(
+        chat_id=chat_id,
+        conversation_type="unresolved_food_review",
+        current_step="menu",
+        known_data={
+            "_unresolved_food_id": item["unresolved_food_id"],
+        },
+        missing_fields=[],
+        original_message=str(item.get("original_text") or ""),
+    )
+
+    send_telegram_msg(
+        format_unresolved_food_review(
+            item,
+            position=position + 1,
+            total=len(items),
+        ),
+        chat_id=chat_id,
+    )
+    return True
+
+
 def process_telegram_update(update):
     message = update.get("message") or update.get("edited_message") or {}
     if not message:
@@ -2068,54 +2174,338 @@ def process_telegram_update(update):
             )
             return
 
-        item = pending[0]
-
-        lines = [
-            f"Unknown food 1 of {len(pending)}",
-            "",
-            f"Date: {item.get('entry_date') or 'Unknown'}",
-            (
-                "Meal: "
-                + str(item.get("meal_category") or "Unknown").title()
-            ),
-            (
-                "Food: "
-                + str(item.get("food_name") or "Unknown food")
-            ),
-        ]
-
-        if item.get("brand"):
-            lines.append(f"Brand: {item['brand']}")
-
-        if item.get("restaurant"):
-            lines.append(f"Restaurant: {item['restaurant']}")
-
-        if item.get("quantity_description"):
-            lines.append(
-                f"Amount: {item['quantity_description']}"
-            )
-
-        lines.extend(
-            [
-                "",
-                "Original message:",
-                str(item.get("original_text") or ""),
-                "",
-                "1. Enter nutrition",
-                "2. Change name/details",
-                "3. Try automatic lookup again",
-                "4. Skip for now",
-                "5. Cancel this food",
-            ]
-        )
-
-        send_telegram_msg(
-            "\n".join(lines),
+        show_unresolved_food_review(
             chat_id=chat_id,
+            pending=pending,
         )
         return
 
     active_conversation = get_active_conversation(chat_id)
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "unresolved_food_review"
+        and active_conversation.get("current_step")
+        == "edit_details"
+    ):
+        known_data = dict(
+            active_conversation.get("known_data") or {}
+        )
+        unresolved_food_id = known_data.get(
+            "_unresolved_food_id"
+        )
+
+        try:
+            interpretation = interpret_food_message(text)
+        except Exception:
+            logging.exception(
+                "Unresolved Food detail interpretation failed"
+            )
+            send_telegram_msg(
+                "I could not interpret those details. Try again.",
+                chat_id=chat_id,
+            )
+            return
+
+        if (
+            unresolved_food_id is None
+            or not interpretation.is_food_logging_request
+            or not interpretation.food_name
+        ):
+            send_telegram_msg(
+                "Please send a complete corrected food description.",
+                chat_id=chat_id,
+            )
+            return
+
+        existing = get_unresolved_food(int(unresolved_food_id))
+
+        if existing is None:
+            show_unresolved_food_review(chat_id=chat_id)
+            return
+
+        updated = update_unresolved_food_details(
+            int(unresolved_food_id),
+            original_text=text,
+            meal_category=(
+                interpretation.meal_category
+                or existing.get("meal_category")
+            ),
+            food_name=interpretation.food_name,
+            brand=interpretation.brand,
+            restaurant=interpretation.restaurant,
+            size=interpretation.size,
+            quantity=interpretation.quantity,
+            quantity_description=(
+                interpretation.quantity_description
+            ),
+        )
+
+        send_telegram_msg(
+            "Unknown food details updated.",
+            chat_id=chat_id,
+        )
+        show_unresolved_food_review(
+            chat_id=chat_id,
+            unresolved_food_id=int(
+                updated["unresolved_food_id"]
+            ),
+        )
+        return
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "unresolved_food_review"
+        and active_conversation.get("current_step") == "menu"
+    ):
+        lowered = text.lower().strip()
+        known_data = dict(
+            active_conversation.get("known_data") or {}
+        )
+        unresolved_food_id = known_data.get(
+            "_unresolved_food_id"
+        )
+        item = (
+            get_unresolved_food(int(unresolved_food_id))
+            if unresolved_food_id is not None
+            else None
+        )
+
+        if item is None or item.get("status") != "pending":
+            show_unresolved_food_review(chat_id=chat_id)
+            return
+
+        if lowered in {"1", "enter nutrition", "nutrition"}:
+            item_data = dict(item)
+            item_data.update(
+                {
+                    "_unresolved_food_id": unresolved_food_id,
+                    "_entry_date": item.get("entry_date"),
+                    "_manual_label_field": "serving_size",
+                }
+            )
+
+            start_conversation(
+                chat_id=chat_id,
+                conversation_type="food_interpretation",
+                current_step="manual_label_entry",
+                known_data=item_data,
+                missing_fields=[],
+                original_message=str(
+                    item.get("original_text") or ""
+                ),
+            )
+
+            send_telegram_msg(
+                "What serving size applies to this food?\n"
+                "Examples: 28 g, 1 oz, 1 serving.",
+                chat_id=chat_id,
+            )
+            return
+
+        if lowered in {"2", "change", "change name", "edit"}:
+            update_conversation(
+                chat_id=chat_id,
+                current_step="edit_details",
+                known_data=known_data,
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Send the complete corrected food description.\n\n"
+                "Example: For breakfast I had one medium apple.",
+                chat_id=chat_id,
+            )
+            return
+
+        if lowered in {"3", "retry", "automatic lookup"}:
+            try:
+                provider_result = lookup_official_nutrition(
+                    restaurant=item.get("restaurant"),
+                    food_name=item.get("food_name"),
+                    size=item.get("size"),
+                    brand=item.get("brand"),
+                )
+            except Exception:
+                logging.exception(
+                    "Unresolved Food automatic lookup failed"
+                )
+                send_telegram_msg(
+                    "The automatic lookup failed. The food remains "
+                    "in the queue.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if not provider_result.get("found"):
+                send_telegram_msg(
+                    "I still could not verify this food "
+                    "automatically. Choose another option.",
+                    chat_id=chat_id,
+                )
+                return
+
+            provider_food = provider_result["food"]
+            provider_nutrition = provider_result["nutrition"]
+            verification = provider_result["verification"]
+
+            try:
+                saved = add_food_with_nutrition(
+                    canonical_name=provider_food["canonical_name"],
+                    serving_description=(
+                        provider_food["serving_description"]
+                    ),
+                    serving_amount=provider_food["serving_amount"],
+                    serving_unit=provider_food["serving_unit"],
+                    verification_status=verification["status"],
+                    verification_source=verification["source"],
+                    calories=provider_nutrition["calories"],
+                    protein_g=provider_nutrition["protein_g"],
+                    carbohydrates_g=(
+                        provider_nutrition["carbohydrates_g"]
+                    ),
+                    fat_g=provider_nutrition["fat_g"],
+                    fiber_g=provider_nutrition["fiber_g"],
+                    sugar_g=provider_nutrition["sugar_g"],
+                    sodium_mg=provider_nutrition["sodium_mg"],
+                    brand=provider_food["brand"],
+                    restaurant=provider_food["restaurant"],
+                    food_type=provider_food["food_type"],
+                    source_item_id=verification["source_item_id"],
+                    source_url=verification["source_url"],
+                )
+            except Exception:
+                logging.exception(
+                    "Unresolved verified Food save failed"
+                )
+                send_telegram_msg(
+                    "Nutrition was found, but it could not be saved.",
+                    chat_id=chat_id,
+                )
+                return
+
+            saved_food = saved["food"]
+            saved_nutrition = saved["nutrition"] or {}
+
+            try:
+                quantity = resolve_non_restaurant_quantity(
+                    food_id=saved_food["food_id"],
+                    quantity=item.get("quantity"),
+                    quantity_description=item.get(
+                        "quantity_description"
+                    ),
+                    serving_amount=saved_food.get("serving_amount"),
+                    serving_unit=saved_food.get("serving_unit"),
+                )
+            except ValueError as error:
+                send_telegram_msg(str(error), chat_id=chat_id)
+                return
+
+            pending_components = [
+                {
+                    "role": "Food",
+                    "food_id": saved_food["food_id"],
+                    "canonical_name": saved_food["canonical_name"],
+                    "restaurant": saved_food.get("restaurant"),
+                    "size": item.get("size"),
+                    "quantity": quantity,
+                    "calories": saved_nutrition.get("calories"),
+                    "protein_g": saved_nutrition.get("protein_g"),
+                    "verification_source": verification["source"],
+                }
+            ]
+
+            review_data = {
+                **dict(item),
+                "_unresolved_food_id": unresolved_food_id,
+                "_entry_date": item.get("entry_date"),
+                "_pending_components": pending_components,
+            }
+
+            start_conversation(
+                chat_id=chat_id,
+                conversation_type="food_interpretation",
+                current_step="nutrition_confirmation",
+                known_data=review_data,
+                missing_fields=[],
+                original_message=str(
+                    item.get("original_text") or ""
+                ),
+            )
+
+            prompt_message_id = send_telegram_msg(
+                format_pending_nutrition_confirmation(
+                    pending_components,
+                    meal_category=item.get("meal_category"),
+                ),
+                chat_id=chat_id,
+            )
+
+            if isinstance(prompt_message_id, int):
+                update_conversation(
+                    chat_id=chat_id,
+                    known_data={
+                        "_nutrition_prompt_message_id": (
+                            prompt_message_id
+                        ),
+                    },
+                )
+            return
+
+        if lowered in {"4", "skip", "skip for now"}:
+            pending = [
+                candidate
+                for candidate in get_pending_unresolved_foods()
+                if int(candidate["unresolved_food_id"])
+                != int(unresolved_food_id)
+            ]
+
+            if not pending:
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "Skipped for now. There are no other "
+                    "unknown foods waiting.",
+                    chat_id=chat_id,
+                )
+                return
+
+            show_unresolved_food_review(
+                chat_id=chat_id,
+                pending=pending,
+            )
+            return
+
+        if lowered in {"5", "cancel", "cancel this food"}:
+            set_unresolved_food_status(
+                int(unresolved_food_id),
+                status="cancelled",
+            )
+
+            pending = get_pending_unresolved_foods()
+
+            if pending:
+                send_telegram_msg(
+                    "Unknown food cancelled.",
+                    chat_id=chat_id,
+                )
+                show_unresolved_food_review(
+                    chat_id=chat_id,
+                    pending=pending,
+                )
+            else:
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "Unknown food cancelled. The queue is empty.",
+                    chat_id=chat_id,
+                )
+            return
+
+        send_telegram_msg(
+            "Please choose 1, 2, 3, 4, or 5.",
+            chat_id=chat_id,
+        )
+        return
 
     if (
         active_conversation
@@ -2774,7 +3164,7 @@ def process_telegram_update(update):
             saved_nutrition = saved["nutrition"] or {}
 
             try:
-                quantity = resolve_packaged_serving_multiplier(
+                quantity = resolve_non_restaurant_quantity(
                     food_id=saved_food["food_id"],
                     quantity=known_data.get("quantity"),
                     quantity_description=known_data.get(
@@ -2917,6 +3307,20 @@ def process_telegram_update(update):
         original_message = active_conversation.get(
             "original_message"
         )
+        target_entry_date = datetime.now(PACIFIC_TZ).date()
+        stored_entry_date = known_data.get("_entry_date")
+
+        if stored_entry_date:
+            try:
+                target_entry_date = datetime.strptime(
+                    str(stored_entry_date),
+                    "%Y-%m-%d",
+                ).date()
+            except ValueError:
+                logging.warning(
+                    "Invalid unresolved Food entry date: %s",
+                    stored_entry_date,
+                )
 
         if known_data.get("_duplicate_warning_pending"):
             if lowered in {
@@ -2979,11 +3383,9 @@ def process_telegram_update(update):
             if not duplicate_override:
                 duplicate_component = None
                 duplicate_entry = None
-                today = datetime.now(PACIFIC_TZ).date()
-
                 for component in pending_components:
                     duplicate = find_recent_duplicate_entry(
-                        entry_date=today,
+                        entry_date=target_entry_date,
                         meal_category=meal_category,
                         food_id=int(component["food_id"]),
                         quantity=float(
@@ -3032,9 +3434,7 @@ def process_telegram_update(update):
             try:
                 for component in pending_components:
                     entry = add_food_entry(
-                        entry_date=datetime.now(
-                            PACIFIC_TZ
-                        ).date(),
+                        entry_date=target_entry_date,
                         meal_category=meal_category,
                         food_id=int(component["food_id"]),
                         quantity=float(
@@ -3076,17 +3476,50 @@ def process_telegram_update(update):
 
             try:
                 sync_food_ledger_totals_to_sheet(
-                    datetime.now(PACIFIC_TZ).date()
+                    target_entry_date
                 )
             except Exception:
                 logging.exception(
                     "Food Ledger Google Sheet sync failed"
                 )
                 send_telegram_msg(
-                    "Food was logged, but today's Google Sheet "
+                    "Food was logged, but the Google Sheet "
                     "nutrition totals could not be updated.",
                     chat_id=chat_id,
                 )
+
+            unresolved_food_id = known_data.get(
+                "_unresolved_food_id"
+            )
+
+            if unresolved_food_id is not None:
+                set_unresolved_food_status(
+                    int(unresolved_food_id),
+                    status="resolved",
+                )
+                complete_conversation(chat_id)
+
+                send_telegram_msg(
+                    "Food logged for "
+                    f"{target_entry_date.isoformat()} "
+                    f"({meal_category.title()}).",
+                    chat_id=chat_id,
+                )
+
+                pending = get_pending_unresolved_foods()
+
+                if pending:
+                    show_unresolved_food_review(
+                        chat_id=chat_id,
+                        pending=pending,
+                    )
+                else:
+                    cancel_conversation(chat_id)
+                    send_telegram_msg(
+                        "All unknown foods have been reviewed.",
+                        chat_id=chat_id,
+                    )
+                return
 
             complete_conversation(chat_id)
 
