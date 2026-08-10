@@ -1766,6 +1766,40 @@ def resolve_packaged_serving_multiplier(
     )
 
 
+def resolve_non_restaurant_quantity(
+    *,
+    food_id: int,
+    quantity: float | None,
+    quantity_description: str | None,
+    serving_amount: float | None,
+    serving_unit: str | None,
+) -> float:
+    """
+    Use plain numeric counts directly and convert only explicit portions.
+    """
+    description = str(
+        quantity_description or ""
+    ).strip().lower()
+
+    requires_conversion = bool(
+        re.search(
+            r"\b(?:servings?|g|grams?|grm|oz|ounces?|handful)\b",
+            description,
+        )
+    )
+
+    if not requires_conversion:
+        return float(quantity or 1.0)
+
+    return resolve_packaged_serving_multiplier(
+        food_id=food_id,
+        quantity=quantity,
+        quantity_description=quantity_description,
+        serving_amount=serving_amount,
+        serving_unit=serving_unit,
+    )
+
+
 def format_display_number(
     value: float | int | None,
     *,
@@ -4503,7 +4537,7 @@ def process_telegram_update(update):
                 if not restaurant:
                     try:
                         quantity = (
-                            resolve_packaged_serving_multiplier(
+                            resolve_non_restaurant_quantity(
                                 food_id=food["food_id"],
                                 quantity=known_data.get("quantity"),
                                 quantity_description=known_data.get(
@@ -4747,7 +4781,7 @@ def process_telegram_update(update):
             if not restaurant:
                 try:
                     quantity = (
-                        resolve_packaged_serving_multiplier(
+                        resolve_non_restaurant_quantity(
                             food_id=saved_food["food_id"],
                             quantity=known_data.get("quantity"),
                             quantity_description=known_data.get(
