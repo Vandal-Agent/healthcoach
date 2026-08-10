@@ -5,9 +5,11 @@ from typing import Any
 
 from food.database import (
     DATABASE_PATH,
+    build_search_key,
     current_timestamp,
     get_connection,
     initialize_database,
+    save_food_alias,
 )
 
 REVERIFY_USE_COUNT = 20
@@ -174,6 +176,13 @@ def add_food_with_nutrition(
             "verification_source is required for verified Foods."
         )
 
+    search_key = build_search_key(
+        canonical_name=canonical_name,
+        serving_description=serving_description,
+        brand=brand,
+        restaurant=restaurant,
+    )
+
     existing = find_food(
         canonical_name=canonical_name,
         serving_description=serving_description,
@@ -197,6 +206,7 @@ def add_food_with_nutrition(
         food_cursor = connection.execute(
             """
             INSERT INTO foods (
+                search_key,
                 canonical_name,
                 brand,
                 restaurant,
@@ -214,9 +224,10 @@ def add_food_with_nutrition(
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
             (
+                search_key,
                 canonical_name.strip(),
                 clean_optional_text(brand),
                 clean_optional_text(restaurant),
@@ -299,6 +310,29 @@ def add_food_with_nutrition(
         )
 
         connection.commit()
+
+    aliases = {
+        canonical_name.strip(),
+    }
+
+    cleaned_brand = clean_optional_text(brand)
+    cleaned_restaurant = clean_optional_text(restaurant)
+
+    if cleaned_brand:
+        aliases.add(
+            f"{cleaned_brand} {canonical_name.strip()}"
+        )
+
+    if cleaned_restaurant:
+        aliases.add(
+            f"{cleaned_restaurant} {canonical_name.strip()}"
+        )
+
+    for alias in aliases:
+        save_food_alias(
+            food_id=food_id,
+            alias_text=alias,
+        )
 
     return {
         "created": True,

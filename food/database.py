@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -8,7 +9,9 @@ from typing import Final
 
 PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
-SCHEMA_VERSION: Final[int] = 1
+
+INITIAL_SCHEMA_VERSION: Final[int] = 1
+SCHEMA_VERSION: Final[int] = 3
 
 
 def current_timestamp() -> str:
@@ -29,8 +32,118 @@ def get_connection(
     return connection
 
 
+def normalize_key_part(value: str | None) -> str:
+    """
+    Convert text into a stable search-key component.
+
+    Examples:
+        "McDonald's" -> "mcdonalds"
+        "Big Mac" -> "big_mac"
+        "20 oz." -> "20_oz"
+    """
+    if value is None:
+        return ""
+
+    cleaned = value.strip().lower()
+    cleaned = cleaned.replace("’", "").replace("'", "")
+    cleaned = cleaned.replace("&", " and ")
+    cleaned = re.sub(r"[^a-z0-9]+", "_", cleaned)
+    cleaned = re.sub(r"_+", "_", cleaned)
+
+    return cleaned.strip("_")
+
+
+def build_search_key(
+    *,
+    canonical_name: str,
+    serving_description: str | None = None,
+    brand: str | None = None,
+    restaurant: str | None = None,
+) -> str:
+    """
+    Build a deterministic Food search key.
+
+    Restaurant is preferred over brand because restaurant menu items
+    generally belong to the restaurant namespace.
+
+    Example:
+        mcdonalds|big_mac|standard
+    """
+    namespace = (
+        normalize_key_part(restaurant)
+        or normalize_key_part(brand)
+        or "generic"
+    )
+
+    food_name = normalize_key_part(canonical_name)
+
+    if not food_name:
+        raise ValueError(
+            "canonical_name must produce a valid search-key component."
+        )
+
+    serving = normalize_key_part(serving_description) or "standard"
+
+    return f"{namespace}|{food_name}|{serving}"
+
+
+def table_exists(
+    connection: sqlite3.Connection,
+    table_name: str,
+) -> bool:
+    """Return True when a table exists."""
+    row = connection.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = ?
+        LIMIT 1
+        """,
+        (table_name,),
+    ).fetchone()
+
+    return row is not None
+
+
+def column_exists(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    """Return True when a table contains the requested column."""
+    if not table_exists(connection, table_name):
+        return False
+
+    rows = connection.execute(
+        f"PRAGMA table_info({table_name})"
+    ).fetchall()
+
+    return any(row["name"] == column_name for row in rows)
+
+
+def get_schema_version(
+    connection: sqlite3.Connection,
+) -> int:
+    """Return the highest installed Food schema version."""
+    if not table_exists(connection, "schema_version"):
+        return 0
+
+    row = connection.execute(
+        """
+        SELECT MAX(version) AS version
+        FROM schema_version
+        """
+    ).fetchone()
+
+    if row is None or row["version"] is None:
+        return 0
+
+    return int(row["version"])
+
+
 def create_schema(connection: sqlite3.Connection) -> None:
-    """Create the Food subsystem tables and indexes."""
+    """Create the current Food subsystem schema."""
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS schema_version (
@@ -41,9 +154,12 @@ def create_schema(connection: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS foods (
             food_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            search_key TEXT NOT NULL UNIQUE,
             canonical_name TEXT NOT NULL,
             brand TEXT,
             restaurant TEXT,
+
             food_type TEXT NOT NULL DEFAULT 'food'
                 CHECK (
                     food_type IN (
@@ -53,6 +169,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
                         'recipe'
                     )
                 ),
+
             serving_description TEXT NOT NULL,
             serving_amount REAL NOT NULL
                 CHECK (serving_amount > 0),
@@ -66,15 +183,18 @@ def create_schema(connection: sqlite3.Connection) -> None:
                         'unverified'
                     )
                 ),
+
             verification_source TEXT,
             source_item_id TEXT,
             source_url TEXT,
             last_verified_at TEXT,
+
             uses_since_verification INTEGER NOT NULL DEFAULT 0
                 CHECK (uses_since_verification >= 0),
-            next_verification_due TEXT,
 
+            next_verification_due TEXT,
             active_nutrition_version_id INTEGER,
+
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
 
@@ -89,6 +209,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS nutrition_versions (
             nutrition_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
             food_id INTEGER NOT NULL,
+
             version_number INTEGER NOT NULL
                 CHECK (version_number > 0),
 
@@ -102,6 +223,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
 
             serving_amount REAL NOT NULL
                 CHECK (serving_amount > 0),
+
             serving_unit TEXT NOT NULL,
 
             verification_status TEXT NOT NULL
@@ -112,6 +234,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
                         'unverified'
                     )
                 ),
+
             verification_source TEXT,
             source_item_id TEXT,
             source_url TEXT,
@@ -135,6 +258,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
                 CHECK (quantity > 0),
 
             original_text TEXT,
+
             logging_source TEXT NOT NULL
                 CHECK (
                     logging_source IN (
@@ -149,6 +273,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
 
             quantity_is_estimated INTEGER NOT NULL DEFAULT 0
                 CHECK (quantity_is_estimated IN (0, 1)),
+
             user_confirmed INTEGER NOT NULL DEFAULT 0
                 CHECK (user_confirmed IN (0, 1)),
 
@@ -176,11 +301,15 @@ def create_schema(connection: sqlite3.Connection) -> None:
             portion_profile_id INTEGER PRIMARY KEY AUTOINCREMENT,
             phrase TEXT NOT NULL,
             food_id INTEGER,
+
             estimated_amount REAL NOT NULL
                 CHECK (estimated_amount > 0),
+
             estimated_unit TEXT NOT NULL,
+
             user_confirmed INTEGER NOT NULL DEFAULT 1
                 CHECK (user_confirmed IN (0, 1)),
+
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
 
@@ -190,6 +319,61 @@ def create_schema(connection: sqlite3.Connection) -> None:
             UNIQUE (phrase, food_id)
         );
 
+        CREATE TABLE IF NOT EXISTS unresolved_foods (
+            unresolved_food_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            entry_date TEXT NOT NULL,
+            meal_category TEXT,
+
+            original_text TEXT NOT NULL,
+
+            food_name TEXT,
+            brand TEXT,
+            restaurant TEXT,
+            size TEXT,
+            quantity REAL,
+            quantity_description TEXT,
+
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (
+                    status IN (
+                        'pending',
+                        'resolved',
+                        'cancelled'
+                    )
+                ),
+
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            resolved_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_unresolved_foods_status
+            ON unresolved_foods (status);
+
+        CREATE INDEX IF NOT EXISTS idx_unresolved_foods_date
+            ON unresolved_foods (entry_date);
+
+        CREATE TABLE IF NOT EXISTS food_aliases (
+            food_alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_id INTEGER NOT NULL,
+
+            alias_text TEXT NOT NULL,
+            normalized_alias TEXT NOT NULL,
+
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE,
+
+            UNIQUE (food_id, normalized_alias)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_foods_search_key
+            ON foods (search_key);
+
         CREATE INDEX IF NOT EXISTS idx_foods_name
             ON foods (canonical_name);
 
@@ -198,6 +382,12 @@ def create_schema(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_foods_restaurant
             ON foods (restaurant);
+
+        CREATE INDEX IF NOT EXISTS idx_food_aliases_normalized
+            ON food_aliases (normalized_alias);
+
+        CREATE INDEX IF NOT EXISTS idx_food_aliases_food_id
+            ON food_aliases (food_id);
 
         CREATE INDEX IF NOT EXISTS idx_food_entries_date
             ON food_entries (entry_date);
@@ -217,8 +407,13 @@ def create_schema(connection: sqlite3.Connection) -> None:
     )
 
 
-def seed_schema_version(connection: sqlite3.Connection) -> None:
-    """Record the initial Food schema version."""
+def record_schema_version(
+    connection: sqlite3.Connection,
+    *,
+    version: int,
+    description: str,
+) -> None:
+    """Record one applied Food schema version."""
     connection.execute(
         """
         INSERT OR IGNORE INTO schema_version (
@@ -229,11 +424,272 @@ def seed_schema_version(connection: sqlite3.Connection) -> None:
         VALUES (?, ?, ?)
         """,
         (
-            SCHEMA_VERSION,
+            version,
             current_timestamp(),
-            "Initial HealthCoach Food database schema",
+            description,
         ),
     )
+
+
+def create_initial_database(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create a new database directly at the current schema."""
+    create_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=INITIAL_SCHEMA_VERSION,
+        description="Initial HealthCoach Food database schema",
+    )
+
+    record_schema_version(
+        connection,
+        version=2,
+        description=(
+            "Add normalized Food search keys and Food aliases"
+        ),
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description=(
+            "Add persistent unresolved Food queue"
+        ),
+    )
+
+
+def create_alias_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create the Food alias table and indexes."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS food_aliases (
+            food_alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_id INTEGER NOT NULL,
+
+            alias_text TEXT NOT NULL,
+            normalized_alias TEXT NOT NULL,
+
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE,
+
+            UNIQUE (food_id, normalized_alias)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_food_aliases_normalized
+            ON food_aliases (normalized_alias);
+
+        CREATE INDEX IF NOT EXISTS idx_food_aliases_food_id
+            ON food_aliases (food_id);
+        """
+    )
+
+
+def create_unresolved_food_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create the persistent unresolved Food queue."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS unresolved_foods (
+            unresolved_food_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            entry_date TEXT NOT NULL,
+            meal_category TEXT,
+
+            original_text TEXT NOT NULL,
+
+            food_name TEXT,
+            brand TEXT,
+            restaurant TEXT,
+            size TEXT,
+            quantity REAL,
+            quantity_description TEXT,
+
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (
+                    status IN (
+                        'pending',
+                        'resolved',
+                        'cancelled'
+                    )
+                ),
+
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            resolved_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_unresolved_foods_status
+            ON unresolved_foods (status);
+
+        CREATE INDEX IF NOT EXISTS idx_unresolved_foods_date
+            ON unresolved_foods (entry_date);
+        """
+    )
+
+
+def migrate_version_1_to_2(
+    connection: sqlite3.Connection,
+) -> None:
+    """
+    Add stable Food identity and alias support.
+
+    Existing foods are assigned deterministic search keys. If two
+    legacy records generate the same key, the Food ID is appended so
+    no data is lost and every key remains unique.
+    """
+    if not column_exists(connection, "foods", "search_key"):
+        connection.execute(
+            """
+            ALTER TABLE foods
+            ADD COLUMN search_key TEXT
+            """
+        )
+
+    rows = connection.execute(
+        """
+        SELECT
+            food_id,
+            canonical_name,
+            serving_description,
+            brand,
+            restaurant,
+            search_key
+        FROM foods
+        ORDER BY food_id
+        """
+    ).fetchall()
+
+    used_keys: set[str] = {
+        row["search_key"]
+        for row in rows
+        if row["search_key"]
+    }
+
+    for row in rows:
+        if row["search_key"]:
+            continue
+
+        base_key = build_search_key(
+            canonical_name=row["canonical_name"],
+            serving_description=row["serving_description"],
+            brand=row["brand"],
+            restaurant=row["restaurant"],
+        )
+
+        search_key = base_key
+
+        if search_key in used_keys:
+            search_key = f"{base_key}|legacy_{row['food_id']}"
+
+        used_keys.add(search_key)
+
+        connection.execute(
+            """
+            UPDATE foods
+            SET search_key = ?
+            WHERE food_id = ?
+            """,
+            (
+                search_key,
+                row["food_id"],
+            ),
+        )
+
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_search_key
+        ON foods (search_key)
+        """
+    )
+
+    connection.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_foods_search_key_insert
+        BEFORE INSERT ON foods
+        FOR EACH ROW
+        WHEN NEW.search_key IS NULL
+          OR trim(NEW.search_key) = ''
+        BEGIN
+            SELECT RAISE(
+                ABORT,
+                'foods.search_key is required'
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_foods_search_key_update
+        BEFORE UPDATE OF search_key ON foods
+        FOR EACH ROW
+        WHEN NEW.search_key IS NULL
+          OR trim(NEW.search_key) = ''
+        BEGIN
+            SELECT RAISE(
+                ABORT,
+                'foods.search_key is required'
+            );
+        END;
+        """
+    )
+
+    create_alias_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=2,
+        description=(
+            "Add normalized Food search keys and Food aliases"
+        ),
+    )
+
+
+def migrate_version_2_to_3(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add the persistent unresolved Food queue."""
+    create_unresolved_food_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=3,
+        description="Add persistent unresolved Food queue",
+    )
+
+
+def apply_migrations(
+    connection: sqlite3.Connection,
+) -> None:
+    """Bring an existing Food database to the current schema."""
+    version = get_schema_version(connection)
+
+    if version == 0:
+        create_initial_database(connection)
+        return
+
+    if version < 2:
+        migrate_version_1_to_2(connection)
+        version = 2
+
+    if version < 3:
+        migrate_version_2_to_3(connection)
+        version = 3
+
+    if version > SCHEMA_VERSION:
+        raise RuntimeError(
+            "The Food database schema is newer than this code supports. "
+            f"Database version: {version}. "
+            f"Supported version: {SCHEMA_VERSION}."
+        )
+
+    create_alias_schema(connection)
+    create_unresolved_food_schema(connection)
 
 
 def validate_database(
@@ -259,9 +715,52 @@ def validate_database(
         """
     ).fetchone()
 
+    required_tables = {
+        "schema_version",
+        "foods",
+        "nutrition_versions",
+        "food_entries",
+        "portion_profiles",
+        "food_aliases",
+        "unresolved_foods",
+    }
+
+    actual_tables = {
+        row["name"]
+        for row in table_rows
+    }
+
+    missing_tables = sorted(required_tables - actual_tables)
+
+    if missing_tables:
+        raise RuntimeError(
+            "Food database initialization is incomplete. "
+            "Missing tables: "
+            + ", ".join(missing_tables)
+        )
+
+    if not column_exists(connection, "foods", "search_key"):
+        raise RuntimeError(
+            "Food database initialization is incomplete. "
+            "foods.search_key is missing."
+        )
+
+    installed_version = (
+        int(schema_row["version"])
+        if schema_row
+        else 0
+    )
+
+    if installed_version != SCHEMA_VERSION:
+        raise RuntimeError(
+            "Food database schema version mismatch. "
+            f"Installed: {installed_version}. "
+            f"Expected: {SCHEMA_VERSION}."
+        )
+
     return {
         "database_path": str(DATABASE_PATH),
-        "tables": [row["name"] for row in table_rows],
+        "tables": sorted(actual_tables),
         "schema_version": (
             dict(schema_row)
             if schema_row
@@ -273,13 +772,205 @@ def validate_database(
 def initialize_database(
     database_path: Path = DATABASE_PATH,
 ) -> dict[str, object]:
-    """Create and validate the Food database."""
+    """Create, migrate, and validate the Food database."""
     with get_connection(database_path) as connection:
-        create_schema(connection)
-        seed_schema_version(connection)
+        apply_migrations(connection)
         connection.commit()
 
         return validate_database(connection)
+
+
+def save_food_alias(
+    *,
+    food_id: int,
+    alias_text: str,
+) -> dict[str, object]:
+    """Create or refresh one deterministic alias for a saved Food."""
+    initialize_database()
+
+    cleaned_alias = alias_text.strip()
+
+    if not cleaned_alias:
+        raise ValueError("alias_text is required.")
+
+    normalized_alias = normalize_key_part(cleaned_alias)
+
+    if not normalized_alias:
+        raise ValueError(
+            "alias_text did not contain a usable alias."
+        )
+
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        food = connection.execute(
+            """
+            SELECT food_id
+            FROM foods
+            WHERE food_id = ?
+            """,
+            (int(food_id),),
+        ).fetchone()
+
+        if food is None:
+            raise ValueError(
+                f"Food not found: {food_id}"
+            )
+
+        connection.execute(
+            """
+            INSERT INTO food_aliases (
+                food_id,
+                alias_text,
+                normalized_alias,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(food_id, normalized_alias)
+            DO UPDATE SET
+                alias_text = excluded.alias_text,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(food_id),
+                cleaned_alias,
+                normalized_alias,
+                timestamp,
+                timestamp,
+            ),
+        )
+
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM food_aliases
+            WHERE food_id = ?
+              AND normalized_alias = ?
+            LIMIT 1
+            """,
+            (
+                int(food_id),
+                normalized_alias,
+            ),
+        ).fetchone()
+
+    return dict(row)
+
+
+def get_portion_profile(
+    *,
+    food_id: int,
+    phrase: str,
+) -> dict[str, object] | None:
+    """Return one saved portion profile for a Food and phrase."""
+    initialize_database()
+
+    normalized_phrase = phrase.strip().lower()
+
+    if not normalized_phrase:
+        raise ValueError("phrase is required.")
+
+    with get_connection(DATABASE_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM portion_profiles
+            WHERE food_id = ?
+              AND lower(phrase) = lower(?)
+            LIMIT 1
+            """,
+            (
+                int(food_id),
+                normalized_phrase,
+            ),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def save_portion_profile(
+    *,
+    food_id: int,
+    phrase: str,
+    estimated_amount: float,
+    estimated_unit: str,
+    user_confirmed: bool = True,
+) -> dict[str, object]:
+    """Create or update one user-confirmed portion profile."""
+    initialize_database()
+
+    normalized_phrase = phrase.strip().lower()
+    unit = estimated_unit.strip()
+
+    if not normalized_phrase:
+        raise ValueError("phrase is required.")
+
+    if estimated_amount <= 0:
+        raise ValueError(
+            "estimated_amount must be greater than zero."
+        )
+
+    if not unit:
+        raise ValueError("estimated_unit is required.")
+
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        connection.execute(
+            """
+            INSERT INTO portion_profiles (
+                phrase,
+                food_id,
+                estimated_amount,
+                estimated_unit,
+                user_confirmed,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (phrase, food_id)
+            DO UPDATE SET
+                estimated_amount = excluded.estimated_amount,
+                estimated_unit = excluded.estimated_unit,
+                user_confirmed = excluded.user_confirmed,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_phrase,
+                int(food_id),
+                float(estimated_amount),
+                unit,
+                1 if user_confirmed else 0,
+                timestamp,
+                timestamp,
+            ),
+        )
+
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM portion_profiles
+            WHERE food_id = ?
+              AND lower(phrase) = lower(?)
+            LIMIT 1
+            """,
+            (
+                int(food_id),
+                normalized_phrase,
+            ),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "Portion profile could not be read after saving."
+        )
+
+    return dict(row)
 
 
 def main() -> None:
@@ -292,3 +983,96 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def save_unresolved_food(
+    *,
+    entry_date: str,
+    original_text: str,
+    meal_category: str | None = None,
+    food_name: str | None = None,
+    brand: str | None = None,
+    restaurant: str | None = None,
+    size: str | None = None,
+    quantity: float | None = None,
+    quantity_description: str | None = None,
+) -> dict[str, object]:
+    """Save one unresolved Food for later nutrition completion."""
+    initialize_database()
+
+    if not entry_date.strip():
+        raise ValueError("entry_date is required.")
+
+    if not original_text.strip():
+        raise ValueError("original_text is required.")
+
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO unresolved_foods (
+                entry_date,
+                meal_category,
+                original_text,
+                food_name,
+                brand,
+                restaurant,
+                size,
+                quantity,
+                quantity_description,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            """,
+            (
+                entry_date.strip(),
+                meal_category.strip() if meal_category else None,
+                original_text.strip(),
+                food_name.strip() if food_name else None,
+                brand.strip() if brand else None,
+                restaurant.strip() if restaurant else None,
+                size.strip() if size else None,
+                float(quantity) if quantity is not None else None,
+                (
+                    quantity_description.strip()
+                    if quantity_description
+                    else None
+                ),
+                timestamp,
+                timestamp,
+            ),
+        )
+
+        unresolved_food_id = cursor.lastrowid
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM unresolved_foods
+            WHERE unresolved_food_id = ?
+            """,
+            (unresolved_food_id,),
+        ).fetchone()
+
+    return dict(row)
+
+
+def get_pending_unresolved_foods() -> list[dict[str, object]]:
+    """Return unresolved Foods waiting for nutrition completion."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM unresolved_foods
+            WHERE status = 'pending'
+            ORDER BY entry_date, unresolved_food_id
+            """
+        ).fetchall()
+
+    return [dict(row) for row in rows]

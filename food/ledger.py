@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from food.database import (
@@ -147,6 +147,73 @@ def scale_value(
         return None
 
     return round(float(value) * quantity, 3)
+
+
+def find_recent_duplicate_entry(
+    *,
+    entry_date: date | str,
+    meal_category: str,
+    food_id: int,
+    quantity: float,
+    window_minutes: int = 5,
+) -> dict[str, Any] | None:
+    """Return a matching recently logged Food entry, if one exists."""
+    initialize_database()
+
+    normalized_date = normalize_date(entry_date)
+    normalized_meal = normalize_meal_category(meal_category)
+    numeric_quantity = float(quantity)
+
+    if numeric_quantity <= 0:
+        raise ValueError("quantity must be greater than zero.")
+
+    if window_minutes <= 0:
+        raise ValueError(
+            "window_minutes must be greater than zero."
+        )
+
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM food_entries
+            WHERE entry_date = ?
+              AND meal_category = ?
+              AND food_id = ?
+              AND ABS(quantity - ?) < 0.000001
+            ORDER BY food_entry_id DESC
+            """,
+            (
+                normalized_date,
+                normalized_meal,
+                int(food_id),
+                numeric_quantity,
+            ),
+        ).fetchall()
+
+    now = datetime.now().astimezone()
+
+    for row in rows:
+        created_at = row["created_at"]
+
+        try:
+            created_time = datetime.fromisoformat(
+                str(created_at)
+            )
+        except (TypeError, ValueError):
+            continue
+
+        if created_time.tzinfo is None:
+            created_time = created_time.astimezone()
+
+        age_seconds = (
+            now - created_time.astimezone()
+        ).total_seconds()
+
+        if 0 <= age_seconds <= window_minutes * 60:
+            return dict(row)
+
+    return None
 
 
 def add_food_entry(
