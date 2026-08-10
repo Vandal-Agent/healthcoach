@@ -2346,6 +2346,16 @@ def process_telegram_update(update):
             return
 
         if lowered in {"3", "retry", "automatic lookup"}:
+            logging.info(
+                "Retrying unresolved Food lookup: id=%s "
+                "food=%r size=%r brand=%r restaurant=%r",
+                unresolved_food_id,
+                item.get("food_name"),
+                item.get("size"),
+                item.get("brand"),
+                item.get("restaurant"),
+            )
+
             try:
                 provider_result = lookup_official_nutrition(
                     restaurant=item.get("restaurant"),
@@ -2365,9 +2375,32 @@ def process_telegram_update(update):
                 return
 
             if not provider_result.get("found"):
+                provider_notes = [
+                    str(note)
+                    for note in (
+                        provider_result.get("notes") or []
+                    )
+                    if str(note).strip()
+                ]
+                logging.info(
+                    "Unresolved Food lookup unsupported: id=%s "
+                    "missing=%r question=%r notes=%r",
+                    unresolved_food_id,
+                    provider_result.get("missing_fields"),
+                    provider_result.get("clarification_question"),
+                    provider_notes,
+                )
+
+                explanation = (
+                    provider_notes[0]
+                    if provider_notes
+                    else "No verified match was returned."
+                )
                 send_telegram_msg(
                     "I still could not verify this food "
-                    "automatically. Choose another option.",
+                    "automatically.\n\n"
+                    f"Reason: {explanation}\n\n"
+                    "Choose another option.",
                     chat_id=chat_id,
                 )
                 return
