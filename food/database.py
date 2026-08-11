@@ -14,6 +14,16 @@ INITIAL_SCHEMA_VERSION: Final[int] = 1
 SCHEMA_VERSION: Final[int] = 4
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Close the database when a with block finishes."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def current_timestamp() -> str:
     """Return a local ISO 8601 timestamp."""
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -25,7 +35,10 @@ def get_connection(
     """Open the Food database with foreign keys enabled."""
     database_path.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(database_path)
+    connection = sqlite3.connect(
+        database_path,
+        factory=ClosingConnection,
+    )
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
 
