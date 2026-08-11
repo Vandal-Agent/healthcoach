@@ -26,7 +26,7 @@ Conversation Engine
 ↓
 AI Interpreter
 ↓
-Nutrition Providers
+Nutrition Providers / Restaurant Advisor
 ↓
 Food Library
 ↓
@@ -161,6 +161,24 @@ Never overwrite previous versions.
 - Barcode
 - Recipe
 - Manual
+
+---
+
+# Restaurant Assistant
+
+Restaurant Assistant v1 is available from the Telegram Food menu.
+
+Flow:
+- User supplies a restaurant name and optional city/state.
+- Grounded Google search locates current menu and nutrition sources.
+- HealthCoach returns up to three protein-forward, moderate-calorie entrées.
+- Recommendations respect the current local time and avoid unavailable time-limited items.
+- Every accepted recommendation must match a citation returned by the grounded search.
+- Official calories and protein are displayed only when published by the restaurant.
+- Missing nutrition remains missing; HealthCoach never estimates it.
+- Local menu recommendations may be shown without nutrition when supported by a cited primary menu source.
+- Results are advisory and are never logged automatically.
+- Menu availability may change, so the response retains source links and an availability notice.
 
 ---
 
