@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Literal
 
 from google.genai import types
@@ -59,6 +60,9 @@ information for this restaurant request:
 
 {restaurant_query}
 
+Current server-local date and time:
+{datetime.now().astimezone().strftime("%A, %Y-%m-%d %I:%M %p %Z")}
+
 Select up to three currently offered ENTRÉES that are likely to be good
 HealthCoach choices.
 
@@ -82,7 +86,12 @@ Selection priorities:
 10. Do not claim an item is available unless a cited current menu source
     supports it.
 11. Report menu item names exactly enough for the user to order them.
-12. Keep the report concise and include why each item may be a good
+12. Respect the current local date and time. Exclude breakfast-only,
+    lunch-only, late-night-only, or otherwise time-limited items unless
+    they are normally available at that time or the user requested that
+    meal.
+13. If current availability is uncertain, prefer all-day menu items.
+14. Keep the report concise and include why each item may be a good
     choice.
 """
 
