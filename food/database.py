@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 3
+SCHEMA_VERSION: Final[int] = 4
 
 
 def current_timestamp() -> str:
@@ -354,6 +354,35 @@ def create_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_unresolved_foods_date
             ON unresolved_foods (entry_date);
 
+        CREATE TABLE IF NOT EXISTS food_favorites (
+            food_favorite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_id INTEGER NOT NULL,
+            quantity REAL NOT NULL CHECK (quantity > 0),
+            meal_category TEXT NOT NULL
+                CHECK (
+                    meal_category IN (
+                        'before breakfast',
+                        'breakfast',
+                        'school snack',
+                        'lunch',
+                        'afternoon snack',
+                        'dinner',
+                        'dessert'
+                    )
+                ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE,
+
+            UNIQUE (food_id, quantity, meal_category)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_food_favorites_food_id
+            ON food_favorites (food_id);
+
         CREATE TABLE IF NOT EXISTS food_aliases (
             food_alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
             food_id INTEGER NOT NULL,
@@ -453,10 +482,16 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=3,
         description=(
             "Add persistent unresolved Food queue"
         ),
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add saved Food favorites",
     )
 
 
@@ -532,6 +567,44 @@ def create_unresolved_food_schema(
 
         CREATE INDEX IF NOT EXISTS idx_unresolved_foods_date
             ON unresolved_foods (entry_date);
+        """
+    )
+
+
+def create_food_favorites_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create saved Food favorites and supporting indexes."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS food_favorites (
+            food_favorite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_id INTEGER NOT NULL,
+            quantity REAL NOT NULL CHECK (quantity > 0),
+            meal_category TEXT NOT NULL
+                CHECK (
+                    meal_category IN (
+                        'before breakfast',
+                        'breakfast',
+                        'school snack',
+                        'lunch',
+                        'afternoon snack',
+                        'dinner',
+                        'dessert'
+                    )
+                ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE,
+
+            UNIQUE (food_id, quantity, meal_category)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_food_favorites_food_id
+            ON food_favorites (food_id);
         """
     )
 
@@ -663,6 +736,19 @@ def migrate_version_2_to_3(
     )
 
 
+def migrate_version_3_to_4(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add saved Food favorites."""
+    create_food_favorites_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=4,
+        description="Add saved Food favorites",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -681,6 +767,10 @@ def apply_migrations(
         migrate_version_2_to_3(connection)
         version = 3
 
+    if version < 4:
+        migrate_version_3_to_4(connection)
+        version = 4
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -690,6 +780,7 @@ def apply_migrations(
 
     create_alias_schema(connection)
     create_unresolved_food_schema(connection)
+    create_food_favorites_schema(connection)
 
 
 def validate_database(
@@ -723,6 +814,7 @@ def validate_database(
         "portion_profiles",
         "food_aliases",
         "unresolved_foods",
+        "food_favorites",
     }
 
     actual_tables = {
