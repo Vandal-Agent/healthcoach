@@ -32,6 +32,8 @@ Food Library
 ↓
 Food Ledger
 ↓
+Favorites / Quick Log
+↓
 Memory
 ↓
 Coaching
@@ -103,6 +105,31 @@ Each entry stores:
 - Logging source
 - Original text
 
+Confirmed edits may change an entry's quantity or meal. Quantity edits
+rescale the entry's saved nutrition snapshot. They do not rewrite the
+Food Library or historical Nutrition Version.
+
+---
+
+# Favorites and Quick Log
+
+Implemented in Food database schema version `4`.
+
+Each favorite stores:
+- Food ID
+- Default quantity
+- Default meal
+- Created and updated timestamps
+
+Rules:
+- A favorite is saved from a confirmed Food Ledger entry.
+- Saving the same Food, quantity, and meal again refreshes the existing favorite.
+- Quick Log requires confirmation before creating a new Food Ledger entry.
+- Quick Log uses the Food's current active Nutrition Version.
+- A five-minute duplicate guard prevents an identical favorite from being logged twice accidentally.
+- Favorites can be removed without deleting the Food or any historical Food entries.
+- Quick Log recalculates and synchronizes the day's Google Sheet totals.
+
 ---
 
 # Portion Profiles
@@ -144,7 +171,6 @@ Never overwrite previous versions.
 - Meal photos
 - Recipe builder
 - Same as yesterday
-- Favorites
 - Restaurant history
 - Grocery suggestions
 - AI meal planning
