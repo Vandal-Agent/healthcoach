@@ -440,6 +440,134 @@ def get_daily_totals(
     }
 
 
+def update_food_entry(
+    food_entry_id: int,
+    *,
+    quantity: float | None = None,
+    meal_category: str | None = None,
+) -> dict[str, Any] | None:
+    """Update one entry's quantity or meal while preserving its snapshot."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM food_entries
+            WHERE food_entry_id = ?
+            """,
+            (int(food_entry_id),),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        existing = dict(row)
+        old_quantity = float(existing["quantity"])
+        new_quantity = (
+            old_quantity
+            if quantity is None
+            else float(quantity)
+        )
+
+        if new_quantity <= 0:
+            raise ValueError("quantity must be greater than zero.")
+
+        new_meal = (
+            existing["meal_category"]
+            if meal_category is None
+            else normalize_meal_category(meal_category)
+        )
+
+        if new_meal != existing["meal_category"]:
+            source_rows = connection.execute(
+                """
+                SELECT DISTINCT logging_source
+                FROM food_entries
+                WHERE entry_date = ?
+                  AND meal_category = ?
+                  AND food_entry_id != ?
+                """,
+                (
+                    existing["entry_date"],
+                    new_meal,
+                    int(food_entry_id),
+                ),
+            ).fetchall()
+            existing_groups = {
+                source_group(source_row["logging_source"])
+                for source_row in source_rows
+            }
+
+            entry_group = source_group(existing["logging_source"])
+            if existing_groups - {entry_group}:
+                raise ValueError(
+                    f"{new_meal.title()} already contains food "
+                    "from a different logging source."
+                )
+
+        ratio = new_quantity / old_quantity
+        nutrient_columns = (
+            "calories",
+            "protein_g",
+            "carbohydrates_g",
+            "fat_g",
+            "fiber_g",
+            "sugar_g",
+            "sodium_mg",
+        )
+        scaled = {
+            column: (
+                None
+                if existing[column] is None
+                else round(float(existing[column]) * ratio, 3)
+            )
+            for column in nutrient_columns
+        }
+
+        connection.execute(
+            """
+            UPDATE food_entries
+            SET meal_category = ?,
+                quantity = ?,
+                calories = ?,
+                protein_g = ?,
+                carbohydrates_g = ?,
+                fat_g = ?,
+                fiber_g = ?,
+                sugar_g = ?,
+                sodium_mg = ?,
+                updated_at = ?
+            WHERE food_entry_id = ?
+            """,
+            (
+                new_meal,
+                new_quantity,
+                scaled["calories"],
+                scaled["protein_g"],
+                scaled["carbohydrates_g"],
+                scaled["fat_g"],
+                scaled["fiber_g"],
+                scaled["sugar_g"],
+                scaled["sodium_mg"],
+                current_timestamp(),
+                int(food_entry_id),
+            ),
+        )
+        connection.commit()
+
+        updated = connection.execute(
+            """
+            SELECT *
+            FROM food_entries
+            WHERE food_entry_id = ?
+            """,
+            (int(food_entry_id),),
+        ).fetchone()
+
+    return dict(updated) if updated is not None else None
+
+
 def delete_food_entry(food_entry_id: int) -> bool:
     """Delete one Food entry."""
     initialize_database()
