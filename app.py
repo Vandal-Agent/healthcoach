@@ -43,6 +43,7 @@ from food.ledger import (
     update_food_entry,
 )
 from food.nutrition_provider import lookup_official_nutrition
+from food.restaurant_advisor import recommend_restaurant_entrees
 from food.resolver import resolve_food
 from conversation_engine import (
     cancel_conversation,
@@ -345,6 +346,16 @@ def menu_reply_markup(message):
     ):
         rows = [["Yes", "No"]]
         one_time = True
+    elif "Restaurant Recommendations\n\n" in message:
+        rows = [
+            ["Search again", "Back"],
+            ["Cancel"],
+        ]
+    elif "Restaurant Menu\n\n" in message:
+        rows = [
+            ["Find best choices online"],
+            ["Back", "Cancel"],
+        ]
     elif "Favorites Menu\n\n" in message:
         rows = [
             ["Quick log", "Save today's food"],
@@ -355,7 +366,8 @@ def menu_reply_markup(message):
         rows = [
             ["Log food", "Show today"],
             ["Edit today", "Undo last"],
-            ["Favorites", "Update unknown foods"],
+            ["Favorites", "Restaurant"],
+            ["Update unknown foods"],
             ["Back", "Cancel"],
         ]
     elif "Health Menu\n\n" in message:
@@ -2320,9 +2332,86 @@ def healthcoach_food_menu_text() -> str:
         "3. Edit today's food\n"
         "4. Undo last food\n"
         "5. Favorites\n"
-        "6. Update unknown foods\n"
-        "7. Back"
+        "6. Restaurant\n"
+        "7. Update unknown foods\n"
+        "8. Back"
     )
+
+
+def healthcoach_restaurant_menu_text() -> str:
+    return (
+        "Restaurant Menu\n\n"
+        "1. Find best choices online\n"
+        "2. Back\n\n"
+        "Recommendations use current cited menu information. "
+        "Nothing is logged automatically."
+    )
+
+
+def format_restaurant_advice(advice: dict) -> str:
+    name = str(
+        advice.get("restaurant_display_name")
+        or "Restaurant"
+    )
+    candidates = list(advice.get("candidates") or [])
+
+    if not advice.get("found") or not candidates:
+        notes = list(advice.get("notes") or [])
+        reason = notes[0] if notes else (
+            "No supported current menu recommendations were found."
+        )
+        return (
+            "Restaurant Recommendations\n\n"
+            f"{name}\n\n"
+            f"I could not find three supported choices. {reason}\n\n"
+            "Try including the city and state, or check the restaurant "
+            "name.\n\n"
+            "Reply Search again, Back, or Cancel."
+        )
+
+    lines = ["Restaurant Recommendations", "", name]
+
+    for index, candidate in enumerate(candidates, start=1):
+        lines.extend(["", f"{index}. {candidate['item_name']}"])
+        if candidate.get("nutrition_status") == "official":
+            nutrition_parts = []
+            if candidate.get("calories") is not None:
+                nutrition_parts.append(
+                    f"{format_display_number(float(candidate['calories']), decimals=0)} cal"
+                )
+            if candidate.get("protein_g") is not None:
+                nutrition_parts.append(
+                    f"{format_display_number(float(candidate['protein_g']))} g protein"
+                )
+            lines.append(
+                "Official nutrition: "
+                + (
+                    ", ".join(nutrition_parts)
+                    if nutrition_parts
+                    else "values not listed"
+                )
+            )
+        else:
+            lines.append(
+                "Nutrition: not published; menu-based recommendation"
+            )
+        lines.append(
+            f"Why: {candidate['recommendation_reason']}"
+        )
+        lines.append(
+            f"Source: {candidate['source_title']}"
+        )
+        lines.append(str(candidate["source_url"]))
+
+    lines.extend(
+        [
+            "",
+            "Menu availability can change. Nothing has been logged.",
+            "",
+            "Reply Search again, Back, or Cancel.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def healthcoach_favorites_menu_text() -> str:
@@ -2745,6 +2834,23 @@ def process_telegram_update(update):
 
             if lowered in {
                 "6",
+                "restaurant",
+                "restaurant choices",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="restaurant",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_restaurant_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "7",
                 "unknown",
                 "update unknown foods",
             }:
@@ -2761,7 +2867,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"7", "back"}:
+            if lowered in {"8", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -2776,6 +2882,106 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "restaurant":
+            if lowered in {
+                "1",
+                "find best choices online",
+                "find choices",
+                "search",
+                "search again",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="restaurant_query",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "What restaurant are you at?\n\n"
+                    "Include the city and state for a local restaurant.\n"
+                    "Example: Red Robin in Redding, California",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {"2", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_restaurant_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "restaurant_query":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="restaurant",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_restaurant_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if len(text.strip()) < 2:
+                send_telegram_msg(
+                    "Please send the restaurant name. Include the city "
+                    "and state if it is a local restaurant.",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                "I’m checking the current menu and cited nutrition. "
+                "This may take a moment.",
+                chat_id=chat_id,
+                remove_keyboard=True,
+            )
+
+            try:
+                advice = recommend_restaurant_entrees(text)
+            except Exception:
+                logging.exception(
+                    "Restaurant recommendation lookup failed"
+                )
+                advice = {
+                    "found": False,
+                    "restaurant_display_name": text,
+                    "candidates": [],
+                    "notes": [
+                        "The online menu lookup failed. Please try again."
+                    ],
+                }
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="restaurant",
+                known_data={
+                    "_restaurant_query": text,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_restaurant_advice(advice),
                 chat_id=chat_id,
             )
             return
