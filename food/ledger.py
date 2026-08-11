@@ -408,6 +408,114 @@ def list_food_entries(
     return [dict(row) for row in rows]
 
 
+def save_food_favorite_from_entry(
+    food_entry_id: int,
+) -> dict[str, Any]:
+    """Save one logged Food entry's food, quantity, and meal as a favorite."""
+    initialize_database()
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        entry = connection.execute(
+            """
+            SELECT food_id, quantity, meal_category
+            FROM food_entries
+            WHERE food_entry_id = ?
+            """,
+            (int(food_entry_id),),
+        ).fetchone()
+
+        if entry is None:
+            raise ValueError("Food entry not found.")
+
+        connection.execute(
+            """
+            INSERT INTO food_favorites (
+                food_id,
+                quantity,
+                meal_category,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (food_id, quantity, meal_category)
+            DO UPDATE SET updated_at = excluded.updated_at
+            """,
+            (
+                int(entry["food_id"]),
+                float(entry["quantity"]),
+                entry["meal_category"],
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.commit()
+
+        favorite = connection.execute(
+            """
+            SELECT food_favorites.*, foods.canonical_name,
+                   foods.brand, foods.restaurant,
+                   foods.serving_description
+            FROM food_favorites
+            JOIN foods
+              ON foods.food_id = food_favorites.food_id
+            WHERE food_favorites.food_id = ?
+              AND ABS(food_favorites.quantity - ?) < 0.000001
+              AND food_favorites.meal_category = ?
+            """,
+            (
+                int(entry["food_id"]),
+                float(entry["quantity"]),
+                entry["meal_category"],
+            ),
+        ).fetchone()
+
+    return dict(favorite)
+
+
+def list_food_favorites() -> list[dict[str, Any]]:
+    """Return saved Food favorites with current serving nutrition."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT food_favorites.*, foods.canonical_name,
+                   foods.brand, foods.restaurant,
+                   foods.serving_description,
+                   nutrition_versions.calories,
+                   nutrition_versions.protein_g
+            FROM food_favorites
+            JOIN foods
+              ON foods.food_id = food_favorites.food_id
+            LEFT JOIN nutrition_versions
+              ON nutrition_versions.nutrition_version_id =
+                 foods.active_nutrition_version_id
+            ORDER BY food_favorites.updated_at DESC,
+                     food_favorites.food_favorite_id DESC
+            """
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def delete_food_favorite(food_favorite_id: int) -> bool:
+    """Delete one saved Food favorite."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        deleted = connection.execute(
+            """
+            DELETE FROM food_favorites
+            WHERE food_favorite_id = ?
+            """,
+            (int(food_favorite_id),),
+        ).rowcount
+        connection.commit()
+
+    return bool(deleted)
+
+
 def get_daily_totals(
     entry_date: date | str,
 ) -> dict[str, float]:
