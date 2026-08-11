@@ -37,6 +37,7 @@ from food.ledger import (
     find_recent_duplicate_entry,
     get_daily_totals,
     list_food_entries,
+    update_food_entry,
 )
 from food.nutrition_provider import lookup_official_nutrition
 from food.resolver import resolve_food
@@ -300,10 +301,34 @@ def menu_reply_markup(message):
     ):
         rows = [["Yes", "No"]]
         one_time = True
+    elif "Choose a food to edit:" in message:
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index:index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        rows.append(["Back", "Cancel"])
+    elif "What would you like to change?" in message:
+        rows = [
+            ["Quantity", "Meal"],
+            ["Back", "Cancel"],
+        ]
+    elif "Choose the new meal:" in message:
+        rows = [
+            ["Before breakfast", "Breakfast"],
+            ["School snack", "Lunch"],
+            ["Afternoon snack", "Dinner"],
+            ["Dessert"],
+            ["Back", "Cancel"],
+        ]
+    elif "Apply this food change?" in message:
+        rows = [["Yes", "No"]]
+        one_time = True
     elif "Food Menu\n\n" in message:
         rows = [
             ["Log food", "Show today"],
-            ["Undo last", "Update unknown foods"],
+            ["Edit today", "Undo last"],
+            ["Update unknown foods"],
             ["Back", "Cancel"],
         ]
     elif "Health Menu\n\n" in message:
@@ -2265,9 +2290,10 @@ def healthcoach_food_menu_text() -> str:
         "Food Menu\n\n"
         "1. Log food\n"
         "2. Show today's food\n"
-        "3. Undo last food\n"
-        "4. Update unknown foods\n"
-        "5. Back"
+        "3. Edit today's food\n"
+        "4. Undo last food\n"
+        "5. Update unknown foods\n"
+        "6. Back"
     )
 
 
@@ -2336,6 +2362,44 @@ def format_daily_food_log(entry_date) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def format_edit_food_choices(entries: list[dict]) -> str:
+    lines = ["Choose a food to edit:", ""]
+
+    for index, entry in enumerate(entries, start=1):
+        name = format_food_display_name(
+            canonical_name=str(
+                entry.get("canonical_name") or "Food"
+            ),
+            restaurant=entry.get("restaurant"),
+            size=None,
+        )
+        lines.append(
+            f"{index}. {name} — "
+            f"{str(entry.get('meal_category') or 'Other').title()}, "
+            f"quantity {format_display_number(float(entry.get('quantity') or 1))}"
+        )
+
+    lines.extend(["", "Reply Back to return."])
+    return "\n".join(lines)
+
+
+def format_edit_food_action(entry: dict) -> str:
+    name = format_food_display_name(
+        canonical_name=str(entry.get("canonical_name") or "Food"),
+        restaurant=entry.get("restaurant"),
+        size=None,
+    )
+    return (
+        f"Editing: {name}\n"
+        f"Meal: {str(entry.get('meal_category') or 'Other').title()}\n"
+        f"Quantity: {format_display_number(float(entry.get('quantity') or 1))}\n\n"
+        "What would you like to change?\n"
+        "1. Quantity\n"
+        "2. Meal\n"
+        "3. Back"
+    )
 
 
 def process_telegram_update(update):
@@ -2511,7 +2575,38 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"3", "undo", "undo last"}:
+            if lowered in {"3", "edit", "edit today", "edit today's food"}:
+                entries = sorted(
+                    list_food_entries(entry_date=today),
+                    key=lambda entry: int(entry["food_entry_id"]),
+                    reverse=True,
+                )
+
+                if not entries:
+                    send_telegram_msg(
+                        "There are no food entries to edit today.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="edit_food_select",
+                    known_data={
+                        "_edit_food_entry_ids": [
+                            int(entry["food_entry_id"])
+                            for entry in entries
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_edit_food_choices(entries),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "undo", "undo last"}:
                 entries = list_food_entries(entry_date=today)
 
                 if not entries:
@@ -2549,7 +2644,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "4",
+                "5",
                 "unknown",
                 "update unknown foods",
             }:
@@ -2566,7 +2661,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"5", "back"}:
+            if lowered in {"6", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -2581,6 +2676,362 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "edit_food_select":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            entry_ids = list(
+                known_data.get("_edit_food_entry_ids") or []
+            )
+
+            try:
+                choice = int(lowered)
+            except ValueError:
+                choice = 0
+
+            if choice < 1 or choice > len(entry_ids):
+                entries = sorted(
+                    list_food_entries(entry_date=today),
+                    key=lambda entry: int(entry["food_entry_id"]),
+                    reverse=True,
+                )
+                send_telegram_msg(
+                    format_edit_food_choices(entries),
+                    chat_id=chat_id,
+                )
+                return
+
+            entry_id = int(entry_ids[choice - 1])
+            entry = next(
+                (
+                    candidate
+                    for candidate in list_food_entries(
+                        entry_date=today
+                    )
+                    if int(candidate["food_entry_id"]) == entry_id
+                ),
+                None,
+            )
+
+            if entry is None:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "That food entry no longer exists.\n\n"
+                    + healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="edit_food_action",
+                known_data={"_edit_food_entry_id": entry_id},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_edit_food_action(entry),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "edit_food_action":
+            entry_id = known_data.get("_edit_food_entry_id")
+            entry = next(
+                (
+                    candidate
+                    for candidate in list_food_entries(
+                        entry_date=today
+                    )
+                    if int(candidate["food_entry_id"])
+                    == int(entry_id)
+                ),
+                None,
+            ) if entry_id is not None else None
+
+            if entry is None:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "That food entry no longer exists.\n\n"
+                    + healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"1", "quantity"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="edit_food_quantity",
+                    known_data=known_data,
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Send the new numeric quantity.\n\n"
+                    "Examples: 0.5, 1, or 1.3 servings.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {"2", "meal"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="edit_food_meal",
+                    known_data=known_data,
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Choose the new meal:\n\n"
+                    "Before breakfast\nBreakfast\nSchool snack\n"
+                    "Lunch\nAfternoon snack\nDinner\nDessert",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "back"}:
+                entries = sorted(
+                    list_food_entries(entry_date=today),
+                    key=lambda candidate: int(
+                        candidate["food_entry_id"]
+                    ),
+                    reverse=True,
+                )
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="edit_food_select",
+                    known_data={
+                        "_edit_food_entry_ids": [
+                            int(candidate["food_entry_id"])
+                            for candidate in entries
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_edit_food_choices(entries),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                format_edit_food_action(entry),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "edit_food_quantity":
+            match = re.fullmatch(
+                r"(?:quantity\s+)?"
+                r"((?:\d+(?:\.\d+)?)|(?:\.\d+))"
+                r"(?:\s+servings?)?",
+                lowered,
+            )
+
+            if match is None or float(match.group(1)) <= 0:
+                send_telegram_msg(
+                    "Please send a quantity greater than zero.\n"
+                    "Examples: 0.5, 1, or 1.3 servings.",
+                    chat_id=chat_id,
+                )
+                return
+
+            new_quantity = float(match.group(1))
+            update_conversation(
+                chat_id=chat_id,
+                current_step="edit_food_confirmation",
+                known_data={
+                    **known_data,
+                    "_edit_field": "quantity",
+                    "_edit_value": new_quantity,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Apply this food change?\n\n"
+                f"New quantity: {format_display_number(new_quantity)}\n\n"
+                "1. Yes\n2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "edit_food_meal":
+            meal_aliases = {
+                "before breakfast": "before breakfast",
+                "breakfast": "breakfast",
+                "school snack": "school snack",
+                "morning snack": "school snack",
+                "lunch": "lunch",
+                "afternoon snack": "afternoon snack",
+                "snack": "afternoon snack",
+                "dinner": "dinner",
+                "dessert": "dessert",
+            }
+
+            if lowered == "back":
+                entry_id = known_data.get("_edit_food_entry_id")
+                entry = next(
+                    (
+                        candidate
+                        for candidate in list_food_entries(
+                            entry_date=today
+                        )
+                        if int(candidate["food_entry_id"])
+                        == int(entry_id)
+                    ),
+                    None,
+                ) if entry_id is not None else None
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="edit_food_action",
+                    known_data=known_data,
+                    missing_fields=[],
+                )
+                if entry is not None:
+                    send_telegram_msg(
+                        format_edit_food_action(entry),
+                        chat_id=chat_id,
+                    )
+                return
+
+            new_meal = meal_aliases.get(lowered)
+            if new_meal is None:
+                send_telegram_msg(
+                    "Choose the new meal:\n\n"
+                    "Before breakfast\nBreakfast\nSchool snack\n"
+                    "Lunch\nAfternoon snack\nDinner\nDessert",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="edit_food_confirmation",
+                known_data={
+                    **known_data,
+                    "_edit_field": "meal",
+                    "_edit_value": new_meal,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Apply this food change?\n\n"
+                f"New meal: {new_meal.title()}\n\n"
+                "1. Yes\n2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "edit_food_confirmation":
+            if lowered in {"2", "no", "back"}:
+                entry_id = known_data.get("_edit_food_entry_id")
+                entry = next(
+                    (
+                        candidate
+                        for candidate in list_food_entries(
+                            entry_date=today
+                        )
+                        if int(candidate["food_entry_id"])
+                        == int(entry_id)
+                    ),
+                    None,
+                ) if entry_id is not None else None
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="edit_food_action",
+                    known_data={"_edit_food_entry_id": entry_id},
+                    missing_fields=[],
+                )
+                if entry is not None:
+                    send_telegram_msg(
+                        "No changes were made.\n\n"
+                        + format_edit_food_action(entry),
+                        chat_id=chat_id,
+                    )
+                return
+
+            if lowered not in {"1", "yes"}:
+                send_telegram_msg(
+                    "Apply this food change?\n\n1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            entry_id = known_data.get("_edit_food_entry_id")
+            edit_field = known_data.get("_edit_field")
+            edit_value = known_data.get("_edit_value")
+
+            try:
+                if entry_id is None:
+                    updated = None
+                elif edit_field == "quantity":
+                    updated = update_food_entry(
+                        int(entry_id),
+                        quantity=float(edit_value),
+                    )
+                elif edit_field == "meal":
+                    updated = update_food_entry(
+                        int(entry_id),
+                        meal_category=str(edit_value),
+                    )
+                else:
+                    updated = None
+            except ValueError as error:
+                send_telegram_msg(str(error), chat_id=chat_id)
+                return
+
+            if updated is None:
+                send_telegram_msg(
+                    "That food entry could not be updated.",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                sync_food_ledger_totals_to_sheet(today)
+            except Exception:
+                logging.exception(
+                    "Google Sheet sync failed after Food edit"
+                )
+                result_message = (
+                    "Food was updated, but the Google Sheet "
+                    "could not be updated."
+                )
+            else:
+                result_message = (
+                    "Food updated and today's totals recalculated."
+                )
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                result_message + "\n\n" + healthcoach_food_menu_text(),
                 chat_id=chat_id,
             )
             return
