@@ -36,6 +36,7 @@ from food.ledger import (
     delete_food_entry,
     find_recent_duplicate_entry,
     get_daily_totals,
+    list_food_entries,
 )
 from food.nutrition_provider import lookup_official_nutrition
 from food.resolver import resolve_food
@@ -2145,6 +2146,95 @@ def show_unresolved_food_review(
     return True
 
 
+def healthcoach_main_menu_text() -> str:
+    return (
+        "HealthCoach Menu\n\n"
+        "1. Food\n"
+        "2. Health\n"
+        "3. Reports\n"
+        "4. Help\n\n"
+        "Reply cancel to close the menu."
+    )
+
+
+def healthcoach_food_menu_text() -> str:
+    return (
+        "Food Menu\n\n"
+        "1. Log food\n"
+        "2. Show today's food\n"
+        "3. Undo last food\n"
+        "4. Update unknown foods\n"
+        "5. Back"
+    )
+
+
+def healthcoach_health_menu_text() -> str:
+    return (
+        "Health Menu\n\n"
+        "1. Current status\n"
+        "2. Record sleep\n"
+        "3. Back"
+    )
+
+
+def healthcoach_reports_menu_text() -> str:
+    return (
+        "Reports Menu\n\n"
+        "1. Today's summary\n"
+        "2. Weekly report\n"
+        "3. Back"
+    )
+
+
+def format_daily_food_log(entry_date) -> str:
+    entries = list_food_entries(entry_date=entry_date)
+
+    if not entries:
+        return "No foods are logged for today."
+
+    lines = ["Today's Food Log"]
+    current_meal = None
+
+    for entry in entries:
+        meal = str(entry.get("meal_category") or "Other").title()
+
+        if meal != current_meal:
+            lines.extend(["", meal])
+            current_meal = meal
+
+        name = format_food_display_name(
+            canonical_name=str(
+                entry.get("canonical_name") or "Food"
+            ),
+            restaurant=entry.get("restaurant"),
+            size=None,
+        )
+        quantity = float(entry.get("quantity") or 1.0)
+        calories = float(entry.get("calories") or 0.0)
+        protein = float(entry.get("protein_g") or 0.0)
+
+        lines.append(
+            "- "
+            f"{format_display_number(quantity)} × {name}: "
+            f"{format_display_number(calories, decimals=0)} cal, "
+            f"{format_display_number(protein)} g protein"
+        )
+
+    totals = get_daily_totals(entry_date)
+    lines.extend(
+        [
+            "",
+            (
+                "Total: "
+                f"{format_display_number(totals['calories'], decimals=0)} "
+                "calories, "
+                f"{format_display_number(totals['protein_g'])} g protein"
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
 def process_telegram_update(update):
     message = update.get("message") or update.get("edited_message") or {}
     if not message:
@@ -2170,6 +2260,21 @@ def process_telegram_update(update):
 
     lowered_text = text.lower().strip()
 
+    if lowered_text in {"/menu", "menu", "main menu"}:
+        start_conversation(
+            chat_id=chat_id,
+            conversation_type="healthcoach_menu",
+            current_step="main",
+            known_data={},
+            missing_fields=[],
+            original_message=text,
+        )
+        send_telegram_msg(
+            healthcoach_main_menu_text(),
+            chat_id=chat_id,
+        )
+        return
+
     if lowered_text in {
         "update unknown foods",
         "/updateunknownfoods",
@@ -2191,6 +2296,329 @@ def process_telegram_update(update):
         return
 
     active_conversation = get_active_conversation(chat_id)
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "healthcoach_menu"
+    ):
+        current_step = active_conversation.get("current_step")
+        known_data = dict(
+            active_conversation.get("known_data") or {}
+        )
+        lowered = text.lower().strip()
+        today = datetime.now(PACIFIC_TZ).date()
+
+        if lowered in {"cancel", "exit", "quit", "close"}:
+            cancel_conversation(chat_id)
+            send_telegram_msg("Menu closed.", chat_id=chat_id)
+            return
+
+        if lowered in {"menu", "main", "main menu"}:
+            update_conversation(
+                chat_id=chat_id,
+                current_step="main",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                healthcoach_main_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "main":
+            if lowered in {"1", "food"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "health"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_health_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "reports"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="reports",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_reports_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "help"}:
+                send_telegram_msg(
+                    "You can still use natural language at any time "
+                    "after closing the menu.\n\n"
+                    "Examples:\n"
+                    "- For lunch I had...\n"
+                    "- Record my sleep as 7:15\n"
+                    "- Run my weekly report\n\n"
+                    "Reply menu to return or cancel to close.",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_main_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food":
+            if lowered in {"1", "log", "log food"}:
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "Send the food naturally, including the meal.\n\n"
+                    "Example: For lunch I had a turkey sandwich.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "show", "show today"}:
+                send_telegram_msg(
+                    format_daily_food_log(today),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "undo", "undo last"}:
+                entries = list_food_entries(entry_date=today)
+
+                if not entries:
+                    send_telegram_msg(
+                        "There is no food entry to undo today.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                latest = max(
+                    entries,
+                    key=lambda entry: int(
+                        entry["food_entry_id"]
+                    ),
+                )
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="undo_food_confirmation",
+                    known_data={
+                        "_undo_food_entry_id": (
+                            latest["food_entry_id"]
+                        ),
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Undo this food entry?\n\n"
+                    f"Meal: {str(latest['meal_category']).title()}\n"
+                    f"Food: {latest['canonical_name']}\n"
+                    f"Calories: {format_display_number(float(latest.get('calories') or 0), decimals=0)}\n\n"
+                    "1. Yes, undo it\n"
+                    "2. No, keep it",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "4",
+                "unknown",
+                "update unknown foods",
+            }:
+                pending = get_pending_unresolved_foods()
+                if not pending:
+                    send_telegram_msg(
+                        "There are no unknown foods waiting.",
+                        chat_id=chat_id,
+                    )
+                else:
+                    show_unresolved_food_review(
+                        chat_id=chat_id,
+                        pending=pending,
+                    )
+                return
+
+            if lowered in {"5", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="main",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_main_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "undo_food_confirmation":
+            if lowered in {"1", "yes", "undo"}:
+                entry_id = known_data.get("_undo_food_entry_id")
+                deleted = (
+                    delete_food_entry(int(entry_id))
+                    if entry_id is not None
+                    else False
+                )
+
+                if not deleted:
+                    send_telegram_msg(
+                        "That food entry no longer exists.",
+                        chat_id=chat_id,
+                    )
+                else:
+                    try:
+                        sync_food_ledger_totals_to_sheet(today)
+                    except Exception:
+                        logging.exception(
+                            "Google Sheet sync failed after Food undo"
+                        )
+                        send_telegram_msg(
+                            "Food was removed, but the Google Sheet "
+                            "could not be updated.",
+                            chat_id=chat_id,
+                        )
+                    else:
+                        send_telegram_msg(
+                            "The last food entry was removed and "
+                            "today's totals were updated.",
+                            chat_id=chat_id,
+                        )
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Food entry kept.\n\n"
+                    + healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                "Please choose:\n"
+                "1. Yes, undo it\n"
+                "2. No, keep it",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "health":
+            if lowered in {"1", "status", "current status"}:
+                metrics = get_today_metrics()
+                send_telegram_msg(
+                    build_progress_message(
+                        "Current status",
+                        metrics,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "sleep", "record sleep"}:
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "Send your sleep naturally.\n\n"
+                    "Example: Record my sleep as 7:15",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="main",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_main_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_health_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "reports":
+            if lowered in {"1", "today", "today's summary"}:
+                metrics = get_today_metrics()
+                send_telegram_msg(
+                    build_progress_message(
+                        "Today's summary",
+                        metrics,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "weekly", "weekly report"}:
+                cancel_conversation(chat_id)
+                send_weekly_report(chat_id=chat_id)
+                return
+
+            if lowered in {"3", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="main",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_main_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_reports_menu_text(),
+                chat_id=chat_id,
+            )
+            return
 
     if (
         active_conversation
