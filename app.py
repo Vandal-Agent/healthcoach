@@ -281,6 +281,13 @@ def menu_reply_markup(message):
             ["Cancel this food"],
         ]
         one_time = True
+    elif "1. Enter package label nutrition" in message:
+        rows = [
+            ["Enter package label nutrition"],
+            ["Different description", "Save for later"],
+            ["Cancel"],
+        ]
+        one_time = True
     elif "Log another one?" in message:
         rows = [["Log another", "Keep first"]]
         one_time = True
