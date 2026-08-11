@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -83,6 +84,14 @@ class FoodWorkflowTests(unittest.TestCase):
             logging_source=source,
             original_text="test food entry",
         )
+
+    def test_connection_closes_after_context_manager(self) -> None:
+        connection = database.get_connection(self.database_path)
+        with connection:
+            connection.execute("SELECT 1")
+
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
 
     def test_schema_initializes_at_current_version(self) -> None:
         result = database.initialize_database()
