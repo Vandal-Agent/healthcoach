@@ -49,6 +49,8 @@ class RestaurantAdvice(BaseModel):
 
 def run_restaurant_menu_search(
     restaurant_query: str,
+    *,
+    client: Any,
 ) -> tuple[str, list[dict[str, str]]]:
     """Search current menu sources and return cited source text."""
     prompt = f"""
@@ -84,7 +86,6 @@ Selection priorities:
     choice.
 """
 
-    client = get_client()
     interaction = client.interactions.create(
         model=MODEL_NAME,
         input=prompt,
@@ -101,6 +102,7 @@ def structure_restaurant_advice(
     restaurant_query: str,
     source_text: str,
     citations: list[dict[str, str]],
+    client: Any,
 ) -> RestaurantAdvice:
     """Convert a cited menu report into validated recommendations."""
     if not source_text or not citations:
@@ -138,7 +140,7 @@ CITED REPORT:
 {source_text}
 """
 
-    response = get_client().models.generate_content(
+    response = client.models.generate_content(
         model=MODEL_NAME,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -169,12 +171,20 @@ def recommend_restaurant_entrees(
     if not cleaned_query:
         raise ValueError("restaurant_query is required.")
 
-    source_text, citations = run_restaurant_menu_search(cleaned_query)
-    result = structure_restaurant_advice(
-        restaurant_query=cleaned_query,
-        source_text=source_text,
-        citations=citations,
-    )
+    client = get_client()
+    try:
+        source_text, citations = run_restaurant_menu_search(
+            cleaned_query,
+            client=client,
+        )
+        result = structure_restaurant_advice(
+            restaurant_query=cleaned_query,
+            source_text=source_text,
+            citations=citations,
+            client=client,
+        )
+    finally:
+        client.close()
 
     allowed_citations = {
         citation["url"]: citation["title"]
