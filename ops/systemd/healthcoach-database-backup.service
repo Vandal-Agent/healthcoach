@@ -1,0 +1,14 @@
+[Unit]
+Description=Create verified HealthCoach database backups
+Documentation=file:///home/vandal/bots/healthcoach/PROJECT_WORKFLOW.md
+
+[Service]
+Type=oneshot
+User=vandal
+Group=vandal
+WorkingDirectory=/home/vandal/bots/healthcoach
+ExecStart=/home/vandal/bots/healthcoach/venv/bin/python /home/vandal/bots/healthcoach/scripts/backup_databases.py
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
