@@ -45,17 +45,32 @@ class RestaurantAdvisorTests(unittest.TestCase):
         ]
         with (
             patch(
+                "food.restaurant_advisor.get_client"
+            ) as client_patch,
+            patch(
                 "food.restaurant_advisor.run_restaurant_menu_search",
                 return_value=("cited report", cited),
-            ),
+            ) as search_patch,
             patch(
                 "food.restaurant_advisor.structure_restaurant_advice",
                 return_value=structured,
-            ),
+            ) as structure_patch,
         ):
-            return recommend_restaurant_entrees(
+            result = recommend_restaurant_entrees(
                 "Example Restaurant in Redding, California"
             )
+
+        client = client_patch.return_value
+        search_patch.assert_called_once_with(
+            "Example Restaurant in Redding, California",
+            client=client,
+        )
+        self.assertIs(
+            structure_patch.call_args.kwargs["client"],
+            client,
+        )
+        client.close.assert_called_once_with()
+        return result
 
     def test_keeps_candidate_with_matching_citation(self) -> None:
         structured = RestaurantAdvice(
