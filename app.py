@@ -247,8 +247,52 @@ def archive_latest_loseit_day():
 
 def menu_reply_markup(message):
     """Return an iPhone-friendly Telegram keyboard for menu messages."""
+    one_time = False
+
     if "Undo this food entry?" in message:
         rows = [["Yes", "No"]]
+        one_time = True
+    elif (
+        (
+            "Nutrition has not been looked up or saved yet." in message
+            or message.startswith("Please reply:\n1. Correct")
+        )
+        and "1. Correct" in message
+    ):
+        rows = [["Correct", "Edit", "Cancel"]]
+        one_time = True
+    elif (
+        (
+            "Nothing has been logged yet." in message
+            or message.startswith("Please reply:\n1. Log It")
+        )
+        and "1. Log It" in message
+    ):
+        rows = [["Log It", "Edit", "Cancel"]]
+        one_time = True
+    elif (
+        ("Unknown food " in message and "1. Enter nutrition" in message)
+        or "Choose another option." in message
+        or "food remains in the queue." in message
+    ):
+        rows = [
+            ["Enter nutrition", "Edit"],
+            ["Automatic lookup", "Skip for now"],
+            ["Cancel this food"],
+        ]
+        one_time = True
+    elif "Log another one?" in message:
+        rows = [["Log another", "Keep first"]]
+        one_time = True
+    elif "1. Save" in message and "2. Edit" in message:
+        rows = [["Save", "Edit", "Cancel"]]
+        one_time = True
+    elif (
+        ("Anything else for " in message or "Anything else from " in message)
+        and "1. Yes" in message
+    ):
+        rows = [["Yes", "No"]]
+        one_time = True
     elif "Food Menu\n\n" in message:
         rows = [
             ["Log food", "Show today"],
@@ -277,7 +321,7 @@ def menu_reply_markup(message):
     return {
         "keyboard": rows,
         "resize_keyboard": True,
-        "one_time_keyboard": False,
+        "one_time_keyboard": one_time,
     }
 
 
