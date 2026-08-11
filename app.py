@@ -33,10 +33,13 @@ from food.interpreter import (
 from food.library import add_food_with_nutrition
 from food.ledger import (
     add_food_entry,
+    delete_food_favorite,
     delete_food_entry,
     find_recent_duplicate_entry,
     get_daily_totals,
+    list_food_favorites,
     list_food_entries,
+    save_food_favorite_from_entry,
     update_food_entry,
 )
 from food.nutrition_provider import lookup_official_nutrition
@@ -301,7 +304,15 @@ def menu_reply_markup(message):
     ):
         rows = [["Yes", "No"]]
         one_time = True
-    elif "Choose a food to edit:" in message:
+    elif any(
+        marker in message
+        for marker in (
+            "Choose a food to edit:",
+            "Choose a food to save as a favorite:",
+            "Choose a favorite to log:",
+            "Choose a favorite to remove:",
+        )
+    ):
         choices = re.findall(r"(?m)^(\d+)\. ", message)
         rows = [
             choices[index:index + 3]
@@ -324,11 +335,27 @@ def menu_reply_markup(message):
     elif "Apply this food change?" in message:
         rows = [["Yes", "No"]]
         one_time = True
+    elif any(
+        marker in message
+        for marker in (
+            "Save this favorite?",
+            "Quick-log this favorite?",
+            "Remove this favorite?",
+        )
+    ):
+        rows = [["Yes", "No"]]
+        one_time = True
+    elif "Favorites Menu\n\n" in message:
+        rows = [
+            ["Quick log", "Save today's food"],
+            ["Remove favorite"],
+            ["Back", "Cancel"],
+        ]
     elif "Food Menu\n\n" in message:
         rows = [
             ["Log food", "Show today"],
             ["Edit today", "Undo last"],
-            ["Update unknown foods"],
+            ["Favorites", "Update unknown foods"],
             ["Back", "Cancel"],
         ]
     elif "Health Menu\n\n" in message:
@@ -2292,8 +2319,19 @@ def healthcoach_food_menu_text() -> str:
         "2. Show today's food\n"
         "3. Edit today's food\n"
         "4. Undo last food\n"
-        "5. Update unknown foods\n"
-        "6. Back"
+        "5. Favorites\n"
+        "6. Update unknown foods\n"
+        "7. Back"
+    )
+
+
+def healthcoach_favorites_menu_text() -> str:
+    return (
+        "Favorites Menu\n\n"
+        "1. Quick log\n"
+        "2. Save today's food\n"
+        "3. Remove favorite\n"
+        "4. Back"
     )
 
 
@@ -2379,6 +2417,55 @@ def format_edit_food_choices(entries: list[dict]) -> str:
             f"{index}. {name} — "
             f"{str(entry.get('meal_category') or 'Other').title()}, "
             f"quantity {format_display_number(float(entry.get('quantity') or 1))}"
+        )
+
+    lines.extend(["", "Reply Back to return."])
+    return "\n".join(lines)
+
+
+def format_save_favorite_choices(entries: list[dict]) -> str:
+    lines = ["Choose a food to save as a favorite:", ""]
+
+    for index, entry in enumerate(entries, start=1):
+        name = format_food_display_name(
+            canonical_name=str(entry.get("canonical_name") or "Food"),
+            restaurant=entry.get("restaurant"),
+            size=None,
+        )
+        lines.append(
+            f"{index}. {name} — "
+            f"{str(entry.get('meal_category') or 'Other').title()}, "
+            f"quantity {format_display_number(float(entry.get('quantity') or 1))}"
+        )
+
+    lines.extend(["", "Reply Back to return."])
+    return "\n".join(lines)
+
+
+def format_favorite_choices(
+    favorites: list[dict],
+    *,
+    action: str,
+) -> str:
+    heading = (
+        "Choose a favorite to remove:"
+        if action == "remove"
+        else "Choose a favorite to log:"
+    )
+    lines = [heading, ""]
+
+    for index, favorite in enumerate(favorites, start=1):
+        name = format_food_display_name(
+            canonical_name=str(
+                favorite.get("canonical_name") or "Food"
+            ),
+            restaurant=favorite.get("restaurant"),
+            size=None,
+        )
+        lines.append(
+            f"{index}. {name} — "
+            f"{str(favorite.get('meal_category') or 'Other').title()}, "
+            f"quantity {format_display_number(float(favorite.get('quantity') or 1))}"
         )
 
     lines.extend(["", "Reply Back to return."])
@@ -2643,8 +2730,21 @@ def process_telegram_update(update):
                 )
                 return
 
+            if lowered in {"5", "favorites", "favorite"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="favorites",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_favorites_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
             if lowered in {
-                "5",
+                "6",
                 "unknown",
                 "update unknown foods",
             }:
@@ -2661,7 +2761,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"6", "back"}:
+            if lowered in {"7", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -2676,6 +2776,385 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "favorites":
+            if lowered in {"1", "quick log", "quick"}:
+                favorites = list_food_favorites()
+                if not favorites:
+                    send_telegram_msg(
+                        "You do not have any saved favorites yet.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="favorite_quick_select",
+                    known_data={
+                        "_favorite_ids": [
+                            int(item["food_favorite_id"])
+                            for item in favorites
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_favorite_choices(
+                        favorites,
+                        action="log",
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "save today's food", "save today"}:
+                entries = sorted(
+                    list_food_entries(entry_date=today),
+                    key=lambda item: int(item["food_entry_id"]),
+                    reverse=True,
+                )
+                if not entries:
+                    send_telegram_msg(
+                        "There are no foods logged today to save.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="favorite_save_select",
+                    known_data={
+                        "_entry_ids": [
+                            int(item["food_entry_id"])
+                            for item in entries
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_save_favorite_choices(entries),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "remove favorite", "remove"}:
+                favorites = list_food_favorites()
+                if not favorites:
+                    send_telegram_msg(
+                        "You do not have any saved favorites yet.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="favorite_remove_select",
+                    known_data={
+                        "_favorite_ids": [
+                            int(item["food_favorite_id"])
+                            for item in favorites
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_favorite_choices(
+                        favorites,
+                        action="remove",
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_favorites_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {
+            "favorite_quick_select",
+            "favorite_save_select",
+            "favorite_remove_select",
+        }:
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="favorites",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_favorites_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                choice = int(lowered)
+            except ValueError:
+                choice = 0
+
+            if current_step == "favorite_save_select":
+                ids = list(known_data.get("_entry_ids") or [])
+                entries = sorted(
+                    list_food_entries(entry_date=today),
+                    key=lambda item: int(item["food_entry_id"]),
+                    reverse=True,
+                )
+                if choice < 1 or choice > len(ids):
+                    send_telegram_msg(
+                        format_save_favorite_choices(entries),
+                        chat_id=chat_id,
+                    )
+                    return
+                entry_id = int(ids[choice - 1])
+                entry = next(
+                    (
+                        item for item in entries
+                        if int(item["food_entry_id"]) == entry_id
+                    ),
+                    None,
+                )
+                if entry is None:
+                    send_telegram_msg(
+                        "That food entry no longer exists.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="favorite_save_confirmation",
+                    known_data={"_entry_id": entry_id},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Save this favorite?\n\n"
+                    f"Food: {entry['canonical_name']}\n"
+                    f"Meal: {str(entry['meal_category']).title()}\n"
+                    f"Quantity: {format_display_number(float(entry['quantity']))}\n\n"
+                    "1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            favorites = list_food_favorites()
+            ids = list(known_data.get("_favorite_ids") or [])
+            if choice < 1 or choice > len(ids):
+                send_telegram_msg(
+                    format_favorite_choices(
+                        favorites,
+                        action=(
+                            "remove"
+                            if current_step == "favorite_remove_select"
+                            else "log"
+                        ),
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+            favorite_id = int(ids[choice - 1])
+            favorite = next(
+                (
+                    item for item in favorites
+                    if int(item["food_favorite_id"])
+                    == favorite_id
+                ),
+                None,
+            )
+            if favorite is None:
+                send_telegram_msg(
+                    "That favorite no longer exists.",
+                    chat_id=chat_id,
+                )
+                return
+
+            is_remove = current_step == "favorite_remove_select"
+            update_conversation(
+                chat_id=chat_id,
+                current_step=(
+                    "favorite_remove_confirmation"
+                    if is_remove
+                    else "favorite_quick_confirmation"
+                ),
+                known_data={"_favorite_id": favorite_id},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                (
+                    "Remove this favorite?\n\n"
+                    if is_remove
+                    else "Quick-log this favorite?\n\n"
+                )
+                + f"Food: {favorite['canonical_name']}\n"
+                + f"Meal: {str(favorite['meal_category']).title()}\n"
+                + f"Quantity: {format_display_number(float(favorite['quantity']))}\n\n"
+                + "1. Yes\n2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {
+            "favorite_save_confirmation",
+            "favorite_quick_confirmation",
+            "favorite_remove_confirmation",
+        }:
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="favorites",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "No changes were made.\n\n"
+                    + healthcoach_favorites_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "yes"}:
+                prompt = {
+                    "favorite_save_confirmation": "Save this favorite?",
+                    "favorite_quick_confirmation": "Quick-log this favorite?",
+                    "favorite_remove_confirmation": "Remove this favorite?",
+                }[current_step]
+                send_telegram_msg(
+                    prompt + "\n\n1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            if current_step == "favorite_save_confirmation":
+                try:
+                    favorite = save_food_favorite_from_entry(
+                        int(known_data["_entry_id"])
+                    )
+                except (KeyError, ValueError) as error:
+                    send_telegram_msg(str(error), chat_id=chat_id)
+                    return
+                result_message = (
+                    f"Saved {favorite['canonical_name']} as a favorite."
+                )
+
+            elif current_step == "favorite_remove_confirmation":
+                removed = delete_food_favorite(
+                    int(known_data.get("_favorite_id") or 0)
+                )
+                result_message = (
+                    "Favorite removed."
+                    if removed
+                    else "That favorite no longer exists."
+                )
+
+            else:
+                favorite_id = int(
+                    known_data.get("_favorite_id") or 0
+                )
+                favorite = next(
+                    (
+                        item for item in list_food_favorites()
+                        if int(item["food_favorite_id"])
+                        == favorite_id
+                    ),
+                    None,
+                )
+                if favorite is None:
+                    send_telegram_msg(
+                        "That favorite no longer exists.",
+                        chat_id=chat_id,
+                    )
+                    return
+                duplicate = find_recent_duplicate_entry(
+                    entry_date=today,
+                    meal_category=favorite["meal_category"],
+                    food_id=int(favorite["food_id"]),
+                    quantity=float(favorite["quantity"]),
+                    window_minutes=5,
+                )
+                if duplicate is not None:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="favorites",
+                        known_data={},
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        "That exact favorite was logged within the "
+                        "last five minutes, so it was not logged again.\n\n"
+                        + healthcoach_favorites_menu_text(),
+                        chat_id=chat_id,
+                    )
+                    return
+                try:
+                    add_food_entry(
+                        entry_date=today,
+                        meal_category=favorite["meal_category"],
+                        food_id=int(favorite["food_id"]),
+                        quantity=float(favorite["quantity"]),
+                        logging_source="telegram_ai",
+                        original_text="Quick logged from favorites",
+                        quantity_is_estimated=False,
+                        user_confirmed=True,
+                    )
+                except ValueError as error:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="favorites",
+                        known_data={},
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        str(error) + "\n\n"
+                        + healthcoach_favorites_menu_text(),
+                        chat_id=chat_id,
+                    )
+                    return
+                except Exception:
+                    logging.exception("Favorite quick log failed")
+                    send_telegram_msg(
+                        "The favorite could not be logged.",
+                        chat_id=chat_id,
+                    )
+                    return
+                try:
+                    sync_food_ledger_totals_to_sheet(today)
+                except Exception:
+                    logging.exception(
+                        "Favorite Google Sheet sync failed"
+                    )
+                    result_message = (
+                        f"Quick logged {favorite['canonical_name']}, "
+                        "but the Google Sheet totals could not be updated."
+                    )
+                else:
+                    result_message = (
+                        f"Quick logged {favorite['canonical_name']} for "
+                        f"{str(favorite['meal_category']).title()}."
+                    )
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="favorites",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                result_message + "\n\n"
+                + healthcoach_favorites_menu_text(),
                 chat_id=chat_id,
             )
             return
