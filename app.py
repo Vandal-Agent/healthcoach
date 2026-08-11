@@ -245,7 +245,48 @@ def archive_latest_loseit_day():
     return True
 
 
-def send_telegram_msg(message, chat_id=None):
+def menu_reply_markup(message):
+    """Return an iPhone-friendly Telegram keyboard for menu messages."""
+    if "Undo this food entry?" in message:
+        rows = [["Yes", "No"]]
+    elif "Food Menu\n\n" in message:
+        rows = [
+            ["Log food", "Show today"],
+            ["Undo last", "Update unknown foods"],
+            ["Back", "Cancel"],
+        ]
+    elif "Health Menu\n\n" in message:
+        rows = [
+            ["Current status", "Record sleep"],
+            ["Back", "Cancel"],
+        ]
+    elif "Reports Menu\n\n" in message:
+        rows = [
+            ["Today", "Weekly report"],
+            ["Back", "Cancel"],
+        ]
+    elif "HealthCoach Menu\n\n" in message:
+        rows = [
+            ["Food", "Health"],
+            ["Reports", "Help"],
+            ["Cancel"],
+        ]
+    else:
+        return None
+
+    return {
+        "keyboard": rows,
+        "resize_keyboard": True,
+        "one_time_keyboard": False,
+    }
+
+
+def send_telegram_msg(
+    message,
+    chat_id=None,
+    *,
+    remove_keyboard=False,
+):
     target_chat_id = str(chat_id or CHAT_ID) if (chat_id or CHAT_ID) else None
 
     if not TELEGRAM_TOKEN or not target_chat_id:
@@ -254,6 +295,13 @@ def send_telegram_msg(message, chat_id=None):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": target_chat_id, "text": message}
+
+    if remove_keyboard:
+        payload["reply_markup"] = {"remove_keyboard": True}
+    else:
+        reply_markup = menu_reply_markup(message)
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
 
     try:
         r = requests.post(url, json=payload, timeout=15)
@@ -1351,7 +1399,7 @@ def send_sleep_reminder_if_missing():
     return send_telegram_msg(message)
 
 
-def send_weekly_report(chat_id=None):
+def send_weekly_report(chat_id=None, *, remove_keyboard=False):
     now = datetime.now(PACIFIC_TZ).date()
 
     initialize_goals_if_needed(now)
@@ -1370,7 +1418,11 @@ def send_weekly_report(chat_id=None):
         + "\n".join(f"- {line}" for line in goal_lines)
     )
 
-    return send_telegram_msg(full_message, chat_id=chat_id)
+    return send_telegram_msg(
+        full_message,
+        chat_id=chat_id,
+        remove_keyboard=remove_keyboard,
+    )
 
 
 def scheduler_loop():
@@ -2311,7 +2363,11 @@ def process_telegram_update(update):
 
         if lowered in {"cancel", "exit", "quit", "close"}:
             cancel_conversation(chat_id)
-            send_telegram_msg("Menu closed.", chat_id=chat_id)
+            send_telegram_msg(
+                "Menu closed.",
+                chat_id=chat_id,
+                remove_keyboard=True,
+            )
             return
 
         if lowered in {"menu", "main", "main menu"}:
@@ -2393,6 +2449,7 @@ def process_telegram_update(update):
                     "Send the food naturally, including the meal.\n\n"
                     "Example: For lunch I had a turkey sandwich.",
                     chat_id=chat_id,
+                    remove_keyboard=True,
                 )
                 return
 
@@ -2562,6 +2619,7 @@ def process_telegram_update(update):
                     "Send your sleep naturally.\n\n"
                     "Example: Record my sleep as 7:15",
                     chat_id=chat_id,
+                    remove_keyboard=True,
                 )
                 return
 
@@ -2598,7 +2656,10 @@ def process_telegram_update(update):
 
             if lowered in {"2", "weekly", "weekly report"}:
                 cancel_conversation(chat_id)
-                send_weekly_report(chat_id=chat_id)
+                send_weekly_report(
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
                 return
 
             if lowered in {"3", "back"}:
