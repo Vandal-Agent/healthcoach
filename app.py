@@ -2348,8 +2348,27 @@ def healthcoach_restaurant_menu_text() -> str:
     )
 
 
+def clean_restaurant_display_text(value) -> str:
+    text = str(value or "")
+    replacements = {
+        "Â®": "",
+        "â„¢": "",
+        "â€™": "'",
+        "â€“": "-",
+        "â€”": "-",
+        "®": "",
+        "™": "",
+        "’": "'",
+        "–": "-",
+        "—": "-",
+    }
+    for original, replacement in replacements.items():
+        text = text.replace(original, replacement)
+    return text.strip()
+
+
 def format_restaurant_advice(advice: dict) -> str:
-    name = str(
+    name = clean_restaurant_display_text(
         advice.get("restaurant_display_name")
         or "Restaurant"
     )
@@ -2372,7 +2391,7 @@ def format_restaurant_advice(advice: dict) -> str:
     lines = ["Restaurant Recommendations", "", name]
 
     for index, candidate in enumerate(candidates, start=1):
-        lines.extend(["", f"{index}. {candidate['item_name']}"])
+        lines.extend(["", f"{index}. {clean_restaurant_display_text(candidate['item_name'])}"])
         if candidate.get("nutrition_status") == "official":
             nutrition_parts = []
             if candidate.get("calories") is not None:
@@ -2396,10 +2415,10 @@ def format_restaurant_advice(advice: dict) -> str:
                 "Nutrition: not published; menu-based recommendation"
             )
         lines.append(
-            f"Why: {candidate['recommendation_reason']}"
+            f"Why: {clean_restaurant_display_text(candidate['recommendation_reason'])}"
         )
         lines.append(
-            f"Source: {candidate['source_title']}"
+            f"Source: {clean_restaurant_display_text(candidate['source_title'])}"
         )
         lines.append(str(candidate["source_url"]))
 
@@ -2951,7 +2970,7 @@ def process_telegram_update(update):
                 return
 
             send_telegram_msg(
-                "I’m checking the current menu and cited nutrition. "
+                "I'm checking the current menu and cited nutrition. "
                 "This may take a moment.",
                 chat_id=chat_id,
                 remove_keyboard=True,
