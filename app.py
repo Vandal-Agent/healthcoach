@@ -7696,6 +7696,18 @@ def webhook():
     sleep = normalize_sleep_for_sheet(sleep_raw) if sleep_raw not in ("", None) else ""
     rhr = safe_float(data.get("rhr"), None)
     weight = safe_float(data.get("weight"), None)
+    # Preserve today's existing official weight.
+    _, existing_row, _ = get_today_row_index_and_row(
+        sheet,
+        now.strftime("%m/%d/%Y"),
+    )
+    if (
+        existing_row
+        and len(existing_row) > 6
+        and existing_row[6] not in ("", None)
+    ):
+        weight = None
+
     hrv = safe_float(data.get("hrv"), None)
     dietary = safe_float(data.get("dietary_calories"), None)
     protein = safe_float(data.get("protein"), None)
