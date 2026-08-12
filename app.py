@@ -273,7 +273,10 @@ def menu_reply_markup(message):
         )
         and "1. Log It" in message
     ):
-        rows = [["Log It", "Edit", "Cancel"]]
+        rows = [
+            ["Log It", "Enter custom nutrition"],
+            ["Edit", "Cancel"],
+        ]
         one_time = True
     elif (
         ("Unknown food " in message and "1. Enter nutrition" in message)
@@ -2192,8 +2195,9 @@ def format_pending_nutrition_confirmation(
             "Nothing has been logged yet.",
             "",
             "1. Log It",
-            "2. Edit",
-            "3. Cancel",
+            "2. Enter custom nutrition",
+            "3. Edit",
+            "4. Cancel",
         ]
     )
 
@@ -5358,7 +5362,42 @@ def process_telegram_update(update):
 
             return
 
-        if lowered in {"2", "edit"}:
+        if lowered in {
+            "2",
+            "enter custom nutrition",
+            "custom nutrition",
+            "custom",
+        }:
+            if len(pending_components) != 1 or not meal_category:
+                send_telegram_msg(
+                    "Custom nutrition can currently replace one food "
+                    "at a time. Please edit this entry and send one "
+                    "food description.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="manual_label_entry",
+                known_data={
+                    **known_data,
+                    "_manual_label_field": "serving_size",
+                    "_custom_nutrition_override": True,
+                },
+                missing_fields=[],
+            )
+
+            send_telegram_msg(
+                "Enter custom nutrition for this food. The verified "
+                "match will not be logged.\n\n"
+                "What serving size applies?\n"
+                "Examples: 1 serving, 28 g, or 1 oz.",
+                chat_id=chat_id,
+            )
+            return
+
+        if lowered in {"3", "edit"}:
             cancel_conversation(chat_id)
             send_telegram_msg(
                 "Send the corrected food description as a new message.",
@@ -5366,7 +5405,7 @@ def process_telegram_update(update):
             )
             return
 
-        if lowered in {"3", "cancel", "no"}:
+        if lowered in {"4", "cancel", "no"}:
             cancel_conversation(chat_id)
             send_telegram_msg(
                 "Food entry cancelled. Nothing was logged.",
@@ -5377,8 +5416,9 @@ def process_telegram_update(update):
         send_telegram_msg(
             "Please reply:\n"
             "1. Log It\n"
-            "2. Edit\n"
-            "3. Cancel",
+            "2. Enter custom nutrition\n"
+            "3. Edit\n"
+            "4. Cancel",
             chat_id=chat_id,
         )
         return
