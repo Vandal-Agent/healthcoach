@@ -1985,6 +1985,28 @@ def resolve_packaged_serving_multiplier(
             str(serving_unit).strip().lower()
         )
 
+        fluid_units = {
+            "fl oz",
+            "floz",
+            "fluid ounce",
+            "fluid ounces",
+        }
+
+        if normalized_serving_unit in fluid_units:
+            if unit not in {"oz", "ounce", "ounces"}:
+                raise ValueError(
+                    "Fluid ounces cannot be converted from weight."
+                )
+
+            multiplier = amount / float(serving_amount)
+
+            if multiplier <= 0:
+                raise ValueError(
+                    "Calculated serving quantity was invalid."
+                )
+
+            return multiplier
+
         if normalized_serving_unit in {
             "g",
             "gram",
@@ -2132,6 +2154,7 @@ def resolve_non_restaurant_quantity(
     quantity_description: str | None,
     serving_amount: float | None,
     serving_unit: str | None,
+    size: str | None = None,
 ) -> float:
     """
     Use plain numeric counts directly and convert only explicit portions.
@@ -2139,6 +2162,25 @@ def resolve_non_restaurant_quantity(
     description = str(
         quantity_description or ""
     ).strip().lower()
+    normalized_serving_unit = str(
+        serving_unit or ""
+    ).strip().lower()
+
+    if normalized_serving_unit in {
+        "fl oz",
+        "floz",
+        "fluid ounce",
+        "fluid ounces",
+    }:
+        size_description = str(size or "").strip().lower()
+        fluid_match = re.fullmatch(
+            r"(\d+(?:\.\d+)?)\s*"
+            r"(?:fl\s*oz|fluid\s*ounces?|oz|ounces?)",
+            size_description,
+        )
+
+        if fluid_match:
+            description = f"{fluid_match.group(1)} oz"
 
     requires_conversion = bool(
         re.search(
@@ -2153,7 +2195,7 @@ def resolve_non_restaurant_quantity(
     return resolve_packaged_serving_multiplier(
         food_id=food_id,
         quantity=quantity,
-        quantity_description=quantity_description,
+        quantity_description=description,
         serving_amount=serving_amount,
         serving_unit=serving_unit,
     )
@@ -4417,6 +4459,7 @@ def process_telegram_update(update):
                     quantity_description=item.get(
                         "quantity_description"
                     ),
+                    size=item.get("size"),
                     serving_amount=saved_food.get("serving_amount"),
                     serving_unit=saved_food.get("serving_unit"),
                 )
@@ -5182,6 +5225,7 @@ def process_telegram_update(update):
                     quantity_description=known_data.get(
                         "quantity_description"
                     ),
+                    size=known_data.get("size"),
                     serving_amount=saved_food.get(
                         "serving_amount"
                     ),
@@ -7031,6 +7075,7 @@ def process_telegram_update(update):
                                 quantity_description=known_data.get(
                                     "quantity_description"
                                 ),
+                                size=known_data.get("size"),
                                 serving_amount=food.get(
                                     "serving_amount"
                                 ),
@@ -7275,6 +7320,7 @@ def process_telegram_update(update):
                             quantity_description=known_data.get(
                                 "quantity_description"
                             ),
+                            size=known_data.get("size"),
                             serving_amount=saved_food.get(
                                 "serving_amount"
                             ),

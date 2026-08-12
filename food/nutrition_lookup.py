@@ -96,6 +96,7 @@ TRUSTED_NUTRITION_DOMAINS = {
     "fdc.nal.usda.gov",
     "mcdonalds.com",
     "openfoodfacts.org",
+    "pepsicoproductfacts.com",
     "tacobell.com",
     "usda.gov",
     "wendys.com",

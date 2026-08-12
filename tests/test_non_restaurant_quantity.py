@@ -88,5 +88,83 @@ class NonRestaurantQuantityTests(unittest.TestCase):
                 )
 
 
+
+
+def load_packaged_resolver():
+    tree = ast.parse(Path("app.py").read_text())
+    helper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "resolve_packaged_serving_multiplier"
+    )
+    future = ast.ImportFrom(
+        module="__future__",
+        names=[ast.alias(name="annotations")],
+        level=0,
+    )
+    module = ast.fix_missing_locations(
+        ast.Module(body=[future, helper], type_ignores=[])
+    )
+    namespace = {
+        "re": re,
+        "get_portion_profile": lambda **kwargs: None,
+    }
+    exec(compile(module, "app.py", "exec"), namespace)
+    return namespace["resolve_packaged_serving_multiplier"]
+
+
+class FluidOunceQuantityTests(unittest.TestCase):
+    def test_bottle_size_routes_as_fluid_ounces(self) -> None:
+        calls = []
+
+        def converter(**kwargs):
+            calls.append(kwargs)
+            return 16.9 / 12
+
+        resolver = load_quantity_resolver(converter)
+
+        result = resolver(
+            food_id=25,
+            quantity=1,
+            quantity_description="bottle",
+            serving_amount=12,
+            serving_unit="fl oz",
+            size="16.9 ounces",
+        )
+
+        self.assertAlmostEqual(result, 16.9 / 12)
+        self.assertEqual(
+            calls[0]["quantity_description"],
+            "16.9 oz",
+        )
+
+    def test_fluid_ounces_scale_from_base_serving(self) -> None:
+        resolver = load_packaged_resolver()
+
+        result = resolver(
+            food_id=25,
+            quantity=1,
+            quantity_description="16.9 oz",
+            serving_amount=12,
+            serving_unit="fl oz",
+        )
+
+        self.assertAlmostEqual(result, 16.9 / 12)
+
+    def test_food_weight_ounces_still_scale_normally(self) -> None:
+        resolver = load_packaged_resolver()
+
+        result = resolver(
+            food_id=26,
+            quantity=1,
+            quantity_description="4 oz",
+            serving_amount=4,
+            serving_unit="oz",
+        )
+
+        self.assertAlmostEqual(result, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
