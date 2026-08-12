@@ -376,6 +376,7 @@ def menu_reply_markup(message):
     elif "Health Menu\n\n" in message:
         rows = [
             ["Current status", "Record sleep"],
+            ["Record weight"],
             ["Back", "Cancel"],
         ]
     elif "Reports Menu\n\n" in message:
@@ -885,6 +886,66 @@ def set_today_sleep(sleep_text):
     return True, f"Recorded sleep as {sleep_text.strip()} for today."
 
 
+def set_today_weight(weight):
+    """Save one official weight for today; later entries correct it."""
+    try:
+        normalized_weight = float(weight)
+    except (TypeError, ValueError):
+        return False, "I couldn't understand that weight."
+
+    if not 50 <= normalized_weight <= 700:
+        return (
+            False,
+            "That weight seems outside the expected range. "
+            "Please enter pounds between 50 and 700.",
+        )
+
+    now = datetime.now(PACIFIC_TZ)
+    sheet = get_current_sheet()
+    today_str = now.strftime("%m/%d/%Y")
+    row_index, existing_row, _ = get_today_row_index_and_row(
+        sheet,
+        today_str,
+    )
+    timestamp = now.strftime("%m/%d/%Y %I:%M %p")
+    replacing = False
+
+    if row_index and existing_row:
+        while len(existing_row) < 10:
+            existing_row.append("")
+
+        replacing = existing_row[6] not in ("", None)
+        merged = list(existing_row[:10])
+        merged[0] = timestamp
+        merged[6] = normalized_weight
+
+        sheet.update(
+            range_name=f"A{row_index}:J{row_index}",
+            values=[merged],
+        )
+    else:
+        row = [
+            timestamp,
+            "",
+            "",
+            "",
+            "",
+            "",
+            normalized_weight,
+            "",
+            "",
+            "",
+        ]
+        sheet.append_row(row)
+
+    action = "Corrected" if replacing else "Recorded"
+    return (
+        True,
+        f"{action} today's official weight to "
+        f"{normalized_weight:.1f} lbs.",
+    )
+
+
 def answer_sleep_status():
     raw_sleep = get_today_sleep_raw()
     if raw_sleep in ("", None):
@@ -892,16 +953,136 @@ def answer_sleep_status():
     return f"Yes, sleep is recorded for today: {format_sleep_for_humans(raw_sleep)}."
 
 
-def extract_sleep_value_from_text(text):
+def extract_sleep_value_from_text(text, *, allow_bare=False):
+    """Extract flexible sleep durations and return decimal hours."""
     lowered = text.lower().strip()
 
+    if allow_bare:
+        bare_match = re.fullmatch(
+            r"([0-9]+(?:\.[0-9]+|:[0-9]{1,2})?)",
+            lowered,
+        )
+        if bare_match:
+            value = parse_sleep(bare_match.group(1))
+            if value is not None and 0 < value <= 24:
+                return value
+
+    range_match = re.search(
+        r"(?:slept\s+)?from\s+"
+        r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+"
+        r"(?:to|until|till)\s+"
+        r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?",
+        lowered,
+    )
+
+    if range_match:
+        start_hour = int(range_match.group(1))
+        start_minute = int(range_match.group(2) or 0)
+        start_period = range_match.group(3)
+        end_hour = int(range_match.group(4))
+        end_minute = int(range_match.group(5) or 0)
+        end_period = range_match.group(6)
+
+        def minutes_after_midnight(hour, minute, period):
+            if minute >= 60 or hour > 12:
+                return None
+            if period == "am":
+                hour = 0 if hour == 12 else hour
+            elif period == "pm":
+                hour = 12 if hour == 12 else hour + 12
+            return hour * 60 + minute
+
+        start = minutes_after_midnight(
+            start_hour,
+            start_minute,
+            start_period,
+        )
+        end = minutes_after_midnight(
+            end_hour,
+            end_minute,
+            end_period,
+        )
+
+        if start is not None and end is not None:
+            if start_period is None and end_period is None:
+                if start_hour <= 12 and end_hour <= 12:
+                    # Assume a typical overnight range.
+                    if start_hour < 7:
+                        start += 12 * 60
+
+            duration = end - start
+            if duration <= 0:
+                duration += 24 * 60
+
+            hours = duration / 60
+            if 0 < hours <= 24:
+                return hours
+
+    half_match = re.search(
+        r"(?:i\s+)?(?:slept|got|had)\s+"
+        r"(\d+)\s+and\s+a\s+half\s+hours?",
+        lowered,
+    )
+    if half_match:
+        return float(half_match.group(1)) + 0.5
+
+    hours_minutes_match = re.search(
+        r"(?:i\s+)?(?:slept|got|had)\s+"
+        r"(\d+(?:\.\d+)?)\s*(?:hours?|hrs?)"
+        r"(?:\s+(?:and\s+)?(\d+)\s*(?:minutes?|mins?))?",
+        lowered,
+    )
+    if hours_minutes_match:
+        hours = float(hours_minutes_match.group(1))
+        minutes = float(hours_minutes_match.group(2) or 0)
+        value = hours + minutes / 60
+        if 0 < value <= 24 and minutes < 60:
+            return value
+
     match = re.search(
-        r"(?:record\s+my\s+sleep\s+as|record\s+sleep\s+as|sleep\s+(?:was|is))\s+([0-9]+(?:\.[0-9]+|:[0-9]{1,2})?)",
+        r"(?:record\s+my\s+sleep\s+as|"
+        r"record\s+sleep\s+as|"
+        r"sleep\s+(?:was|is))\s+"
+        r"([0-9]+(?:\.[0-9]+|:[0-9]{1,2})?)",
         lowered,
     )
 
     if match:
-        return match.group(1)
+        value = parse_sleep(match.group(1))
+        if value is not None and 0 < value <= 24:
+            return value
+
+    return None
+
+
+def extract_weight_value_from_text(text, *, allow_bare=False):
+    """Extract a plausible weight in pounds from natural language."""
+    lowered = text.lower().strip()
+
+    patterns = [
+        r"(?:record\s+my\s+weight\s+as|"
+        r"record\s+weight\s+as|"
+        r"i\s+weighed|"
+        r"i\s+weigh|"
+        r"my\s+weight\s+(?:was|is))\s+"
+        r"(\d{2,3}(?:\.\d+)?)",
+    ]
+
+    if allow_bare:
+        patterns.append(r"(\d{2,3}(?:\.\d+)?)")
+
+    for pattern in patterns:
+        match = re.fullmatch(pattern, lowered) or re.search(
+            pattern,
+            lowered,
+        )
+        if not match:
+            continue
+
+        value = float(match.group(1))
+
+        if 50 <= value <= 700:
+            return value
 
     return None
 
@@ -2452,7 +2633,8 @@ def healthcoach_health_menu_text() -> str:
         "Health Menu\n\n"
         "1. Current status\n"
         "2. Record sleep\n"
-        "3. Back"
+        "3. Record weight\n"
+        "4. Back"
     )
 
 
@@ -3824,16 +4006,40 @@ def process_telegram_update(update):
                 return
 
             if lowered in {"2", "sleep", "record sleep"}:
-                cancel_conversation(chat_id)
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health_sleep_entry",
+                    known_data={},
+                    missing_fields=[],
+                )
                 send_telegram_msg(
-                    "Send your sleep naturally.\n\n"
-                    "Example: Record my sleep as 7:15",
+                    "How much did you sleep?\n\n"
+                    "Examples:\n"
+                    "- 7:15\n"
+                    "- I slept 7 hours\n"
+                    "- I got 6 and a half hours\n"
+                    "- I slept from 10:30 PM to 5:45 AM",
                     chat_id=chat_id,
                     remove_keyboard=True,
                 )
                 return
 
-            if lowered in {"3", "back"}:
+            if lowered in {"3", "weight", "record weight"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health_weight_entry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "What was your morning weight?\n\n"
+                    "Examples: 214.6 or I weighed 214.6 this morning.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {"4", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -3848,6 +4054,60 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_health_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "health_sleep_entry":
+            sleep_value = extract_sleep_value_from_text(
+                text,
+                allow_bare=True,
+            )
+
+            if sleep_value is None:
+                send_telegram_msg(
+                    "I couldn't understand that sleep amount. "
+                    "Try 7:15, 7 hours, or 6 and a half hours.",
+                    chat_id=chat_id,
+                )
+                return
+
+            success, response = set_today_sleep(sleep_value)
+            update_conversation(
+                chat_id=chat_id,
+                current_step="health",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                response + "\n\n" + healthcoach_health_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "health_weight_entry":
+            weight_value = extract_weight_value_from_text(
+                text,
+                allow_bare=True,
+            )
+
+            if weight_value is None:
+                send_telegram_msg(
+                    "I couldn't understand that weight. "
+                    "Enter pounds, such as 214.6.",
+                    chat_id=chat_id,
+                )
+                return
+
+            success, response = set_today_weight(weight_value)
+            update_conversation(
+                chat_id=chat_id,
+                current_step="health",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                response + "\n\n" + healthcoach_health_menu_text(),
                 chat_id=chat_id,
             )
             return
@@ -7166,6 +7426,12 @@ def process_telegram_update(update):
             "3. Cancel",
             chat_id=chat_id,
         )
+        return
+
+    weight_value = extract_weight_value_from_text(text)
+    if weight_value is not None:
+        success, response = set_today_weight(weight_value)
+        send_telegram_msg(response, chat_id=chat_id)
         return
 
     sleep_value = extract_sleep_value_from_text(text)
