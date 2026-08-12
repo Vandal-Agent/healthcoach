@@ -883,7 +883,11 @@ def set_today_sleep(sleep_text):
         sheet.append_row(row)
         logging.info("Appended new row with sleep for %s", today_str)
 
-    return True, f"Recorded sleep as {sleep_text.strip()} for today."
+    return (
+        True,
+        "Recorded sleep as "
+        f"{format_sleep_for_humans(normalized_sleep)} for today.",
+    )
 
 
 def set_today_weight(weight):
