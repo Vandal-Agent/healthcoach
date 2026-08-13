@@ -36,7 +36,10 @@ def is_trusted_saved_food(
     if not verification_source:
         return False
 
-    if verification_source == "user_package_label":
+    if verification_source in {
+        "user_package_label",
+        "user_entered",
+    }:
         return True
 
     return is_trusted_nutrition_source(

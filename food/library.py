@@ -341,6 +341,177 @@ def add_food_with_nutrition(
     }
 
 
+def list_user_saved_foods() -> list[dict[str, Any]]:
+    """List foods whose nutrition was entered by the user."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                foods.*,
+                nutrition_versions.version_number,
+                nutrition_versions.calories,
+                nutrition_versions.protein_g,
+                nutrition_versions.carbohydrates_g,
+                nutrition_versions.fat_g,
+                nutrition_versions.fiber_g,
+                nutrition_versions.sugar_g,
+                nutrition_versions.sodium_mg
+            FROM foods
+            JOIN nutrition_versions
+              ON nutrition_versions.nutrition_version_id =
+                 foods.active_nutrition_version_id
+            WHERE foods.verification_source IN (
+                'user_package_label',
+                'user_entered'
+            )
+            ORDER BY lower(foods.canonical_name), foods.food_id
+            """
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def add_user_nutrition_version(
+    *,
+    food_id: int,
+    calories: float,
+    protein_g: float,
+    carbohydrates_g: float,
+    fat_g: float,
+    fiber_g: float,
+    sugar_g: float,
+    sodium_mg: float,
+) -> dict[str, Any]:
+    """
+    Create a new active nutrition version for future logs.
+
+    Existing ledger entries retain their saved nutrition snapshots.
+    """
+    initialize_database()
+    timestamp = current_timestamp()
+
+    nutrient_values = {
+        "calories": calories,
+        "protein_g": protein_g,
+        "carbohydrates_g": carbohydrates_g,
+        "fat_g": fat_g,
+        "fiber_g": fiber_g,
+        "sugar_g": sugar_g,
+        "sodium_mg": sodium_mg,
+    }
+
+    normalized = {}
+
+    for field, value in nutrient_values.items():
+        number = float(value)
+
+        if number < 0:
+            raise ValueError(f"{field} cannot be negative.")
+
+        normalized[field] = number
+
+    with get_connection(DATABASE_PATH) as connection:
+        food = connection.execute(
+            """
+            SELECT *
+            FROM foods
+            WHERE food_id = ?
+            """,
+            (int(food_id),),
+        ).fetchone()
+
+        if food is None:
+            raise ValueError(f"Food not found: {food_id}")
+
+        version_row = connection.execute(
+            """
+            SELECT COALESCE(MAX(version_number), 0) AS version
+            FROM nutrition_versions
+            WHERE food_id = ?
+            """,
+            (int(food_id),),
+        ).fetchone()
+
+        next_version = int(version_row["version"]) + 1
+
+        cursor = connection.execute(
+            """
+            INSERT INTO nutrition_versions (
+                food_id,
+                version_number,
+                calories,
+                protein_g,
+                carbohydrates_g,
+                fat_g,
+                fiber_g,
+                sugar_g,
+                sodium_mg,
+                serving_amount,
+                serving_unit,
+                verification_status,
+                verification_source,
+                source_item_id,
+                source_url,
+                verified_at,
+                created_at
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                'verified', 'user_entered', NULL, NULL, ?, ?
+            )
+            """,
+            (
+                int(food_id),
+                next_version,
+                normalized["calories"],
+                normalized["protein_g"],
+                normalized["carbohydrates_g"],
+                normalized["fat_g"],
+                normalized["fiber_g"],
+                normalized["sugar_g"],
+                normalized["sodium_mg"],
+                float(food["serving_amount"]),
+                str(food["serving_unit"]),
+                timestamp,
+                timestamp,
+            ),
+        )
+
+        connection.execute(
+            """
+            UPDATE foods
+            SET active_nutrition_version_id = ?,
+                verification_status = 'verified',
+                verification_source = 'user_entered',
+                last_verified_at = ?,
+                uses_since_verification = 0,
+                updated_at = ?
+            WHERE food_id = ?
+            """,
+            (
+                cursor.lastrowid,
+                timestamp,
+                timestamp,
+                int(food_id),
+            ),
+        )
+
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM nutrition_versions
+            WHERE nutrition_version_id = ?
+            """,
+            (cursor.lastrowid,),
+        ).fetchone()
+
+    return dict(row)
+
+
 def increment_food_usage(
     food_id: int,
 ) -> dict[str, Any]:
