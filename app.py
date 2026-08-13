@@ -30,7 +30,10 @@ from food.interpreter import (
     interpret_food_message,
     normalize_signature_food,
 )
-from food.library import add_food_with_nutrition
+from food.library import (
+    add_food_with_nutrition,
+    list_user_saved_foods,
+)
 from food.ledger import (
     add_food_entry,
     delete_food_favorite,
@@ -315,6 +318,7 @@ def menu_reply_markup(message):
             "Choose a food to save as a favorite:",
             "Choose a favorite to log:",
             "Choose a favorite to remove:",
+            "Choose a saved food to view:",
         )
     ):
         choices = re.findall(r"(?m)^(\d+)\. ", message)
@@ -354,6 +358,13 @@ def menu_reply_markup(message):
             ["Search again", "Back"],
             ["Cancel"],
         ]
+    elif "Saved Food Details\n\n" in message:
+        rows = [["Back", "Cancel"]]
+    elif "Saved Foods Menu\n\n" in message:
+        rows = [
+            ["Browse saved foods"],
+            ["Back", "Cancel"],
+        ]
     elif "Restaurant Menu\n\n" in message:
         rows = [
             ["Find best choices online"],
@@ -369,8 +380,8 @@ def menu_reply_markup(message):
         rows = [
             ["Log food", "Show today"],
             ["Edit today", "Undo last"],
-            ["Favorites", "Restaurant"],
-            ["Update unknown foods"],
+            ["Favorites", "Saved foods"],
+            ["Restaurant", "Update unknown foods"],
             ["Back", "Cancel"],
         ]
     elif "Health Menu\n\n" in message:
@@ -2563,9 +2574,61 @@ def healthcoach_food_menu_text() -> str:
         "3. Edit today's food\n"
         "4. Undo last food\n"
         "5. Favorites\n"
-        "6. Restaurant\n"
-        "7. Update unknown foods\n"
-        "8. Back"
+        "6. Saved foods\n"
+        "7. Restaurant\n"
+        "8. Update unknown foods\n"
+        "9. Back"
+    )
+
+
+def healthcoach_saved_foods_menu_text() -> str:
+    return (
+        "Saved Foods Menu\n\n"
+        "1. Browse saved foods\n"
+        "2. Back"
+    )
+
+
+def format_saved_food_choices(foods: list[dict]) -> str:
+    lines = ["Choose a saved food to view:", ""]
+
+    for index, food in enumerate(foods, start=1):
+        lines.append(
+            f"{index}. {food['canonical_name']} — "
+            f"{food.get('serving_description') or '1 serving'}"
+        )
+
+    lines.extend(["", "Reply Back to return."])
+    return "\n".join(lines)
+
+
+def format_saved_food_details(food: dict) -> str:
+    def nutrient(field: str, suffix: str) -> str:
+        value = float(food.get(field) or 0)
+        return (
+            f"{format_display_number(value)} {suffix}"
+        ).strip()
+
+    source = str(
+        food.get("verification_source") or "user entered"
+    ).replace("_", " ").title()
+
+    return (
+        "Saved Food Details\n\n"
+        f"Food: {food['canonical_name']}\n"
+        f"Serving: "
+        f"{food.get('serving_description') or '1 serving'}\n"
+        f"Nutrition version: {food.get('version_number') or 1}\n"
+        f"Source: {source}\n\n"
+        f"Calories: {nutrient('calories', 'cal')}\n"
+        f"Protein: {nutrient('protein_g', 'g')}\n"
+        f"Carbohydrates: "
+        f"{nutrient('carbohydrates_g', 'g')}\n"
+        f"Fat: {nutrient('fat_g', 'g')}\n"
+        f"Fiber: {nutrient('fiber_g', 'g')}\n"
+        f"Sugar: {nutrient('sugar_g', 'g')}\n"
+        f"Sodium: {nutrient('sodium_mg', 'mg')}\n\n"
+        "Reply Back to return or Cancel to close."
     )
 
 
@@ -3085,6 +3148,23 @@ def process_telegram_update(update):
 
             if lowered in {
                 "6",
+                "saved foods",
+                "saved food",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "7",
                 "restaurant",
                 "restaurant choices",
             }:
@@ -3101,7 +3181,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "7",
+                "8",
                 "unknown",
                 "update unknown foods",
             }:
@@ -3118,7 +3198,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"8", "back"}:
+            if lowered in {"9", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -3133,6 +3213,111 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_foods":
+            if lowered in {
+                "1",
+                "browse",
+                "browse saved foods",
+            }:
+                foods = list_user_saved_foods()
+
+                if not foods:
+                    send_telegram_msg(
+                        "There are no manually saved foods yet.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_food_browse",
+                    known_data={
+                        "_saved_food_ids": [
+                            int(food["food_id"])
+                            for food in foods
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_food_choices(foods),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_saved_foods_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_food_browse":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            food_ids = list(
+                known_data.get("_saved_food_ids") or []
+            )
+
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+
+            if selection < 1 or selection > len(food_ids):
+                send_telegram_msg(
+                    "Choose one of the numbered saved foods, "
+                    "or reply Back.",
+                    chat_id=chat_id,
+                )
+                return
+
+            selected_id = int(food_ids[selection - 1])
+            foods = list_user_saved_foods()
+            selected = next(
+                (
+                    food for food in foods
+                    if int(food["food_id"]) == selected_id
+                ),
+                None,
+            )
+
+            if selected is None:
+                send_telegram_msg(
+                    "That saved food is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                format_saved_food_details(selected),
                 chat_id=chat_id,
             )
             return
