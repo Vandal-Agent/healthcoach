@@ -349,6 +349,7 @@ def menu_reply_markup(message):
             "Save this favorite?",
             "Quick-log this favorite?",
             "Remove this favorite?",
+            "Save this saved food?",
         )
     ):
         rows = [["Yes", "No"]]
@@ -362,7 +363,7 @@ def menu_reply_markup(message):
         rows = [["Back", "Cancel"]]
     elif "Saved Foods Menu\n\n" in message:
         rows = [
-            ["Browse saved foods"],
+            ["Browse saved foods", "Add saved food"],
             ["Back", "Cancel"],
         ]
     elif "Restaurant Menu\n\n" in message:
@@ -2585,7 +2586,8 @@ def healthcoach_saved_foods_menu_text() -> str:
     return (
         "Saved Foods Menu\n\n"
         "1. Browse saved foods\n"
-        "2. Back"
+        "2. Add saved food\n"
+        "3. Back"
     )
 
 
@@ -3249,7 +3251,26 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"2", "back"}:
+            if lowered in {
+                "2",
+                "add",
+                "add saved food",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_food_add_name",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "What should this saved food be called?\n\n"
+                    "Example: Turkey Fiesta Bowl",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {"3", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -3264,6 +3285,272 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_saved_foods_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_food_add_name":
+            name = text.strip()
+
+            if len(name) < 2:
+                send_telegram_msg(
+                    "Please enter a food name with at least two characters.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_food_add_serving",
+                known_data={"_saved_food_name": name},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "What is one serving?\n\n"
+                "Examples:\n"
+                "- 1 bowl\n"
+                "- 1 bar\n"
+                "- 12 fl oz\n"
+                "- 4 ounces",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_food_add_serving":
+            serving = text.strip()
+
+            if len(serving) < 2:
+                send_telegram_msg(
+                    "Please describe one serving, such as 1 bowl.",
+                    chat_id=chat_id,
+                )
+                return
+
+            updated = dict(known_data)
+            updated["_saved_food_serving"] = serving
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_food_add_calories",
+                known_data=updated,
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "How many calories are in that serving?",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {
+            "saved_food_add_calories",
+            "saved_food_add_protein",
+            "saved_food_add_carbohydrates",
+            "saved_food_add_fat",
+            "saved_food_add_fiber",
+            "saved_food_add_sugar",
+            "saved_food_add_sodium",
+        }:
+            cleaned_number = (
+                text.strip().lower()
+                .replace(",", "")
+                .replace("calories", "")
+                .replace("calorie", "")
+                .replace("cals", "")
+                .replace("cal", "")
+                .replace("grams", "")
+                .replace("gram", "")
+                .replace("mg", "")
+                .replace("g", "")
+                .strip()
+            )
+
+            try:
+                number = float(cleaned_number)
+            except ValueError:
+                send_telegram_msg(
+                    "Please enter a non-negative number.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if number < 0:
+                send_telegram_msg(
+                    "Nutrition values cannot be negative.",
+                    chat_id=chat_id,
+                )
+                return
+
+            field_steps = {
+                "saved_food_add_calories": (
+                    "_saved_food_calories",
+                    "saved_food_add_protein",
+                    "How many grams of protein?",
+                ),
+                "saved_food_add_protein": (
+                    "_saved_food_protein_g",
+                    "saved_food_add_carbohydrates",
+                    "How many grams of carbohydrates?",
+                ),
+                "saved_food_add_carbohydrates": (
+                    "_saved_food_carbohydrates_g",
+                    "saved_food_add_fat",
+                    "How many grams of fat?",
+                ),
+                "saved_food_add_fat": (
+                    "_saved_food_fat_g",
+                    "saved_food_add_fiber",
+                    "How many grams of fiber?",
+                ),
+                "saved_food_add_fiber": (
+                    "_saved_food_fiber_g",
+                    "saved_food_add_sugar",
+                    "How many grams of sugar?",
+                ),
+                "saved_food_add_sugar": (
+                    "_saved_food_sugar_g",
+                    "saved_food_add_sodium",
+                    "How many milligrams of sodium?",
+                ),
+            }
+
+            updated = dict(known_data)
+
+            if current_step in field_steps:
+                field, next_step, prompt = field_steps[current_step]
+                updated[field] = number
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step=next_step,
+                    known_data=updated,
+                    missing_fields=[],
+                )
+                send_telegram_msg(prompt, chat_id=chat_id)
+                return
+
+            updated["_saved_food_sodium_mg"] = number
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_food_add_confirmation",
+                known_data=updated,
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Save this saved food?\n\n"
+                f"Food: {updated['_saved_food_name']}\n"
+                f"Serving: {updated['_saved_food_serving']}\n"
+                f"Calories: {format_display_number(updated['_saved_food_calories'])}\n"
+                f"Protein: {format_display_number(updated['_saved_food_protein_g'])} g\n"
+                f"Carbohydrates: {format_display_number(updated['_saved_food_carbohydrates_g'])} g\n"
+                f"Fat: {format_display_number(updated['_saved_food_fat_g'])} g\n"
+                f"Fiber: {format_display_number(updated['_saved_food_fiber_g'])} g\n"
+                f"Sugar: {format_display_number(updated['_saved_food_sugar_g'])} g\n"
+                f"Sodium: {format_display_number(updated['_saved_food_sodium_mg'])} mg\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_food_add_confirmation":
+            if lowered in {"2", "no"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "No saved food was added.\n\n"
+                    + healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+
+            serving_description = str(
+                known_data["_saved_food_serving"]
+            ).strip()
+            serving_match = re.fullmatch(
+                r"\s*([0-9]+(?:\.[0-9]+)?)\s+(.+?)\s*",
+                serving_description,
+            )
+
+            if serving_match:
+                serving_amount = float(serving_match.group(1))
+                serving_unit = serving_match.group(2)
+            else:
+                serving_amount = 1.0
+                serving_unit = serving_description
+
+            try:
+                result = add_food_with_nutrition(
+                    canonical_name=str(
+                        known_data["_saved_food_name"]
+                    ).strip(),
+                    serving_description=serving_description,
+                    serving_amount=serving_amount,
+                    serving_unit=serving_unit,
+                    verification_status="verified",
+                    verification_source="user_entered",
+                    calories=float(
+                        known_data["_saved_food_calories"]
+                    ),
+                    protein_g=float(
+                        known_data["_saved_food_protein_g"]
+                    ),
+                    carbohydrates_g=float(
+                        known_data["_saved_food_carbohydrates_g"]
+                    ),
+                    fat_g=float(
+                        known_data["_saved_food_fat_g"]
+                    ),
+                    fiber_g=float(
+                        known_data["_saved_food_fiber_g"]
+                    ),
+                    sugar_g=float(
+                        known_data["_saved_food_sugar_g"]
+                    ),
+                    sodium_mg=float(
+                        known_data["_saved_food_sodium_mg"]
+                    ),
+                )
+            except Exception:
+                logging.exception("Could not add saved food")
+                send_telegram_msg(
+                    "I could not save that food. Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+
+            food = result["food"]
+            created = bool(result.get("created"))
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_foods",
+                known_data={},
+                missing_fields=[],
+            )
+
+            if created:
+                result_message = (
+                    f"Saved {food['canonical_name']} "
+                    "to your food library."
+                )
+            else:
+                result_message = (
+                    f"{food['canonical_name']} already exists. "
+                    "No duplicate was created."
+                )
+
+            send_telegram_msg(
+                result_message
+                + "\n\n"
+                + healthcoach_saved_foods_menu_text(),
                 chat_id=chat_id,
             )
             return
