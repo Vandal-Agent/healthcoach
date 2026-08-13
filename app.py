@@ -32,6 +32,7 @@ from food.interpreter import (
 )
 from food.library import (
     add_food_with_nutrition,
+    add_user_nutrition_version,
     list_user_saved_foods,
 )
 from food.ledger import (
@@ -319,6 +320,7 @@ def menu_reply_markup(message):
             "Choose a favorite to log:",
             "Choose a favorite to remove:",
             "Choose a saved food to view:",
+            "Choose a saved food to edit:",
         )
     ):
         choices = re.findall(r"(?m)^(\d+)\. ", message)
@@ -350,6 +352,7 @@ def menu_reply_markup(message):
             "Quick-log this favorite?",
             "Remove this favorite?",
             "Save this saved food?",
+            "Save these nutrition changes?",
         )
     ):
         rows = [["Yes", "No"]]
@@ -364,6 +367,7 @@ def menu_reply_markup(message):
     elif "Saved Foods Menu\n\n" in message:
         rows = [
             ["Browse saved foods", "Add saved food"],
+            ["Edit saved food"],
             ["Back", "Cancel"],
         ]
     elif "Restaurant Menu\n\n" in message:
@@ -2587,12 +2591,28 @@ def healthcoach_saved_foods_menu_text() -> str:
         "Saved Foods Menu\n\n"
         "1. Browse saved foods\n"
         "2. Add saved food\n"
-        "3. Back"
+        "3. Edit saved food\n"
+        "4. Back"
     )
 
 
 def format_saved_food_choices(foods: list[dict]) -> str:
     lines = ["Choose a saved food to view:", ""]
+
+    for index, food in enumerate(foods, start=1):
+        lines.append(
+            f"{index}. {food['canonical_name']} — "
+            f"{food.get('serving_description') or '1 serving'}"
+        )
+
+    lines.extend(["", "Reply Back to return."])
+    return "\n".join(lines)
+
+
+def format_saved_food_edit_choices(
+    foods: list[dict],
+) -> str:
+    lines = ["Choose a saved food to edit:", ""]
 
     for index, food in enumerate(foods, start=1):
         lines.append(
@@ -3270,7 +3290,38 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"3", "back"}:
+            if lowered in {
+                "3",
+                "edit",
+                "edit saved food",
+            }:
+                foods = list_user_saved_foods()
+
+                if not foods:
+                    send_telegram_msg(
+                        "There are no manually saved foods to edit.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_food_edit_select",
+                    known_data={
+                        "_saved_food_ids": [
+                            int(food["food_id"])
+                            for food in foods
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_food_edit_choices(foods),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -3285,6 +3336,285 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_saved_foods_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_food_edit_select":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            food_ids = list(
+                known_data.get("_saved_food_ids") or []
+            )
+
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+
+            if selection < 1 or selection > len(food_ids):
+                send_telegram_msg(
+                    "Choose one of the numbered saved foods, "
+                    "or reply Back.",
+                    chat_id=chat_id,
+                )
+                return
+
+            food_id = int(food_ids[selection - 1])
+            food = next(
+                (
+                    item for item in list_user_saved_foods()
+                    if int(item["food_id"]) == food_id
+                ),
+                None,
+            )
+
+            if food is None:
+                send_telegram_msg(
+                    "That saved food is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_food_edit_calories",
+                known_data={
+                    "_saved_food_edit_id": food_id,
+                    "_saved_food_edit_name": (
+                        food["canonical_name"]
+                    ),
+                    "_saved_food_edit_serving": (
+                        food.get("serving_description")
+                        or "1 serving"
+                    ),
+                    "_saved_food_edit_old_version": int(
+                        food.get("version_number") or 1
+                    ),
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                f"Editing nutrition for "
+                f"{food['canonical_name']}\n"
+                f"Serving: "
+                f"{food.get('serving_description') or '1 serving'}\n\n"
+                f"Current calories: "
+                f"{format_display_number(float(food.get('calories') or 0))}\n\n"
+                "Enter the new calories for one serving.",
+                chat_id=chat_id,
+                remove_keyboard=True,
+            )
+            return
+
+        if current_step in {
+            "saved_food_edit_calories",
+            "saved_food_edit_protein",
+            "saved_food_edit_carbohydrates",
+            "saved_food_edit_fat",
+            "saved_food_edit_fiber",
+            "saved_food_edit_sugar",
+            "saved_food_edit_sodium",
+        }:
+            cleaned_number = (
+                text.strip().lower()
+                .replace(",", "")
+                .replace("calories", "")
+                .replace("calorie", "")
+                .replace("cals", "")
+                .replace("cal", "")
+                .replace("grams", "")
+                .replace("gram", "")
+                .replace("mg", "")
+                .replace("g", "")
+                .strip()
+            )
+
+            try:
+                number = float(cleaned_number)
+            except ValueError:
+                send_telegram_msg(
+                    "Please enter a non-negative number.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if number < 0:
+                send_telegram_msg(
+                    "Nutrition values cannot be negative.",
+                    chat_id=chat_id,
+                )
+                return
+
+            field_steps = {
+                "saved_food_edit_calories": (
+                    "_saved_food_edit_calories",
+                    "saved_food_edit_protein",
+                    "Enter the new grams of protein.",
+                ),
+                "saved_food_edit_protein": (
+                    "_saved_food_edit_protein_g",
+                    "saved_food_edit_carbohydrates",
+                    "Enter the new grams of carbohydrates.",
+                ),
+                "saved_food_edit_carbohydrates": (
+                    "_saved_food_edit_carbohydrates_g",
+                    "saved_food_edit_fat",
+                    "Enter the new grams of fat.",
+                ),
+                "saved_food_edit_fat": (
+                    "_saved_food_edit_fat_g",
+                    "saved_food_edit_fiber",
+                    "Enter the new grams of fiber.",
+                ),
+                "saved_food_edit_fiber": (
+                    "_saved_food_edit_fiber_g",
+                    "saved_food_edit_sugar",
+                    "Enter the new grams of sugar.",
+                ),
+                "saved_food_edit_sugar": (
+                    "_saved_food_edit_sugar_g",
+                    "saved_food_edit_sodium",
+                    "Enter the new milligrams of sodium.",
+                ),
+            }
+
+            updated = dict(known_data)
+
+            if current_step in field_steps:
+                field, next_step, prompt = field_steps[current_step]
+                updated[field] = number
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step=next_step,
+                    known_data=updated,
+                    missing_fields=[],
+                )
+                send_telegram_msg(prompt, chat_id=chat_id)
+                return
+
+            updated["_saved_food_edit_sodium_mg"] = number
+            new_version = int(
+                updated["_saved_food_edit_old_version"]
+            ) + 1
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_food_edit_confirmation",
+                known_data=updated,
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Save these nutrition changes?\n\n"
+                f"Food: {updated['_saved_food_edit_name']}\n"
+                f"Serving: {updated['_saved_food_edit_serving']}\n"
+                f"New nutrition version: {new_version}\n\n"
+                f"Calories: "
+                f"{format_display_number(updated['_saved_food_edit_calories'])}\n"
+                f"Protein: "
+                f"{format_display_number(updated['_saved_food_edit_protein_g'])} g\n"
+                f"Carbohydrates: "
+                f"{format_display_number(updated['_saved_food_edit_carbohydrates_g'])} g\n"
+                f"Fat: "
+                f"{format_display_number(updated['_saved_food_edit_fat_g'])} g\n"
+                f"Fiber: "
+                f"{format_display_number(updated['_saved_food_edit_fiber_g'])} g\n"
+                f"Sugar: "
+                f"{format_display_number(updated['_saved_food_edit_sugar_g'])} g\n"
+                f"Sodium: "
+                f"{format_display_number(updated['_saved_food_edit_sodium_mg'])} mg\n\n"
+                "Previously logged entries will not change.\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_food_edit_confirmation":
+            if lowered in {"2", "no"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "No nutrition changes were saved.\n\n"
+                    + healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                version = add_user_nutrition_version(
+                    food_id=int(
+                        known_data["_saved_food_edit_id"]
+                    ),
+                    calories=float(
+                        known_data["_saved_food_edit_calories"]
+                    ),
+                    protein_g=float(
+                        known_data["_saved_food_edit_protein_g"]
+                    ),
+                    carbohydrates_g=float(
+                        known_data[
+                            "_saved_food_edit_carbohydrates_g"
+                        ]
+                    ),
+                    fat_g=float(
+                        known_data["_saved_food_edit_fat_g"]
+                    ),
+                    fiber_g=float(
+                        known_data["_saved_food_edit_fiber_g"]
+                    ),
+                    sugar_g=float(
+                        known_data["_saved_food_edit_sugar_g"]
+                    ),
+                    sodium_mg=float(
+                        known_data["_saved_food_edit_sodium_mg"]
+                    ),
+                )
+            except Exception:
+                logging.exception("Could not edit saved food")
+                send_telegram_msg(
+                    "I could not save those changes. "
+                    "The existing nutrition is still active.",
+                    chat_id=chat_id,
+                )
+                return
+
+            food_name = str(
+                known_data["_saved_food_edit_name"]
+            )
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_foods",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                f"Updated {food_name} to nutrition version "
+                f"{version['version_number']}.\n"
+                "Previously logged entries were not changed.\n\n"
+                + healthcoach_saved_foods_menu_text(),
                 chat_id=chat_id,
             )
             return
