@@ -204,3 +204,30 @@ If it knows, it answers.
 If it isn't sure, it asks.
 
 If it cannot verify, it says so.
+
+## Saved Foods Library
+
+The Telegram Food menu includes a Saved Foods submenu.
+
+Supported actions:
+
+- Browse manually entered foods and view complete nutrition.
+- Add foods to the library without logging them as eaten.
+- Edit nutrition for an existing saved food.
+- Scale saved drinks from their base fluid-ounce serving.
+
+Saved Food nutrition is versioned. Editing nutrition creates a new active
+version for future food logs. Previously logged entries keep their original
+nutrition snapshots and are not recalculated.
+
+Saved Foods accept these nutrition fields:
+
+- Calories
+- Protein
+- Carbohydrates
+- Fat
+- Fiber
+- Sugar
+- Sodium
+
+Duplicate food names and serving descriptions are not created.
