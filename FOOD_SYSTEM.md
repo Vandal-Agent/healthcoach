@@ -231,3 +231,28 @@ Saved Foods accept these nutrition fields:
 - Sodium
 
 Duplicate food names and serving descriptions are not created.
+
+## Morning Food Coaching
+
+The morning Food Coaching message is a recap of the previous day.
+
+Nutrition now comes directly from the HealthCoach Food Ledger:
+
+- Calories
+- Protein
+- Carbohydrates
+- Fat
+- Fiber
+- Sugar
+- Sodium
+- Meal totals
+- Top-calorie foods
+- Number of logged entries
+
+Burn and steps come from the previous day's Health Tracker row. Current
+weight and sleep context may come from today's Health Tracker row.
+
+The scheduled morning coaching path does not refresh or read Lose It email
+data. If the Food Ledger has no entries for the previous day, HealthCoach
+reports that no foods were recorded and does not calculate a calorie deficit
+or issue low-protein or low-fiber coaching from zero values.
