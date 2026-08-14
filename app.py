@@ -334,6 +334,26 @@ def menu_reply_markup(message):
             ["Quantity", "Meal"],
             ["Back", "Cancel"],
         ]
+    elif "Which meal was this?" in message:
+        choices = re.findall(
+            r"(?m)^\d+\.\s+(.+?)\s*$",
+            message,
+        )
+        rows = [
+            choices[index:index + 2]
+            for index in range(0, len(choices), 2)
+        ]
+        rows.append(["Cancel"])
+        one_time = True
+    elif "Which meal was this for?" in message:
+        rows = [
+            ["Before breakfast", "Breakfast"],
+            ["Morning snack", "Lunch"],
+            ["Afternoon snack", "Dinner"],
+            ["Dessert"],
+            ["Cancel"],
+        ]
+        one_time = True
     elif "Choose the new meal:" in message:
         rows = [
             ["Before breakfast", "Breakfast"],
