@@ -138,17 +138,126 @@ def _get_top_food_lines(top_foods, limit=3):
     return lines
 
 
+def build_food_ledger_coaching_data(
+    entries,
+    totals,
+):
+    """Convert Food Ledger rows into coaching input data."""
+    entries = list(entries or [])
+    totals = dict(totals or {})
+
+    meal_totals = {}
+
+    for entry in entries:
+        meal_name = str(
+            entry.get("meal_category") or "Other"
+        ).title()
+
+        meal = meal_totals.setdefault(
+            meal_name,
+            {
+                "calories": 0.0,
+                "protein": 0.0,
+                "carbs": 0.0,
+                "fat": 0.0,
+                "fiber": 0.0,
+                "sugar": 0.0,
+                "sodium": 0.0,
+            },
+        )
+
+        meal["calories"] += _safe_number(
+            entry.get("calories")
+        )
+        meal["protein"] += _safe_number(
+            entry.get("protein_g")
+        )
+        meal["carbs"] += _safe_number(
+            entry.get("carbohydrates_g")
+        )
+        meal["fat"] += _safe_number(
+            entry.get("fat_g")
+        )
+        meal["fiber"] += _safe_number(
+            entry.get("fiber_g")
+        )
+        meal["sugar"] += _safe_number(
+            entry.get("sugar_g")
+        )
+        meal["sodium"] += _safe_number(
+            entry.get("sodium_mg")
+        )
+
+    top_foods = sorted(
+        [
+            {
+                "name": (
+                    entry.get("canonical_name")
+                    or entry.get("food_name")
+                    or "Unknown food"
+                ),
+                "calories": _safe_number(
+                    entry.get("calories")
+                ),
+            }
+            for entry in entries
+        ],
+        key=lambda item: item["calories"],
+        reverse=True,
+    )
+
+    return {
+        "source": "food_ledger",
+        "food_data_complete": bool(entries),
+        "entry_count": len(entries),
+        "totals": {
+            "calories": _safe_number(
+                totals.get("calories")
+            ),
+            "protein": _safe_number(
+                totals.get("protein_g")
+            ),
+            "carbs": _safe_number(
+                totals.get("carbohydrates_g")
+            ),
+            "fat": _safe_number(
+                totals.get("fat_g")
+            ),
+            "fiber": _safe_number(
+                totals.get("fiber_g")
+            ),
+            "sugar": _safe_number(
+                totals.get("sugar_g")
+            ),
+            "sodium": _safe_number(
+                totals.get("sodium_mg")
+            ),
+        },
+        "meal_totals": meal_totals,
+        "top_calorie_foods": top_foods,
+    }
+
+
 def build_food_coaching_data(
     total_burn=None,
     steps=None,
     weight_today=None,
     recent_weight_avg=None,
     sleep=None,
+    food_data=None,
 ):
-    data = parse_loseit_csv()
+    data = (
+        parse_loseit_csv()
+        if food_data is None
+        else dict(food_data)
+    )
     totals = data.get("totals", {}) or {}
     meals = data.get("meal_totals", {}) or {}
     top_foods = data.get("top_calorie_foods", []) or []
+
+    food_data_complete = bool(
+        data.get("food_data_complete", True)
+    )
 
     calories = _safe_number(totals.get("calories"))
     protein = _safe_number(totals.get("protein"))
@@ -158,53 +267,71 @@ def build_food_coaching_data(
 
     total_burn = _safe_number(total_burn, default=None)
     steps = _safe_number(steps, default=None)
-    weight_today = _safe_number(weight_today, default=None)
-    recent_weight_avg = _safe_number(recent_weight_avg, default=None)
+    weight_today = _safe_number(
+        weight_today,
+        default=None,
+    )
+    recent_weight_avg = _safe_number(
+        recent_weight_avg,
+        default=None,
+    )
     sleep = _safe_number(sleep, default=None)
 
     deficit = None
-    if total_burn is not None and total_burn > 0:
+    if (
+        food_data_complete
+        and total_burn is not None
+        and total_burn > 0
+    ):
         deficit = total_burn - calories
 
     notes = []
     flags = []
 
-    deficit_note = _build_deficit_note(deficit)
-    if deficit_note:
-        notes.append(deficit_note)
-        if deficit > 750:
-            flags.append("large_deficit")
-        elif deficit < -150:
-            flags.append("surplus")
+    if food_data_complete:
+        deficit_note = _build_deficit_note(deficit)
+        if deficit_note:
+            notes.append(deficit_note)
+            if deficit > 750:
+                flags.append("large_deficit")
+            elif deficit < -150:
+                flags.append("surplus")
 
-    protein_note = _build_protein_note(protein)
-    if protein_note:
-        notes.append(protein_note)
-        if protein < 100:
-            flags.append("low_protein")
-        elif protein >= 130:
-            flags.append("high_protein")
+        protein_note = _build_protein_note(protein)
+        if protein_note:
+            notes.append(protein_note)
+            if protein < 100:
+                flags.append("low_protein")
+            elif protein >= 130:
+                flags.append("high_protein")
 
-    fiber_note = _build_fiber_note(fiber)
-    if fiber_note:
-        notes.append(fiber_note)
-        if fiber < 25:
-            flags.append("low_fiber")
+        fiber_note = _build_fiber_note(fiber)
+        if fiber_note:
+            notes.append(fiber_note)
+            if fiber < 25:
+                flags.append("low_fiber")
 
-    sugar_note = _build_sugar_note(sugar)
-    if sugar_note:
-        notes.append(sugar_note)
-        flags.append("high_sugar")
+        sugar_note = _build_sugar_note(sugar)
+        if sugar_note:
+            notes.append(sugar_note)
+            flags.append("high_sugar")
 
-    sodium_note = _build_sodium_note(sodium)
-    if sodium_note:
-        notes.append(sodium_note)
-        flags.append("high_sodium")
+        sodium_note = _build_sodium_note(sodium)
+        if sodium_note:
+            notes.append(sodium_note)
+            flags.append("high_sodium")
 
-    breakfast_notes = _build_breakfast_notes(meals)
-    notes.extend(breakfast_notes)
-    if breakfast_notes:
-        flags.append("breakfast_issue")
+        breakfast_notes = _build_breakfast_notes(meals)
+        notes.extend(breakfast_notes)
+        if breakfast_notes:
+            flags.append("breakfast_issue")
+    else:
+        notes.append(
+            "No foods were recorded in the Food Ledger for "
+            "this day, so calorie balance and nutrition "
+            "coaching were not calculated."
+        )
+        flags.append("food_log_missing")
 
     steps_note = _build_steps_note(steps)
     if steps_note:
@@ -214,20 +341,36 @@ def build_food_coaching_data(
         elif steps >= 12000:
             flags.append("high_steps")
 
-    weight_note = _build_weight_note(weight_today, recent_weight_avg, sodium, deficit)
-    if weight_note:
-        notes.append(weight_note)
-        flags.append("weight_context")
+    if food_data_complete:
+        weight_note = _build_weight_note(
+            weight_today,
+            recent_weight_avg,
+            sodium,
+            deficit,
+        )
+        if weight_note:
+            notes.append(weight_note)
+            flags.append("weight_context")
 
     if sleep is not None and sleep > 0:
         if sleep < 6:
-            notes.append("Sleep was short. That can make hunger and food decisions harder the next day.")
+            notes.append(
+                "Sleep was short. That can make hunger and "
+                "food decisions harder the next day."
+            )
             flags.append("low_sleep")
         elif sleep >= 7.5:
-            notes.append("Sleep looked solid, which supports recovery and appetite control.")
+            notes.append(
+                "Sleep looked solid, which supports recovery "
+                "and appetite control."
+            )
             flags.append("good_sleep")
 
-    top_lines = _get_top_food_lines(top_foods, limit=3)
+    top_lines = (
+        _get_top_food_lines(top_foods, limit=3)
+        if food_data_complete
+        else []
+    )
 
     summary = {
         "calories": calories,
@@ -241,6 +384,11 @@ def build_food_coaching_data(
         "recent_weight_avg": recent_weight_avg,
         "sleep": sleep,
         "estimated_deficit": deficit,
+        "food_data_complete": food_data_complete,
+        "food_entry_count": int(
+            data.get("entry_count") or 0
+        ),
+        "food_source": data.get("source"),
     }
 
     return {
@@ -252,7 +400,10 @@ def build_food_coaching_data(
     }
 
 
-def format_food_coaching_message(coaching_data, max_notes=5):
+def format_food_coaching_message(
+    coaching_data,
+    max_notes=5,
+):
     summary = coaching_data.get("summary", {}) or {}
     notes = coaching_data.get("notes", []) or []
     top_lines = coaching_data.get("top_food_lines", []) or []
@@ -264,37 +415,69 @@ def format_food_coaching_message(coaching_data, max_notes=5):
     burn = summary.get("burn")
     steps = summary.get("steps")
     weight_today = summary.get("weight_today")
-    recent_weight_avg = summary.get("recent_weight_avg")
+    recent_weight_avg = summary.get(
+        "recent_weight_avg"
+    )
     sleep = summary.get("sleep")
     deficit = summary.get("estimated_deficit")
+    food_data_complete = bool(
+        summary.get("food_data_complete", True)
+    )
+    food_entry_count = int(
+        summary.get("food_entry_count") or 0
+    )
 
-    message = []
-    message.append("Food coaching")
-    message.append(f"Calories: {calories:.0f}")
+    message = ["Food coaching"]
+
+    if food_data_complete:
+        message.append(f"Calories: {calories:.0f}")
+    else:
+        message.append(
+            "Food log: no foods recorded for the day"
+        )
 
     if burn is not None and burn > 0:
         message.append(f"Burn: {burn:.0f}")
-        if deficit is not None:
+
+        if food_data_complete and deficit is not None:
             if deficit >= 0:
-                message.append(f"Estimated deficit: {deficit:.0f}")
+                message.append(
+                    f"Estimated deficit: {deficit:.0f}"
+                )
             else:
-                message.append(f"Estimated surplus: {abs(deficit):.0f}")
+                message.append(
+                    f"Estimated surplus: {abs(deficit):.0f}"
+                )
 
     if steps is not None and steps > 0:
         message.append(f"Steps: {steps:.0f}")
 
-    message.append(f"Protein: {protein:.0f}g")
-    message.append(f"Fiber: {fiber:.0f}g")
-    message.append(f"Sugar: {sugar:.0f}g")
+    if food_data_complete:
+        message.append(f"Protein: {protein:.0f}g")
+        message.append(f"Fiber: {fiber:.0f}g")
+        message.append(f"Sugar: {sugar:.0f}g")
+
+        if food_entry_count:
+            message.append(
+                f"Food entries: {food_entry_count}"
+            )
 
     if sleep is not None and sleep > 0:
         message.append(f"Sleep: {sleep:.1f}h")
 
     if weight_today is not None and weight_today > 0:
-        message.append(f"Weight today: {weight_today:.1f}")
+        message.append(
+            f"Weight today: {weight_today:.1f}"
+        )
 
-    if recent_weight_avg is not None and recent_weight_avg > 0:
-        message.append(f"Recent avg weight: {recent_weight_avg:.1f}")
+    if (
+        recent_weight_avg is not None
+        and recent_weight_avg > 0
+    ):
+        message.append(
+            f"Recent avg weight: "
+            f"{recent_weight_avg:.1f}"
+        )
 
     message.append("")
 
@@ -309,18 +492,28 @@ def format_food_coaching_message(coaching_data, max_notes=5):
         for note in notes[:max_notes]:
             message.append(f"- {note}")
     else:
-        message.append("- No major coaching flags from food data.")
+        message.append(
+            "- No major coaching flags from food data."
+        )
 
     return "\n".join(message)
 
 
-def build_food_coaching(total_burn=None, steps=None, weight_today=None, recent_weight_avg=None, sleep=None):
+def build_food_coaching(
+    total_burn=None,
+    steps=None,
+    weight_today=None,
+    recent_weight_avg=None,
+    sleep=None,
+    food_data=None,
+):
     coaching_data = build_food_coaching_data(
         total_burn=total_burn,
         steps=steps,
         weight_today=weight_today,
         recent_weight_avg=recent_weight_avg,
         sleep=sleep,
+        food_data=food_data,
     )
     return format_food_coaching_message(coaching_data)
 

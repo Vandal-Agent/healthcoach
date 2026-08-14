@@ -12,7 +12,11 @@ import requests
 from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
 
-from loseit_coaching import build_food_coaching, build_weekly_health_report
+from loseit_coaching import (
+    build_food_coaching,
+    build_food_ledger_coaching_data,
+    build_weekly_health_report,
+)
 from loseit_email_reader import download_latest_loseit_csv
 from loseit_parser import parse_loseit_csv
 from food.database import (
@@ -1644,17 +1648,39 @@ def send_food_coaching_for_yesterday():
     yesterday = row_to_metrics(yesterday_row)
 
     if not yesterday:
-        logging.info("Skipping food coaching: no yesterday row found")
+        logging.info(
+            "Skipping food coaching: no yesterday row found"
+        )
         return False
 
-    refresh_loseit()
+    entries = list_food_entries(
+        entry_date=yesterday_date
+    )
+    totals = get_daily_totals(yesterday_date)
+    food_data = build_food_ledger_coaching_data(
+        entries,
+        totals,
+    )
 
     today_row = get_row_for_date(today_date)
     today_metrics = row_to_metrics(today_row)
 
-    recent_weight_avg = get_recent_average_weight(today_date)
-    weight_today = today_metrics["weight"] if today_metrics and today_metrics["weight"] is not None else yesterday["weight"]
-    sleep_today = today_metrics["sleep_hours"] if today_metrics else None
+    recent_weight_avg = get_recent_average_weight(
+        today_date
+    )
+    weight_today = (
+        today_metrics["weight"]
+        if (
+            today_metrics
+            and today_metrics["weight"] is not None
+        )
+        else yesterday["weight"]
+    )
+    sleep_today = (
+        today_metrics["sleep_hours"]
+        if today_metrics
+        else None
+    )
 
     try:
         msg = build_food_coaching(
@@ -1663,12 +1689,15 @@ def send_food_coaching_for_yesterday():
             weight_today=weight_today,
             recent_weight_avg=recent_weight_avg,
             sleep=sleep_today,
+            food_data=food_data,
         )
         return send_telegram_msg(msg)
-    except Exception as e:
-        logging.error("Food coaching error: %s", e)
+    except Exception as error:
+        logging.error(
+            "Food coaching error: %s",
+            error,
+        )
         return False
-
 
 def send_midday_update():
     today_row = get_row_for_date(datetime.now(PACIFIC_TZ).date())
@@ -1779,10 +1808,6 @@ def scheduler_loop():
                 if send_sleep_reminder_if_missing():
                     state["sleep_reminder_sent"] = True
                     save_state(state)
-                time.sleep(60)
-
-            if now.hour == 8 and now.minute == 15:
-                refresh_loseit()
                 time.sleep(60)
 
             if now.hour >= 8 and now.minute >= 30 and not state.get("food_coaching_sent", False):
