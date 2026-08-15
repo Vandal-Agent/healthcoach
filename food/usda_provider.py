@@ -309,6 +309,280 @@ def extract_label_nutrients(
     return results
 
 
+def normalize_barcode(value: str | int) -> str:
+    """
+    Normalize and validate a GTIN-8, UPC-A, EAN-13, or GTIN-14.
+    """
+    cleaned = re.sub(
+        r"[\s-]+",
+        "",
+        str(value or "").strip(),
+    )
+
+    if not cleaned or not cleaned.isdigit():
+        raise ValueError(
+            "Barcode must contain only digits, spaces, or hyphens."
+        )
+
+    if len(cleaned) not in {8, 12, 13, 14}:
+        raise ValueError(
+            "Barcode must contain 8, 12, 13, or 14 digits."
+        )
+
+    digits = [int(character) for character in cleaned]
+    supplied_check_digit = digits[-1]
+    body = list(reversed(digits[:-1]))
+
+    weighted_total = sum(
+        digit * (3 if index % 2 == 0 else 1)
+        for index, digit in enumerate(body)
+    )
+
+    expected_check_digit = (
+        10 - (weighted_total % 10)
+    ) % 10
+
+    if supplied_check_digit != expected_check_digit:
+        raise ValueError(
+            "Barcode check digit is invalid."
+        )
+
+    return cleaned
+
+
+def barcode_match_key(value: str | int) -> str | None:
+    """
+    Return a 14-digit comparison key without validating checksum.
+
+    USDA may represent the same product as UPC-A, EAN-13, or GTIN-14
+    with additional leading zeroes.
+    """
+    cleaned = re.sub(
+        r"[\s-]+",
+        "",
+        str(value or "").strip(),
+    )
+
+    if (
+        not cleaned
+        or not cleaned.isdigit()
+        or len(cleaned) > 14
+    ):
+        return None
+
+    return cleaned.zfill(14)
+
+
+def select_exact_barcode_food(
+    *,
+    foods: list[dict[str, Any]],
+    barcode: str,
+) -> dict[str, Any] | None:
+    """Select the newest exact USDA Branded GTIN/UPC match."""
+    requested_key = barcode_match_key(barcode)
+
+    if requested_key is None:
+        return None
+
+    matches = []
+
+    for food in foods:
+        if str(food.get("dataType") or "") != "Branded":
+            continue
+
+        candidate_key = barcode_match_key(
+            food.get("gtinUpc") or ""
+        )
+
+        if candidate_key == requested_key:
+            matches.append(food)
+
+    if not matches:
+        return None
+
+    return max(
+        matches,
+        key=lambda food: int(food.get("fdcId") or 0),
+    )
+
+
+def lookup_usda_barcode_nutrition(
+    barcode: str | int,
+) -> dict[str, Any]:
+    """
+    Retrieve one exact packaged product using its GTIN/UPC.
+
+    The barcode must pass its standard check-digit validation.
+    Nutrition comes directly from the USDA Branded package label.
+    """
+    try:
+        normalized = normalize_barcode(barcode)
+    except ValueError as error:
+        return unsupported_result(
+            notes=[str(error)],
+            missing_fields=["valid_barcode"],
+        )
+
+    foods = search_foods(
+        query=normalized,
+        page_size=50,
+        data_types=["Branded"],
+    )
+
+    selected = select_exact_barcode_food(
+        foods=foods,
+        barcode=normalized,
+    )
+
+    if selected is None:
+        return unsupported_result(
+            notes=[
+                "USDA did not return an exact Branded GTIN/UPC "
+                "match for this barcode."
+            ]
+        )
+
+    fdc_id = int(selected["fdcId"])
+    record = get_food_record(fdc_id)
+
+    record_key = barcode_match_key(
+        record.get("gtinUpc") or ""
+    )
+    requested_key = barcode_match_key(normalized)
+
+    if record_key != requested_key:
+        return unsupported_result(
+            notes=[
+                "The USDA detail record did not retain the "
+                "requested GTIN/UPC."
+            ]
+        )
+
+    serving_size = (
+        record.get("servingSize")
+        if record.get("servingSize") is not None
+        else selected.get("servingSize")
+    )
+    serving_unit = str(
+        record.get("servingSizeUnit")
+        or selected.get("servingSizeUnit")
+        or ""
+    ).strip()
+    household_serving = str(
+        record.get("householdServingFullText")
+        or selected.get("householdServingFullText")
+        or ""
+    ).strip()
+
+    if serving_size is None or not serving_unit:
+        return unsupported_result(
+            notes=[
+                "USDA found the barcode, but no verified package "
+                "serving size was available."
+            ],
+            missing_fields=["serving_size"],
+        )
+
+    nutrition = extract_label_nutrients(record)
+    used_per_100g_fallback = False
+
+    if nutrition["calories"] is None:
+        normalized_unit = serving_unit.strip().lower()
+
+        if normalized_unit not in {
+            "g",
+            "gram",
+            "grams",
+            "grm",
+        }:
+            return unsupported_result(
+                notes=[
+                    "USDA found the barcode, but complete label "
+                    "nutrition and a gram serving were unavailable."
+                ]
+            )
+
+        per_100g = extract_nutrients_per_100g(record)
+
+        if per_100g["calories"] is None:
+            return unsupported_result(
+                notes=[
+                    "USDA found the barcode, but the record did "
+                    "not include usable calorie data."
+                ]
+            )
+
+        nutrition = scale_nutrients(
+            per_100g=per_100g,
+            gram_weight=float(serving_size),
+        )
+        used_per_100g_fallback = True
+
+    brand_name = str(
+        record.get("brandName")
+        or record.get("brandOwner")
+        or ""
+    ).strip() or None
+
+    canonical_name = str(
+        record.get("description")
+        or "Packaged food"
+    ).strip()
+
+    serving_amount = float(serving_size)
+    normalized_serving_unit = (
+        "g"
+        if serving_unit.strip().lower()
+        in {"g", "gram", "grams", "grm"}
+        else serving_unit
+    )
+
+    serving_description = (
+        f"{household_serving} ({serving_amount:g} "
+        f"{normalized_serving_unit})"
+        if household_serving
+        else f"{serving_amount:g} {normalized_serving_unit}"
+    )
+
+    return {
+        "found": True,
+        "provider": "usda_fooddata_central",
+        "food": {
+            "canonical_name": canonical_name,
+            "restaurant": None,
+            "brand": brand_name,
+            "food_type": "food",
+            "serving_description": serving_description,
+            "serving_amount": serving_amount,
+            "serving_unit": normalized_serving_unit,
+        },
+        "nutrition": nutrition,
+        "verification": {
+            "status": "verified",
+            "source": "fdc.nal.usda.gov",
+            "source_item_id": f"fdc-{fdc_id}",
+            "source_url": (
+                "https://fdc.nal.usda.gov/fdc-app.html"
+                f"#/food-details/{fdc_id}/nutrients"
+            ),
+        },
+        "missing_fields": [],
+        "clarification_question": None,
+        "notes": [
+            (
+                "Nutrition was scaled from USDA verified per-100 g "
+                "values using the exact barcode record's package "
+                "serving weight."
+                if used_per_100g_fallback
+                else "Nutrition came directly from the USDA "
+                "Branded package label."
+            ),
+            f"Exact barcode match: {normalized}.",
+            f"Verified serving: {serving_description}.",
+        ],
+    }
+
+
 def lookup_usda_branded_nutrition(
     *,
     brand: str,
