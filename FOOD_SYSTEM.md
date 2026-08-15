@@ -182,11 +182,49 @@ Flow:
 
 ---
 
+# Photo Tools
+
+Photo Tools are available from the Telegram Food menu.
+
+## Restaurant Menu Photos
+
+Flow:
+- User selects Read a restaurant menu photo or sends a menu photo directly.
+- HealthCoach reads only information visible in the photograph.
+- It recommends up to three promising entrees.
+- Printed calories are displayed only when visible in the photograph.
+- Nutrition that is not printed is not invented.
+- Menu-photo recommendations are advisory and are never logged automatically.
+
+## Actual Meal Photos
+
+Flow:
+- User selects Estimate an actual meal photo or captions a photo with
+  "Estimate this meal."
+- HealthCoach estimates ranges for calories, protein, carbohydrates, and fat.
+- The estimate lists visible components, portion assumptions, and uncertainty.
+- HealthCoach asks for high-impact clarification such as protein type,
+  preparation method, sauce, dressing, or added oil.
+- The user selects how much of the pictured portion was eaten.
+- The user selects the meal using Telegram buttons.
+- HealthCoach calculates the midpoint of each refined range and shows a final
+  confirmation before logging.
+- The user may log the estimate, change details, or cancel.
+- Logged photo entries are marked as estimated and retain their historical
+  nutrition snapshot.
+- Fiber, sugar, and sodium remain unknown rather than being fabricated from
+  appearance alone.
+- Nothing is logged without explicit user confirmation.
+
+The Food menu is grouped into Daily Food, My Foods, and Tools so these
+capabilities remain discoverable as HealthCoach grows.
+
+---
+
 # Future Features
 
 - Voice logging
 - Barcode scanner
-- Meal photos
 - Recipe builder
 - Same as yesterday
 - Restaurant history
