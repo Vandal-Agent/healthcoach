@@ -445,12 +445,24 @@ def menu_reply_markup(message):
             ["Remove favorite"],
             ["Back", "Cancel"],
         ]
+    elif "Photo Tools Menu\n\n" in message:
+        rows = [
+            ["Read menu photo"],
+            ["Estimate meal photo"],
+            ["Back", "Cancel"],
+        ]
+    elif (
+        "Send a clear restaurant menu photo." in message
+        or "Send a clear photo of the actual meal." in message
+    ):
+        rows = [["Back", "Cancel"]]
     elif "Food Menu\n\n" in message:
         rows = [
             ["Log food", "Show today"],
             ["Edit today", "Undo last"],
             ["Favorites", "Saved foods"],
-            ["Restaurant", "Update unknown foods"],
+            ["Photo tools", "Restaurant"],
+            ["Update unknown foods"],
             ["Back", "Cancel"],
         ]
     elif "Health Menu\n\n" in message:
@@ -2659,15 +2671,29 @@ def healthcoach_main_menu_text() -> str:
 def healthcoach_food_menu_text() -> str:
     return (
         "Food Menu\n\n"
+        "DAILY FOOD\n"
         "1. Log food\n"
         "2. Show today's food\n"
         "3. Edit today's food\n"
-        "4. Undo last food\n"
+        "4. Undo last food\n\n"
+        "MY FOODS\n"
         "5. Favorites\n"
-        "6. Saved foods\n"
-        "7. Restaurant\n"
-        "8. Update unknown foods\n"
-        "9. Back"
+        "6. Saved foods\n\n"
+        "TOOLS\n"
+        "7. Photo tools\n"
+        "8. Restaurant\n"
+        "9. Update unknown foods\n"
+        "10. Back"
+    )
+
+
+def healthcoach_photo_tools_menu_text() -> str:
+    return (
+        "Photo Tools Menu\n\n"
+        "1. Read a restaurant menu photo\n"
+        "2. Estimate an actual meal photo\n"
+        "3. Back\n\n"
+        "Nothing is logged without your confirmation."
     )
 
 
@@ -3333,7 +3359,22 @@ def process_telegram_update(update):
 
     if photo_sizes:
         file_id = photo_sizes[-1].get("file_id")
-        food_photo = is_food_photo_request(caption)
+        photo_conversation = get_active_conversation(chat_id)
+        photo_step = (
+            photo_conversation.get("current_step")
+            if photo_conversation
+            and photo_conversation.get("conversation_type")
+            == "healthcoach_menu"
+            else None
+        )
+
+        food_photo = (
+            photo_step == "await_food_photo"
+            or (
+                photo_step != "await_menu_photo"
+                and is_food_photo_request(caption)
+            )
+        )
 
         if not file_id:
             send_telegram_msg(
@@ -3706,6 +3747,23 @@ def process_telegram_update(update):
 
             if lowered in {
                 "7",
+                "photo",
+                "photo tools",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="photo_tools",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_photo_tools_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "8",
                 "restaurant",
                 "restaurant choices",
             }:
@@ -3722,7 +3780,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "unknown",
                 "update unknown foods",
             }:
@@ -3739,7 +3797,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"9", "back"}:
+            if lowered in {"10", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -3754,6 +3812,96 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "photo_tools":
+            if lowered in {
+                "1",
+                "read menu photo",
+                "menu photo",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_menu_photo",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Send a clear restaurant menu photo.\n\n"
+                    "HealthCoach will recommend up to three "
+                    "promising choices using visible information.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "2",
+                "estimate meal photo",
+                "meal photo",
+                "estimate food photo",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_food_photo",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of the actual meal.\n\n"
+                    "HealthCoach will estimate nutrition, ask for "
+                    "important details, and log nothing without "
+                    "your confirmation.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_photo_tools_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {
+            "await_menu_photo",
+            "await_food_photo",
+        }:
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="photo_tools",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_photo_tools_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if current_step == "await_menu_photo":
+                message = "Send a clear restaurant menu photo."
+            else:
+                message = (
+                    "Send a clear photo of the actual meal."
+                )
+
+            send_telegram_msg(
+                message + "\n\nReply Back or Cancel to leave.",
                 chat_id=chat_id,
             )
             return
