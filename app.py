@@ -51,6 +51,11 @@ from food.ledger import (
     update_food_entry,
 )
 from food.nutrition_provider import lookup_official_nutrition
+from food.menu_photo_advisor import (
+    analyze_menu_photo,
+    download_telegram_photo,
+    format_menu_photo_analysis,
+)
 from food.restaurant_advisor import recommend_restaurant_entrees
 from food.resolver import resolve_food
 from conversation_engine import (
@@ -2967,8 +2972,53 @@ def process_telegram_update(update):
     chat_id = message.get("chat", {}).get("id")
     message_id = message.get("message_id")
     text = (message.get("text") or "").strip()
+    caption = (message.get("caption") or "").strip()
+    photo_sizes = list(message.get("photo") or [])
 
     if CHAT_ID and str(chat_id) != str(CHAT_ID):
+        return
+
+    if photo_sizes:
+        file_id = photo_sizes[-1].get("file_id")
+
+        if not file_id:
+            send_telegram_msg(
+                "I received the photo, but Telegram did not "
+                "provide a usable file.",
+                chat_id=chat_id,
+            )
+            return
+
+        send_telegram_msg(
+            "I'm reading the menu photo and looking for up "
+            "to three promising entrees. This may take a moment.",
+            chat_id=chat_id,
+        )
+
+        try:
+            image_bytes, mime_type = download_telegram_photo(
+                telegram_token=TELEGRAM_TOKEN,
+                file_id=file_id,
+            )
+            result = analyze_menu_photo(
+                image_bytes,
+                mime_type=mime_type,
+                user_context=caption,
+            )
+        except Exception:
+            logging.exception("Menu photo analysis failed")
+            send_telegram_msg(
+                "I couldn't analyze that menu photo. Try a "
+                "closer, brighter picture with the item names "
+                "and descriptions in focus.",
+                chat_id=chat_id,
+            )
+            return
+
+        send_telegram_msg(
+            format_menu_photo_analysis(result),
+            chat_id=chat_id,
+        )
         return
 
     if not text:
