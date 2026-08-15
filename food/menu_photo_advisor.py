@@ -192,3 +192,246 @@ def format_menu_photo_analysis(result: dict[str, Any]) -> str:
         "what is visible in the picture."
     )
     return "\n".join(lines).strip()
+
+
+class FoodPhotoEstimate(BaseModel):
+    readable: bool
+    dish_name: str | None = None
+    visible_components: list[str] = Field(default_factory=list)
+
+    calories_low: float | None = Field(default=None, ge=0)
+    calories_high: float | None = Field(default=None, ge=0)
+
+    protein_low: float | None = Field(default=None, ge=0)
+    protein_high: float | None = Field(default=None, ge=0)
+
+    carbohydrates_low: float | None = Field(default=None, ge=0)
+    carbohydrates_high: float | None = Field(default=None, ge=0)
+
+    fat_low: float | None = Field(default=None, ge=0)
+    fat_high: float | None = Field(default=None, ge=0)
+
+    portion_assumptions: list[str] = Field(default_factory=list)
+    uncertainty_notes: list[str] = Field(default_factory=list)
+
+
+def is_food_photo_request(caption: str | None) -> bool:
+    normalized = " ".join(
+        str(caption or "").strip().lower().split()
+    )
+
+    phrases = {
+        "estimate this meal",
+        "estimate this food",
+        "estimate my meal",
+        "estimate my food",
+        "food photo",
+        "meal photo",
+        "actual food",
+        "actual meal",
+        "this is what i ate",
+        "this is what i'm eating",
+        "my plate",
+    }
+
+    return any(phrase in normalized for phrase in phrases)
+
+
+def analyze_food_photo(
+    image_bytes: bytes,
+    *,
+    mime_type: str,
+    user_context: str | None = None,
+) -> dict[str, Any]:
+    if not image_bytes:
+        raise ValueError("image_bytes is required.")
+
+    if mime_type not in ALLOWED_IMAGE_TYPES:
+        raise ValueError("Unsupported food photo type.")
+
+    context = str(user_context or "").strip()
+
+    prompt = f"""
+Analyze this photograph of an actual meal for HealthCoach.
+
+User context:
+{context or "None"}
+
+Return an honest nutrition estimate based on visible food and
+reasonable portion-size assumptions.
+
+Rules:
+1. Identify only food that is visible or stated by the user.
+2. Estimate ranges for calories, protein, carbohydrates, and fat.
+3. The low value must not exceed the high value.
+4. Use realistic portion estimates rather than false precision.
+5. Account for likely cooking oil only as uncertainty unless visible
+   or stated.
+6. Never claim an exact restaurant recipe or exact ingredient weight.
+7. Clearly identify hidden oil, sauce, dressing, cheese, and portion
+   size as uncertainty when applicable.
+8. Do not assume the user ate the entire portion unless stated.
+9. Set readable=false if the food cannot be assessed reliably.
+10. This is estimation only. Nothing will be logged automatically.
+"""
+
+    client = get_client()
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[
+                prompt,
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=mime_type,
+                ),
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=FoodPhotoEstimate,
+            ),
+        )
+    finally:
+        client.close()
+
+    if response.parsed is not None:
+        result = (
+            response.parsed
+            if isinstance(response.parsed, FoodPhotoEstimate)
+            else FoodPhotoEstimate.model_validate(
+                response.parsed
+            )
+        )
+    elif response.text:
+        result = FoodPhotoEstimate.model_validate_json(
+            response.text
+        )
+    else:
+        raise RuntimeError(
+            "Gemini returned no food-photo estimate."
+        )
+
+    if not result.readable:
+        return result.model_dump()
+
+    ranges = [
+        ("calories", result.calories_low, result.calories_high),
+        ("protein", result.protein_low, result.protein_high),
+        (
+            "carbohydrates",
+            result.carbohydrates_low,
+            result.carbohydrates_high,
+        ),
+        ("fat", result.fat_low, result.fat_high),
+    ]
+
+    for name, low, high in ranges:
+        if low is None or high is None:
+            raise ValueError(
+                f"Food-photo estimate omitted the {name} range."
+            )
+        if low > high:
+            raise ValueError(
+                f"Food-photo estimate returned an invalid {name} range."
+            )
+
+    return result.model_dump()
+
+
+def format_food_photo_estimate(
+    result: dict[str, Any],
+) -> str:
+    if not result.get("readable"):
+        return (
+            "I couldn't see the meal clearly enough to estimate it.\n\n"
+            "Try another photo showing the entire plate in good light."
+        )
+
+    def format_range(
+        label: str,
+        low_key: str,
+        high_key: str,
+        unit: str,
+    ) -> str:
+        low = float(result[low_key])
+        high = float(result[high_key])
+        return f"{label}: {low:g}-{high:g}{unit}"
+
+    lines = [
+        "Estimated Meal Nutrition",
+        "",
+        str(result.get("dish_name") or "Meal photo"),
+        "",
+        format_range(
+            "Calories",
+            "calories_low",
+            "calories_high",
+            "",
+        ),
+        format_range(
+            "Protein",
+            "protein_low",
+            "protein_high",
+            " g",
+        ),
+        format_range(
+            "Carbohydrates",
+            "carbohydrates_low",
+            "carbohydrates_high",
+            " g",
+        ),
+        format_range(
+            "Fat",
+            "fat_low",
+            "fat_high",
+            " g",
+        ),
+    ]
+
+    components = list(
+        result.get("visible_components") or []
+    )
+    if components:
+        lines.extend(
+            [
+                "",
+                "Visible components:",
+                *[f"- {item}" for item in components],
+            ]
+        )
+
+    assumptions = list(
+        result.get("portion_assumptions") or []
+    )
+    if assumptions:
+        lines.extend(
+            [
+                "",
+                "Portion assumptions:",
+                *[f"- {item}" for item in assumptions],
+            ]
+        )
+
+    uncertainty = list(
+        result.get("uncertainty_notes") or []
+    )
+    if uncertainty:
+        lines.extend(
+            [
+                "",
+                "Main uncertainty:",
+                *[f"- {item}" for item in uncertainty],
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "This is a visual estimate, not verified nutrition.",
+            "Nothing has been logged.",
+        ]
+    )
+
+    return "\n".join(lines).strip()

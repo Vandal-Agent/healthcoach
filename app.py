@@ -52,9 +52,12 @@ from food.ledger import (
 )
 from food.nutrition_provider import lookup_official_nutrition
 from food.menu_photo_advisor import (
+    analyze_food_photo,
     analyze_menu_photo,
     download_telegram_photo,
+    format_food_photo_estimate,
     format_menu_photo_analysis,
+    is_food_photo_request,
 )
 from food.restaurant_advisor import recommend_restaurant_entrees
 from food.resolver import resolve_food
@@ -2980,6 +2983,7 @@ def process_telegram_update(update):
 
     if photo_sizes:
         file_id = photo_sizes[-1].get("file_id")
+        food_photo = is_food_photo_request(caption)
 
         if not file_id:
             send_telegram_msg(
@@ -2989,9 +2993,19 @@ def process_telegram_update(update):
             )
             return
 
+        if food_photo:
+            progress_message = (
+                "I'm examining the meal and estimating nutrition "
+                "ranges. This may take a moment."
+            )
+        else:
+            progress_message = (
+                "I'm reading the menu photo and looking for up "
+                "to three promising entrees. This may take a moment."
+            )
+
         send_telegram_msg(
-            "I'm reading the menu photo and looking for up "
-            "to three promising entrees. This may take a moment.",
+            progress_message,
             chat_id=chat_id,
         )
 
@@ -3000,23 +3014,51 @@ def process_telegram_update(update):
                 telegram_token=TELEGRAM_TOKEN,
                 file_id=file_id,
             )
-            result = analyze_menu_photo(
-                image_bytes,
-                mime_type=mime_type,
-                user_context=caption,
-            )
+
+            if food_photo:
+                result = analyze_food_photo(
+                    image_bytes,
+                    mime_type=mime_type,
+                    user_context=caption,
+                )
+                response_message = format_food_photo_estimate(
+                    result
+                )
+            else:
+                result = analyze_menu_photo(
+                    image_bytes,
+                    mime_type=mime_type,
+                    user_context=caption,
+                )
+                response_message = format_menu_photo_analysis(
+                    result
+                )
         except Exception:
-            logging.exception("Menu photo analysis failed")
+            logging.exception(
+                "%s photo analysis failed",
+                "Food" if food_photo else "Menu",
+            )
+
+            if food_photo:
+                error_message = (
+                    "I couldn't estimate that meal photo. Try a "
+                    "brighter picture showing the entire plate."
+                )
+            else:
+                error_message = (
+                    "I couldn't analyze that menu photo. Try a "
+                    "closer, brighter picture with the item names "
+                    "and descriptions in focus."
+                )
+
             send_telegram_msg(
-                "I couldn't analyze that menu photo. Try a "
-                "closer, brighter picture with the item names "
-                "and descriptions in focus.",
+                error_message,
                 chat_id=chat_id,
             )
             return
 
         send_telegram_msg(
-            format_menu_photo_analysis(result),
+            response_message,
             chat_id=chat_id,
         )
         return
