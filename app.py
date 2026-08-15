@@ -59,6 +59,11 @@ from food.pantry import (
     parse_pantry_item_list,
     remove_pantry_item,
 )
+from food.pantry_advisor import (
+    MEAL_CALORIE_LIMITS,
+    generate_pantry_meal_ideas,
+    scale_pantry_meal_nutrition,
+)
 from food.nutrition_provider import lookup_official_nutrition
 from food.menu_photo_advisor import (
     analyze_food_photo,
@@ -530,9 +535,27 @@ def menu_reply_markup(message):
         rows = [
             ["View pantry", "Add items manually"],
             ["Scan product into Pantry"],
+            ["Get meal ideas"],
             ["Remove pantry item", "Clear pantry"],
             ["Back", "Cancel"],
         ]
+    elif "Pantry Meal Ideas —" in message:
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [choices, ["More ideas"], ["Back", "Cancel"]]
+    elif "Pantry Meal Idea\n\n" in message:
+        rows = [
+            ["Log Meal", "More ideas"],
+            ["Back", "Cancel"],
+        ]
+    elif "What meal do you want Pantry ideas for?" in message:
+        rows = [["Lunch", "Dinner"], ["Back", "Cancel"]]
+        one_time = True
+    elif "How many servings of this Pantry meal did you eat?" in message:
+        rows = [["0.5", "1", "1.5", "2"], ["Back", "Cancel"]]
+        one_time = True
+    elif "Log this Pantry meal estimate?" in message:
+        rows = [["Log Meal"], ["Back", "Cancel"]]
+        one_time = True
     elif "My Pantry\n\n" in message:
         rows = [["Back", "Cancel"]]
     elif "Health Menu\n\n" in message:
@@ -3017,12 +3040,220 @@ def healthcoach_pantry_menu_text() -> str:
         "1. View pantry\n"
         "2. Add items manually\n"
         "3. Scan product into Pantry\n"
-        "4. Remove pantry item\n"
-        "5. Clear pantry\n"
-        "6. Back\n\n"
+        "4. Get meal ideas\n"
+        "5. Remove pantry item\n"
+        "6. Clear pantry\n"
+        "7. Back\n\n"
         "Pantry items stay available until you remove or clear "
         "them. Quantities are not tracked."
     )
+
+
+def pantry_meal_type_prompt() -> str:
+    return (
+        "What meal do you want Pantry ideas for?\n\n"
+        "Lunch ideas stay at or below 500 calories.\n"
+        "Dinner ideas stay at or below 600 calories.\n\n"
+        "HealthCoach will consider what you have logged today and "
+        "use no more than two additional ingredients per idea."
+    )
+
+
+def format_pantry_meal_ideas(
+    ideas: list[dict],
+    *,
+    meal_type: str,
+) -> str:
+    lines = [
+        f"Pantry Meal Ideas — {meal_type.title()}",
+        "",
+    ]
+
+    for index, idea in enumerate(ideas, start=1):
+        ingredients = list(idea.get("ingredients") or [])
+        pantry_names = [
+            str(item.get("name") or "")
+            for item in ingredients
+            if item.get("source") == "pantry"
+        ]
+        additional_names = [
+            str(item.get("name") or "")
+            for item in ingredients
+            if item.get("source") == "additional"
+        ]
+
+        lines.extend(
+            [
+                f"{index}. {idea.get('name') or 'Meal idea'}",
+                (
+                    "Estimated: "
+                    f"{format_display_number(float(idea.get('calories') or 0), decimals=0)} "
+                    "cal, "
+                    f"{format_display_number(float(idea.get('protein_g') or 0))} "
+                    "g protein"
+                ),
+                "Uses: " + ", ".join(pantry_names),
+                (
+                    "Needs: " + ", ".join(additional_names)
+                    if additional_names
+                    else "Needs: no additional ingredients"
+                ),
+                f"Why today: {idea.get('daily_fit') or ''}",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "Choose 1, 2, or 3 for ingredients and preparation.",
+            "Reply More ideas for three different choices, Back, "
+            "or Cancel.",
+            "",
+            "Nutrition is estimated. Nothing has been logged.",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def format_pantry_meal_idea_details(
+    idea: dict,
+    *,
+    meal_type: str,
+) -> str:
+    lines = [
+        "Pantry Meal Idea",
+        "",
+        str(idea.get("name") or "Meal idea"),
+        str(idea.get("summary") or ""),
+        "",
+        "Estimated nutrition for 1 serving:",
+        (
+            "Calories: "
+            f"{format_display_number(float(idea.get('calories') or 0), decimals=0)}"
+        ),
+        (
+            "Protein: "
+            f"{format_display_number(float(idea.get('protein_g') or 0))} g"
+        ),
+        (
+            "Carbohydrates: "
+            f"{format_display_number(float(idea.get('carbohydrates_g') or 0))} g"
+        ),
+        (
+            "Fat: "
+            f"{format_display_number(float(idea.get('fat_g') or 0))} g"
+        ),
+        (
+            "Fiber: "
+            f"{format_display_number(float(idea.get('fiber_g') or 0))} g"
+        ),
+        (
+            "Sugar: "
+            f"{format_display_number(float(idea.get('sugar_g') or 0))} g"
+        ),
+        (
+            "Sodium: "
+            f"{format_display_number(float(idea.get('sodium_mg') or 0), decimals=0)} mg"
+        ),
+        "",
+        "Ingredients:",
+    ]
+
+    for ingredient in idea.get("ingredients") or []:
+        source = (
+            "Pantry"
+            if ingredient.get("source") == "pantry"
+            else "additional"
+        )
+        lines.append(
+            f"- {ingredient.get('amount') or 'as needed'} "
+            f"{ingredient.get('name') or 'ingredient'} ({source})"
+        )
+
+    lines.extend(["", "Preparation:"])
+    for index, step in enumerate(
+        idea.get("preparation_steps") or [],
+        start=1,
+    ):
+        lines.append(f"{index}. {step}")
+
+    lines.extend(
+        [
+            "",
+            f"Why it fits today: {idea.get('daily_fit') or ''}",
+            f"Estimate note: {idea.get('estimate_notes') or ''}",
+            "",
+            f"This is an estimated {meal_type.title()} recipe. "
+            "Nothing has been logged.",
+            "",
+            "Reply Log Meal, More ideas, Back, or Cancel.",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def show_pantry_meal_ideas(
+    *,
+    chat_id,
+    meal_type: str,
+) -> bool:
+    pantry_items = list_pantry_items()
+    if not pantry_items:
+        send_telegram_msg(
+            "Your Pantry is empty. Add a few available foods or "
+            "scan products before requesting meal ideas.",
+            chat_id=chat_id,
+        )
+        return False
+
+    normalized_meal = str(meal_type or "").strip().lower()
+    if normalized_meal not in MEAL_CALORIE_LIMITS:
+        raise ValueError("meal_type must be lunch or dinner.")
+
+    send_telegram_msg(
+        f"I'm building three {normalized_meal} ideas from your "
+        "Pantry and today's food log. This may take a moment.",
+        chat_id=chat_id,
+        remove_keyboard=True,
+    )
+
+    try:
+        ideas = generate_pantry_meal_ideas(
+            pantry_items=pantry_items,
+            meal_type=normalized_meal,
+            daily_totals=get_daily_totals(
+                datetime.now(PACIFIC_TZ).date()
+            ),
+        )
+    except Exception:
+        logging.exception("Pantry meal idea generation failed")
+        send_telegram_msg(
+            "I couldn't build safe Pantry meal ideas right now. "
+            "Your Pantry and food log were not changed. Please "
+            "try again in a moment.",
+            chat_id=chat_id,
+        )
+        return False
+
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_meal_ideas",
+        known_data={
+            "pantry_meal_type": normalized_meal,
+            "pantry_meal_ideas": ideas,
+            "pantry_meal_selected_index": None,
+            "pantry_meal_servings": None,
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_meal_ideas(
+            ideas,
+            meal_type=normalized_meal,
+        ),
+        chat_id=chat_id,
+    )
+    return True
 
 
 def format_pantry_items(items: list[dict]) -> str:
@@ -4434,6 +4665,38 @@ def process_telegram_update(update):
 
             if lowered in {
                 "4",
+                "get meal ideas",
+                "meal ideas",
+                "pantry meal ideas",
+            }:
+                items = list_pantry_items()
+                if not items:
+                    send_telegram_msg(
+                        "Your Pantry is empty. Add a few available "
+                        "foods or scan products first.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_type",
+                    known_data={
+                        "pantry_meal_type": None,
+                        "pantry_meal_ideas": [],
+                        "pantry_meal_selected_index": None,
+                        "pantry_meal_servings": None,
+                    },
+                    missing_fields=["meal_type"],
+                )
+                send_telegram_msg(
+                    pantry_meal_type_prompt(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "5",
                 "remove",
                 "remove pantry item",
             }:
@@ -4463,7 +4726,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "5",
+                "6",
                 "clear",
                 "clear pantry",
             }:
@@ -4493,7 +4756,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"6", "back"}:
+            if lowered in {"7", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -4508,6 +4771,411 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_pantry_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_meal_type":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            meal_type = (
+                "lunch"
+                if lowered in {"1", "lunch"}
+                else "dinner"
+                if lowered in {"2", "dinner"}
+                else None
+            )
+            if meal_type is None:
+                send_telegram_msg(
+                    pantry_meal_type_prompt(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if not show_pantry_meal_ideas(
+                chat_id=chat_id,
+                meal_type=meal_type,
+            ):
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_type",
+                    known_data={"pantry_meal_type": meal_type},
+                    missing_fields=["meal_type"],
+                )
+            return
+
+        if current_step == "pantry_meal_ideas":
+            ideas = list(
+                known_data.get("pantry_meal_ideas") or []
+            )
+            meal_type = str(
+                known_data.get("pantry_meal_type") or "dinner"
+            ).lower()
+
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"more", "more ideas", "new ideas"}:
+                show_pantry_meal_ideas(
+                    chat_id=chat_id,
+                    meal_type=meal_type,
+                )
+                return
+
+            try:
+                selected_index = int(text.strip()) - 1
+            except (TypeError, ValueError):
+                selected_index = -1
+
+            if not 0 <= selected_index < len(ideas):
+                send_telegram_msg(
+                    format_pantry_meal_ideas(
+                        ideas,
+                        meal_type=meal_type,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            idea = ideas[selected_index]
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_meal_idea_details",
+                known_data={
+                    "pantry_meal_selected_index": selected_index,
+                    "pantry_meal_servings": None,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_pantry_meal_idea_details(
+                    idea,
+                    meal_type=meal_type,
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_meal_idea_details":
+            ideas = list(
+                known_data.get("pantry_meal_ideas") or []
+            )
+            meal_type = str(
+                known_data.get("pantry_meal_type") or "dinner"
+            ).lower()
+            try:
+                selected_index = int(
+                    known_data.get("pantry_meal_selected_index")
+                )
+                idea = ideas[selected_index]
+            except (IndexError, TypeError, ValueError):
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Those meal ideas are no longer available.\n\n"
+                    + healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_ideas",
+                    known_data={"pantry_meal_servings": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_meal_ideas(
+                        ideas,
+                        meal_type=meal_type,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"more", "more ideas", "new ideas"}:
+                show_pantry_meal_ideas(
+                    chat_id=chat_id,
+                    meal_type=meal_type,
+                )
+                return
+
+            if lowered in {
+                "log",
+                "log meal",
+                "log it",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_servings",
+                    known_data={"pantry_meal_servings": None},
+                    missing_fields=["servings"],
+                )
+                send_telegram_msg(
+                    "How many servings of this Pantry meal did you "
+                    "eat?\n\nChoose 0.5, 1, 1.5, or 2.",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                format_pantry_meal_idea_details(
+                    idea,
+                    meal_type=meal_type,
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_meal_servings":
+            ideas = list(
+                known_data.get("pantry_meal_ideas") or []
+            )
+            meal_type = str(
+                known_data.get("pantry_meal_type") or "dinner"
+            ).lower()
+            try:
+                selected_index = int(
+                    known_data.get("pantry_meal_selected_index")
+                )
+                idea = ideas[selected_index]
+            except (IndexError, TypeError, ValueError):
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_idea_details",
+                    known_data={"pantry_meal_servings": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_meal_idea_details(
+                        idea,
+                        meal_type=meal_type,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                servings = float(text.strip())
+            except (TypeError, ValueError):
+                servings = 0
+
+            if servings <= 0 or servings > 4:
+                send_telegram_msg(
+                    "Enter a serving amount greater than 0 and no "
+                    "more than 4. For example: 0.5, 1, 1.5, or 2.",
+                    chat_id=chat_id,
+                )
+                return
+
+            nutrition = scale_pantry_meal_nutrition(
+                idea,
+                servings=servings,
+            )
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_meal_log_confirmation",
+                known_data={"pantry_meal_servings": servings},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Log this Pantry meal estimate?\n\n"
+                f"Food: {idea.get('name') or 'Pantry meal'}\n"
+                f"Meal: {meal_type.title()}\n"
+                f"Servings eaten: {format_display_number(servings)}\n\n"
+                "Estimated nutrition to log:\n"
+                "Calories: "
+                f"{format_display_number(nutrition['calories'], decimals=0)}\n"
+                "Protein: "
+                f"{format_display_number(nutrition['protein_g'])} g\n"
+                "Carbohydrates: "
+                f"{format_display_number(nutrition['carbohydrates_g'])} g\n"
+                "Fat: "
+                f"{format_display_number(nutrition['fat_g'])} g\n\n"
+                "Only log this after you have eaten it.\n\n"
+                "1. Log Meal\n"
+                "2. Back\n"
+                "3. Cancel",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_meal_log_confirmation":
+            ideas = list(
+                known_data.get("pantry_meal_ideas") or []
+            )
+            meal_type = str(
+                known_data.get("pantry_meal_type") or "dinner"
+            ).lower()
+            try:
+                selected_index = int(
+                    known_data.get("pantry_meal_selected_index")
+                )
+                idea = ideas[selected_index]
+                servings = float(
+                    known_data.get("pantry_meal_servings")
+                )
+            except (IndexError, TypeError, ValueError):
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "back", "change amount"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_servings",
+                    known_data={"pantry_meal_servings": None},
+                    missing_fields=["servings"],
+                )
+                send_telegram_msg(
+                    "How many servings of this Pantry meal did you "
+                    "eat?\n\nChoose 0.5, 1, 1.5, or 2.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {
+                "1",
+                "log",
+                "log meal",
+                "log it",
+            }:
+                send_telegram_msg(
+                    "Reply Log Meal, Back, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+
+            timestamp = datetime.now(PACIFIC_TZ).strftime(
+                "%Y%m%d-%H%M%S-%f"
+            )
+            try:
+                created = add_food_with_nutrition(
+                    canonical_name=str(
+                        idea.get("name") or "Pantry meal"
+                    ),
+                    serving_description=(
+                        f"1 Pantry estimate {timestamp}"
+                    ),
+                    serving_amount=1.0,
+                    serving_unit="estimated serving",
+                    verification_status="estimated",
+                    verification_source="pantry_meal_idea",
+                    calories=float(idea.get("calories") or 0),
+                    protein_g=float(idea.get("protein_g") or 0),
+                    carbohydrates_g=float(
+                        idea.get("carbohydrates_g") or 0
+                    ),
+                    fat_g=float(idea.get("fat_g") or 0),
+                    fiber_g=float(idea.get("fiber_g") or 0),
+                    sugar_g=float(idea.get("sugar_g") or 0),
+                    sodium_mg=float(idea.get("sodium_mg") or 0),
+                    food_type="meal",
+                )
+                entry = add_food_entry(
+                    entry_date=today,
+                    meal_category=meal_type,
+                    food_id=int(created["food"]["food_id"]),
+                    quantity=servings,
+                    logging_source="telegram_ai",
+                    original_text=(
+                        "Pantry meal idea: "
+                        + str(idea.get("name") or "Pantry meal")
+                    ),
+                    quantity_is_estimated=True,
+                    user_confirmed=True,
+                )
+            except Exception:
+                logging.exception("Pantry meal logging failed")
+                send_telegram_msg(
+                    "I couldn't log that Pantry meal safely. "
+                    "Nothing was added to today's food log.",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                sync_food_ledger_totals_to_sheet(today)
+            except Exception:
+                logging.exception(
+                    "Pantry meal Google Sheet sync failed"
+                )
+                sync_note = (
+                    "\n\nThe meal was logged, but the Google Sheet "
+                    "totals could not be updated."
+                )
+            else:
+                sync_note = ""
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry",
+                known_data={
+                    "pantry_meal_ideas": [],
+                    "pantry_meal_selected_index": None,
+                    "pantry_meal_servings": None,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Estimated Pantry meal logged.\n\n"
+                f"Food: {idea.get('name') or 'Pantry meal'}\n"
+                f"Meal: {meal_type.title()}\n"
+                "Calories: "
+                f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
+                "Protein: "
+                f"{format_display_number(float(entry.get('protein_g') or 0))} g\n\n"
+                "This food-log entry is marked as estimated."
+                + sync_note
+                + "\n\n"
+                + healthcoach_pantry_menu_text(),
                 chat_id=chat_id,
             )
             return

@@ -278,7 +278,7 @@ learn the product from its package:
 My Pantry is a separate presence-only list under the Telegram Food menu.
 It does not treat every Saved Food as currently available.
 
-Supported foundation workflow:
+Supported workflow:
 
 - View the foods currently available at home.
 - Add up to 30 items at once using a comma-separated or line-separated
@@ -290,10 +290,27 @@ Supported foundation workflow:
 - Clear the entire Pantry only after explicit confirmation.
 - Keep Pantry items available until the user removes or clears them.
 - Avoid quantity and depletion tracking in this version.
+- Request exactly three lunch or dinner ideas at a time.
+- Keep lunch ideas at or below 500 calories and dinner ideas at or below
+  600 calories.
+- Consider nutrition already logged for the current day when explaining
+  how each idea fits.
+- Use at least one Pantry item and require no more than two additional
+  ingredients per idea, aside from salt, pepper, cooking spray, and water.
+- Show estimated nutrition, ingredient amounts, and preparation steps.
+- Generate three different choices when the user selects More ideas.
+- Ask how many servings were eaten and require final confirmation before
+  logging the meal.
+- Mark logged Pantry meal nutrition as estimated and retain its nutrition
+  snapshot in the Food Ledger.
 
 Manual items may be fresh ingredients without nutrition records. Scanned
-items retain a link to their Saved Food and active verified nutrition so a
-future meal-idea engine can use stronger nutrition data when it is available.
+items retain a link to their Saved Food and active verified nutrition so the
+meal-idea engine can use stronger nutrition data when it is available.
+
+Pantry meal ideas do not reduce inventory quantities and are not Saved
+Recipes. Saving a generated idea as a reusable recipe is a separate future
+stage.
 
 Duplicate names are matched case-insensitively and are not added twice.
 
@@ -301,7 +318,7 @@ Duplicate names are matched case-insensitively and are not added twice.
 # Future Features
 
 - Voice logging
-- Pantry meal ideas and Saved Recipes
+- Saved Recipes
 - Same as yesterday
 - Restaurant history
 - Grocery suggestions

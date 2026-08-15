@@ -25,6 +25,7 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn("View pantry", message)
         self.assertIn("Add items manually", message)
         self.assertIn("Scan product into Pantry", message)
+        self.assertIn("Get meal ideas", message)
         self.assertIn("Remove pantry item", message)
         self.assertIn("Clear pantry", message)
         self.assertIn(
@@ -34,6 +35,145 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn(
             ["Scan product into Pantry"],
             keyboard["keyboard"],
+        )
+        self.assertIn(
+            ["Get meal ideas"],
+            keyboard["keyboard"],
+        )
+
+    def test_pantry_meal_idea_action_asks_for_meal_type(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "list_pantry_items",
+                return_value=[{"display_name": "Chicken breast"}],
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Get meal ideas",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_meal_type",
+        )
+        self.assertIn(
+            "What meal do you want Pantry ideas for?",
+            send.call_args.args[0],
+        )
+
+    def test_pantry_meal_type_generates_lunch_ideas(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_meal_type",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "show_pantry_meal_ideas",
+                return_value=True,
+            ) as show,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Lunch",
+                }
+            })
+
+        show.assert_called_once_with(
+            chat_id=123,
+            meal_type="lunch",
+        )
+
+    def test_confirmed_pantry_meal_logs_estimated_entry(self) -> None:
+        meal_idea = {
+            "name": "Chicken Pepper Bowl",
+            "calories": 450,
+            "protein_g": 42,
+            "carbohydrates_g": 40,
+            "fat_g": 13,
+            "fiber_g": 8,
+            "sugar_g": 6,
+            "sodium_mg": 520,
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_meal_log_confirmation",
+            "known_data": {
+                "pantry_meal_type": "dinner",
+                "pantry_meal_ideas": [meal_idea],
+                "pantry_meal_selected_index": 0,
+                "pantry_meal_servings": 1.5,
+            },
+        }
+        created = {"food": {"food_id": 88}}
+        logged = {"calories": 675, "protein_g": 63}
+
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "add_food_with_nutrition",
+                return_value=created,
+            ) as add_food,
+            patch.object(
+                app,
+                "add_food_entry",
+                return_value=logged,
+            ) as add_entry,
+            patch.object(app, "sync_food_ledger_totals_to_sheet"),
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Log Meal",
+                }
+            })
+
+        self.assertEqual(
+            add_food.call_args.kwargs["verification_status"],
+            "estimated",
+        )
+        self.assertEqual(
+            add_food.call_args.kwargs["verification_source"],
+            "pantry_meal_idea",
+        )
+        self.assertEqual(add_entry.call_args.kwargs["quantity"], 1.5)
+        self.assertTrue(
+            add_entry.call_args.kwargs["quantity_is_estimated"]
+        )
+        self.assertTrue(add_entry.call_args.kwargs["user_confirmed"])
+        self.assertIn(
+            "Estimated Pantry meal logged.",
+            send.call_args.args[0],
         )
 
     def test_barcode_product_offers_add_to_pantry(self) -> None:
