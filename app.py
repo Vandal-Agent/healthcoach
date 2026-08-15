@@ -58,6 +58,8 @@ from food.menu_photo_advisor import (
     format_food_photo_estimate,
     format_menu_photo_analysis,
     is_food_photo_request,
+    midpoint_food_photo_nutrition,
+    refine_food_photo_estimate,
 )
 from food.restaurant_advisor import recommend_restaurant_entrees
 from food.resolver import resolve_food
@@ -309,6 +311,36 @@ def menu_reply_markup(message):
         rows = [
             ["Enter package label nutrition"],
             ["Different description", "Save for later"],
+            ["Cancel"],
+        ]
+        one_time = True
+    elif (
+        "Tell me any details that would improve this estimate."
+        in message
+    ):
+        rows = [["Skip details"], ["Cancel"]]
+        one_time = True
+    elif "How much of the pictured food did you eat?" in message:
+        rows = [
+            ["All of it", "About 3/4"],
+            ["About half", "Cancel"],
+        ]
+        one_time = True
+    elif (
+        "Which meal should this estimate be logged under?"
+        in message
+    ):
+        rows = [
+            ["Before breakfast", "Breakfast"],
+            ["Morning snack", "Lunch"],
+            ["Afternoon snack", "Dinner"],
+            ["Dessert"],
+            ["Cancel"],
+        ]
+        one_time = True
+    elif "Log this estimated meal?" in message:
+        rows = [
+            ["Log Estimate", "Change details"],
             ["Cancel"],
         ]
         one_time = True
@@ -2967,6 +2999,324 @@ def format_edit_food_action(entry: dict) -> str:
     )
 
 
+def handle_food_photo_conversation(
+    *,
+    active_conversation: dict,
+    text: str,
+    chat_id: int | str,
+) -> bool:
+    current_step = active_conversation.get("current_step")
+    known_data = dict(
+        active_conversation.get("known_data") or {}
+    )
+    lowered = text.lower().strip()
+
+    if lowered in {"cancel", "exit", "quit", "close"}:
+        cancel_conversation(chat_id)
+        send_telegram_msg(
+            "Meal-photo estimate cancelled. Nothing was logged.",
+            chat_id=chat_id,
+            remove_keyboard=True,
+        )
+        return True
+
+    if current_step == "clarification":
+        estimate = dict(known_data.get("estimate") or {})
+
+        if lowered not in {
+            "skip",
+            "skip details",
+            "no details",
+        }:
+            send_telegram_msg(
+                "Thanks. I'm refining the estimate with those "
+                "details.",
+                chat_id=chat_id,
+            )
+
+            try:
+                estimate = refine_food_photo_estimate(
+                    estimate,
+                    user_details=text,
+                )
+            except Exception:
+                logging.exception(
+                    "Food-photo estimate refinement failed"
+                )
+                send_telegram_msg(
+                    "I couldn't refine the estimate from that "
+                    "description. Try different details, reply "
+                    "Skip details, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return True
+
+        update_conversation(
+            chat_id=chat_id,
+            current_step="portion",
+            known_data={
+                "estimate": estimate,
+                "clarification": (
+                    None
+                    if lowered in {
+                        "skip",
+                        "skip details",
+                        "no details",
+                    }
+                    else text
+                ),
+            },
+            missing_fields=[],
+        )
+
+        send_telegram_msg(
+            format_food_photo_estimate(estimate)
+            + "\n\n"
+            "How much of the pictured food did you eat?\n"
+            "1. All of it\n"
+            "2. About 3/4\n"
+            "3. About half\n"
+            "4. Cancel",
+            chat_id=chat_id,
+        )
+        return True
+
+    if current_step == "portion":
+        portions = {
+            "1": 1.0,
+            "all": 1.0,
+            "all of it": 1.0,
+            "2": 0.75,
+            "3/4": 0.75,
+            "75%": 0.75,
+            "about 3/4": 0.75,
+            "3": 0.5,
+            "half": 0.5,
+            "1/2": 0.5,
+            "50%": 0.5,
+            "about half": 0.5,
+        }
+
+        portion_fraction = portions.get(lowered)
+
+        if portion_fraction is None:
+            send_telegram_msg(
+                "Please choose All of it, About 3/4, "
+                "About half, or Cancel.",
+                chat_id=chat_id,
+            )
+            return True
+
+        update_conversation(
+            chat_id=chat_id,
+            current_step="meal",
+            known_data={
+                "portion_fraction": portion_fraction,
+            },
+            missing_fields=[],
+        )
+
+        send_telegram_msg(
+            "Which meal should this estimate be logged under?\n\n"
+            "Before breakfast\n"
+            "Breakfast\n"
+            "Morning snack\n"
+            "Lunch\n"
+            "Afternoon snack\n"
+            "Dinner\n"
+            "Dessert",
+            chat_id=chat_id,
+        )
+        return True
+
+    if current_step == "meal":
+        meal_aliases = {
+            "before breakfast": "before breakfast",
+            "breakfast": "breakfast",
+            "morning snack": "school snack",
+            "school snack": "school snack",
+            "lunch": "lunch",
+            "afternoon snack": "afternoon snack",
+            "dinner": "dinner",
+            "dessert": "dessert",
+        }
+
+        meal_category = meal_aliases.get(lowered)
+
+        if meal_category is None:
+            send_telegram_msg(
+                "Please choose one of the displayed meal options.",
+                chat_id=chat_id,
+            )
+            return True
+
+        estimate = dict(known_data.get("estimate") or {})
+        portion_fraction = float(
+            known_data.get("portion_fraction") or 1.0
+        )
+
+        nutrition = midpoint_food_photo_nutrition(
+            estimate,
+            portion_fraction=portion_fraction,
+        )
+
+        dish_name = str(
+            estimate.get("dish_name")
+            or "Photo-estimated meal"
+        ).strip()
+
+        update_conversation(
+            chat_id=chat_id,
+            current_step="confirm",
+            known_data={
+                "meal_category": meal_category,
+                "nutrition": nutrition,
+                "dish_name": dish_name,
+            },
+            missing_fields=[],
+        )
+
+        send_telegram_msg(
+            "Log this estimated meal?\n\n"
+            f"Food: {dish_name}\n"
+            f"Meal: {meal_category.title()}\n"
+            f"Amount eaten: "
+            f"{format_display_number(portion_fraction * 100, decimals=0)}%\n\n"
+            "Estimated midpoint nutrition:\n"
+            f"Calories: {format_display_number(nutrition['calories'], decimals=0)}\n"
+            f"Protein: {format_display_number(nutrition['protein_g'])} g\n"
+            f"Carbohydrates: "
+            f"{format_display_number(nutrition['carbohydrates_g'])} g\n"
+            f"Fat: {format_display_number(nutrition['fat_g'])} g\n\n"
+            "This will be logged as a visual estimate.\n\n"
+            "1. Log Estimate\n"
+            "2. Change details\n"
+            "3. Cancel",
+            chat_id=chat_id,
+        )
+        return True
+
+    if current_step == "confirm":
+        if lowered in {
+            "2",
+            "change",
+            "change details",
+            "edit",
+        }:
+            update_conversation(
+                chat_id=chat_id,
+                current_step="clarification",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Tell me any details that would improve this "
+                "estimate. Include the meat or protein, cooking "
+                "method, and any oil, sauce, or dressing.\n\n"
+                "Reply with details, Skip details, or Cancel.",
+                chat_id=chat_id,
+            )
+            return True
+
+        if lowered not in {
+            "1",
+            "yes",
+            "log",
+            "log estimate",
+        }:
+            send_telegram_msg(
+                "Please choose Log Estimate, Change details, "
+                "or Cancel.",
+                chat_id=chat_id,
+            )
+            return True
+
+        nutrition = dict(known_data.get("nutrition") or {})
+        estimate = dict(known_data.get("estimate") or {})
+        dish_name = str(
+            known_data.get("dish_name")
+            or "Photo-estimated meal"
+        ).strip()
+        meal_category = str(
+            known_data.get("meal_category") or ""
+        ).strip()
+
+        timestamp = datetime.now(PACIFIC_TZ).isoformat(
+            timespec="seconds"
+        )
+
+        try:
+            created = add_food_with_nutrition(
+                canonical_name=dish_name,
+                serving_description=(
+                    f"1 visual estimate {timestamp}"
+                ),
+                serving_amount=1.0,
+                serving_unit="estimated meal",
+                verification_status="estimated",
+                verification_source="visual_estimate",
+                calories=nutrition["calories"],
+                protein_g=nutrition["protein_g"],
+                carbohydrates_g=nutrition[
+                    "carbohydrates_g"
+                ],
+                fat_g=nutrition["fat_g"],
+                fiber_g=None,
+                sugar_g=None,
+                sodium_mg=None,
+                food_type="meal",
+            )
+
+            entry = add_food_entry(
+                entry_date=datetime.now(PACIFIC_TZ).date(),
+                meal_category=meal_category,
+                food_id=int(created["food"]["food_id"]),
+                quantity=1.0,
+                logging_source="telegram_ai",
+                original_text=(
+                    active_conversation.get("original_message")
+                    or "Food photo"
+                ),
+                quantity_is_estimated=True,
+                user_confirmed=True,
+            )
+        except Exception:
+            logging.exception(
+                "Food-photo estimated meal logging failed"
+            )
+            send_telegram_msg(
+                "I couldn't log that estimate safely. Nothing "
+                "was added to today's food log.",
+                chat_id=chat_id,
+            )
+            return True
+
+        complete_conversation(chat_id)
+
+        send_telegram_msg(
+            "Estimated meal logged.\n\n"
+            f"Food: {dish_name}\n"
+            f"Meal: {meal_category.title()}\n"
+            f"Calories: "
+            f"{format_display_number(float(entry['calories'] or 0), decimals=0)}\n"
+            f"Protein: "
+            f"{format_display_number(float(entry['protein_g'] or 0))} g\n\n"
+            "This entry is marked as a visual estimate.",
+            chat_id=chat_id,
+            remove_keyboard=True,
+        )
+        return True
+
+    cancel_conversation(chat_id)
+    send_telegram_msg(
+        "That meal-photo estimate expired. Please send the "
+        "photo again.",
+        chat_id=chat_id,
+        remove_keyboard=True,
+    )
+    return True
+
+
 def process_telegram_update(update):
     message = update.get("message") or update.get("edited_message") or {}
     if not message:
@@ -3021,8 +3371,28 @@ def process_telegram_update(update):
                     mime_type=mime_type,
                     user_context=caption,
                 )
-                response_message = format_food_photo_estimate(
-                    result
+
+                start_conversation(
+                    chat_id=chat_id,
+                    conversation_type="food_photo_estimate",
+                    current_step="clarification",
+                    known_data={
+                        "estimate": result,
+                        "photo_caption": caption,
+                    },
+                    missing_fields=[],
+                    original_message=caption or "Food photo",
+                )
+
+                response_message = (
+                    format_food_photo_estimate(result)
+                    + "\n\n"
+                    "Tell me any details that would improve this "
+                    "estimate. The most useful details are:\n"
+                    "- Type of meat or protein\n"
+                    "- Grilled, fried, breaded, or another method\n"
+                    "- Added oil, sauce, or dressing\n\n"
+                    "Reply with the details, Skip details, or Cancel."
                 )
             else:
                 result = analyze_menu_photo(
@@ -3112,6 +3482,18 @@ def process_telegram_update(update):
         return
 
     active_conversation = get_active_conversation(chat_id)
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "food_photo_estimate"
+    ):
+        if handle_food_photo_conversation(
+            active_conversation=active_conversation,
+            text=text,
+            chat_id=chat_id,
+        ):
+            return
 
     if (
         active_conversation

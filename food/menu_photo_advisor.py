@@ -435,3 +435,132 @@ def format_food_photo_estimate(
     )
 
     return "\n".join(lines).strip()
+
+
+def refine_food_photo_estimate(
+    initial_result: dict[str, Any],
+    *,
+    user_details: str,
+) -> dict[str, Any]:
+    details = str(user_details or "").strip()
+
+    if not details:
+        return dict(initial_result)
+
+    prompt = f"""
+Refine a HealthCoach visual meal estimate using new information
+provided by the user.
+
+Initial visual estimate:
+{initial_result}
+
+New user details:
+{details}
+
+Rules:
+1. Treat the user's explicit details as more reliable than visual
+   guesses.
+2. Return revised ranges for calories, protein, carbohydrates, and fat.
+3. Keep uncertainty where portion weight, oil, sauce, or preparation
+   remains unknown.
+4. The low value must never exceed the high value.
+5. Do not claim verified or exact nutrition.
+6. Preserve useful visible components and update assumptions.
+7. Set readable=true because this refines an existing readable result.
+"""
+
+    client = get_client()
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=FoodPhotoEstimate,
+            ),
+        )
+    finally:
+        client.close()
+
+    if response.parsed is not None:
+        result = (
+            response.parsed
+            if isinstance(response.parsed, FoodPhotoEstimate)
+            else FoodPhotoEstimate.model_validate(
+                response.parsed
+            )
+        )
+    elif response.text:
+        result = FoodPhotoEstimate.model_validate_json(
+            response.text
+        )
+    else:
+        raise RuntimeError(
+            "Gemini returned no refined food-photo estimate."
+        )
+
+    ranges = [
+        ("calories", result.calories_low, result.calories_high),
+        ("protein", result.protein_low, result.protein_high),
+        (
+            "carbohydrates",
+            result.carbohydrates_low,
+            result.carbohydrates_high,
+        ),
+        ("fat", result.fat_low, result.fat_high),
+    ]
+
+    for name, low, high in ranges:
+        if low is None or high is None:
+            raise ValueError(
+                f"Refined estimate omitted the {name} range."
+            )
+
+        if low > high:
+            raise ValueError(
+                f"Refined estimate returned an invalid {name} range."
+            )
+
+    return result.model_dump()
+
+
+def midpoint_food_photo_nutrition(
+    result: dict[str, Any],
+    *,
+    portion_fraction: float = 1.0,
+) -> dict[str, float | None]:
+    fraction = float(portion_fraction)
+
+    if fraction <= 0 or fraction > 1:
+        raise ValueError(
+            "portion_fraction must be greater than zero and at most one."
+        )
+
+    def midpoint(low_key: str, high_key: str) -> float:
+        low = float(result[low_key])
+        high = float(result[high_key])
+        return round(((low + high) / 2.0) * fraction, 2)
+
+    return {
+        "calories": midpoint(
+            "calories_low",
+            "calories_high",
+        ),
+        "protein_g": midpoint(
+            "protein_low",
+            "protein_high",
+        ),
+        "carbohydrates_g": midpoint(
+            "carbohydrates_low",
+            "carbohydrates_high",
+        ),
+        "fat_g": midpoint(
+            "fat_low",
+            "fat_high",
+        ),
+        "fiber_g": None,
+        "sugar_g": None,
+        "sodium_mg": None,
+    }
