@@ -194,6 +194,97 @@ def format_menu_photo_analysis(result: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+class BarcodePhotoRead(BaseModel):
+    readable: bool
+    barcode: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+def read_barcode_photo(
+    image_bytes: bytes,
+    *,
+    mime_type: str,
+) -> dict[str, Any]:
+    """
+    Read the printed digits beneath a product barcode.
+
+    The extracted number is accepted only when it passes the
+    barcode length and checksum validation used by the USDA lookup.
+    """
+    if not image_bytes:
+        raise ValueError("image_bytes is required.")
+    if mime_type not in ALLOWED_IMAGE_TYPES:
+        raise ValueError("Unsupported barcode photo type.")
+
+    prompt = """
+Read the product barcode in this photo for HealthCoach.
+
+Rules:
+1. Read the digits printed directly beneath the barcode bars.
+2. Preserve every digit, including small digits at either edge.
+3. Preserve leading zeroes.
+4. Return only one barcode.
+5. Do not guess digits that are blurry, hidden, or cut off.
+6. Set readable=false and barcode=null if the complete number
+   cannot be read confidently.
+7. The expected code is GTIN-8, UPC-A, EAN-13, or GTIN-14.
+8. Briefly explain any readability problem in notes.
+"""
+
+    client = get_client()
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[
+                prompt,
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=mime_type,
+                ),
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=BarcodePhotoRead,
+            ),
+        )
+    finally:
+        client.close()
+
+    if response.parsed is not None:
+        result = (
+            response.parsed
+            if isinstance(response.parsed, BarcodePhotoRead)
+            else BarcodePhotoRead.model_validate(response.parsed)
+        )
+    elif response.text:
+        result = BarcodePhotoRead.model_validate_json(
+            response.text
+        )
+    else:
+        raise RuntimeError(
+            "Gemini returned no barcode-photo result."
+        )
+
+    if not result.readable or not result.barcode:
+        result.readable = False
+        result.barcode = None
+        return result.model_dump()
+
+    from food.usda_provider import normalize_barcode
+
+    try:
+        result.barcode = normalize_barcode(result.barcode)
+    except ValueError:
+        result.readable = False
+        result.barcode = None
+        result.notes.append(
+            "The visible number did not pass barcode validation."
+        )
+
+    return result.model_dump()
+
+
 class FoodPhotoEstimate(BaseModel):
     readable: bool
     dish_name: str | None = None
