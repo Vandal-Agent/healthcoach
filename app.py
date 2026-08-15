@@ -51,6 +51,14 @@ from food.ledger import (
     save_food_favorite_from_entry,
     update_food_entry,
 )
+from food.pantry import (
+    add_pantry_item,
+    add_pantry_items,
+    clear_pantry,
+    list_pantry_items,
+    parse_pantry_item_list,
+    remove_pantry_item,
+)
 from food.nutrition_provider import lookup_official_nutrition
 from food.menu_photo_advisor import (
     analyze_food_photo,
@@ -370,6 +378,7 @@ def menu_reply_markup(message):
             "Choose a favorite to remove:",
             "Choose a saved food to view:",
             "Choose a saved food to edit:",
+            "Choose a Pantry item to remove:",
         )
     ):
         choices = re.findall(r"(?m)^(\d+)\. ", message)
@@ -422,6 +431,9 @@ def menu_reply_markup(message):
             "Remove this favorite?",
             "Save this saved food?",
             "Save these nutrition changes?",
+            "Add these items to My Pantry?",
+            "Remove this Pantry item?",
+            "Clear My Pantry?",
         )
     ):
         rows = [["Yes", "No"]]
@@ -484,7 +496,8 @@ def menu_reply_markup(message):
         one_time = True
     elif "Barcode Product\n\n" in message:
         rows = [
-            ["Save Product", "Log It"],
+            ["Add to Pantry", "Log It"],
+            ["Save Product"],
             ["Scan Another"],
             ["Back", "Cancel"],
         ]
@@ -508,10 +521,19 @@ def menu_reply_markup(message):
             ["Log food", "Show today"],
             ["Edit today", "Undo last"],
             ["Favorites", "Saved foods"],
+            ["My Pantry"],
             ["Photo tools", "Restaurant"],
             ["Update unknown foods"],
             ["Back", "Cancel"],
         ]
+    elif "My Pantry Menu\n\n" in message:
+        rows = [
+            ["View pantry", "Add pantry items"],
+            ["Remove pantry item", "Clear pantry"],
+            ["Back", "Cancel"],
+        ]
+    elif "My Pantry\n\n" in message:
+        rows = [["Back", "Cancel"]]
     elif "Health Menu\n\n" in message:
         rows = [
             ["Current status", "Record sleep"],
@@ -2725,12 +2747,13 @@ def healthcoach_food_menu_text() -> str:
         "4. Undo last food\n\n"
         "MY FOODS\n"
         "5. Favorites\n"
-        "6. Saved foods\n\n"
+        "6. Saved foods\n"
+        "7. My Pantry\n\n"
         "TOOLS\n"
-        "7. Photo tools\n"
-        "8. Restaurant\n"
-        "9. Update unknown foods\n"
-        "10. Back"
+        "8. Photo tools\n"
+        "9. Restaurant\n"
+        "10. Update unknown foods\n"
+        "11. Back"
     )
 
 
@@ -2969,8 +2992,8 @@ def format_barcode_product(
         ),
         "",
         (
-            "Reply Save Product, Log It, Scan Another, "
-            "Back, or Cancel."
+            "Reply Add to Pantry, Save Product, Log It, "
+            "Scan Another, Back, or Cancel."
         ),
     ])
 
@@ -2985,6 +3008,56 @@ def healthcoach_saved_foods_menu_text() -> str:
         "3. Edit saved food\n"
         "4. Back"
     )
+
+
+def healthcoach_pantry_menu_text() -> str:
+    return (
+        "My Pantry Menu\n\n"
+        "1. View pantry\n"
+        "2. Add pantry items\n"
+        "3. Remove pantry item\n"
+        "4. Clear pantry\n"
+        "5. Back\n\n"
+        "Pantry items stay available until you remove or clear "
+        "them. Quantities are not tracked."
+    )
+
+
+def format_pantry_items(items: list[dict]) -> str:
+    if not items:
+        return (
+            "My Pantry\n\n"
+            "Your Pantry is empty.\n\n"
+            "Reply Back to return or Cancel to close."
+        )
+
+    lines = ["My Pantry", ""]
+    for index, item in enumerate(items, start=1):
+        name = str(item.get("display_name") or "Pantry item")
+        source_note = (
+            " — scanned product"
+            if item.get("source") == "barcode"
+            else ""
+        )
+        lines.append(f"{index}. {name}{source_note}")
+
+    lines.extend([
+        "",
+        "These items are remembered as available; quantities are not tracked.",
+        "",
+        "Reply Back to return or Cancel to close.",
+    ])
+    return "\n".join(lines)
+
+
+def format_pantry_remove_choices(items: list[dict]) -> str:
+    lines = ["Choose a Pantry item to remove:", ""]
+    for index, item in enumerate(items, start=1):
+        lines.append(
+            f"{index}. {item.get('display_name') or 'Pantry item'}"
+        )
+    lines.extend(["", "Reply Back to return."])
+    return "\n".join(lines)
 
 
 def format_saved_food_choices(foods: list[dict]) -> str:
@@ -4201,6 +4274,23 @@ def process_telegram_update(update):
 
             if lowered in {
                 "7",
+                "my pantry",
+                "pantry",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "8",
                 "photo",
                 "photo tools",
             }:
@@ -4217,7 +4307,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "restaurant",
                 "restaurant choices",
             }:
@@ -4234,7 +4324,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "9",
+                "10",
                 "unknown",
                 "update unknown foods",
             }:
@@ -4251,7 +4341,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"10", "back"}:
+            if lowered in {"11", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -4266,6 +4356,389 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry":
+            if lowered in {"1", "view", "view pantry"}:
+                items = list_pantry_items()
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_view",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_items(items),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "2",
+                "add",
+                "add pantry items",
+                "add items",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_add_items",
+                    known_data={"pantry_pending_names": []},
+                    missing_fields=["pantry_items"],
+                )
+                send_telegram_msg(
+                    "Send the Pantry items as a comma-separated list.\n\n"
+                    "Example: chicken breast, romaine, tomatoes, "
+                    "rice, black beans\n\n"
+                    "Quantities are not needed.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {
+                "3",
+                "remove",
+                "remove pantry item",
+            }:
+                items = list_pantry_items()
+                if not items:
+                    send_telegram_msg(
+                        "Your Pantry is empty. Nothing can be removed.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_remove_select",
+                    known_data={
+                        "pantry_item_ids": [
+                            int(item["pantry_item_id"])
+                            for item in items
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_remove_choices(items),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "4",
+                "clear",
+                "clear pantry",
+            }:
+                items = list_pantry_items()
+                if not items:
+                    send_telegram_msg(
+                        "Your Pantry is already empty.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_clear_confirmation",
+                    known_data={
+                        "pantry_clear_count": len(items),
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Clear My Pantry?\n\n"
+                    f"This will remove all {len(items)} available "
+                    "items. Saved Foods and food logs will not change.\n\n"
+                    "1. Yes\n"
+                    "2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"5", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_pantry_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_view":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                format_pantry_items(list_pantry_items()),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_add_items":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                names = parse_pantry_item_list(text)
+            except ValueError as error:
+                send_telegram_msg(str(error), chat_id=chat_id)
+                return
+
+            if not names:
+                send_telegram_msg(
+                    "Send at least one Pantry item. Separate multiple "
+                    "items with commas or put each one on a new line.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_add_confirmation",
+                known_data={"pantry_pending_names": names},
+                missing_fields=[],
+            )
+            item_lines = "\n".join(
+                f"- {name}" for name in names
+            )
+            send_telegram_msg(
+                "Add these items to My Pantry?\n\n"
+                f"{item_lines}\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_add_confirmation":
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={"pantry_pending_names": []},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "No Pantry items were added.\n\n"
+                    + healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "yes", "add"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+
+            names = list(
+                known_data.get("pantry_pending_names") or []
+            )
+            try:
+                result = add_pantry_items(names)
+            except Exception:
+                logging.exception("Could not add Pantry items")
+                send_telegram_msg(
+                    "I couldn't add those Pantry items. Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+
+            created_count = len(result["created"])
+            existing_count = len(result["existing"])
+            summary = f"Added {created_count} item(s) to My Pantry."
+            if existing_count:
+                summary += (
+                    f" {existing_count} item(s) were already there."
+                )
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry",
+                known_data={"pantry_pending_names": []},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                summary + "\n\n" + healthcoach_pantry_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_remove_select":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            pantry_ids = list(
+                known_data.get("pantry_item_ids") or []
+            )
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+
+            if selection < 1 or selection > len(pantry_ids):
+                send_telegram_msg(
+                    "Choose one of the numbered Pantry items, or reply Back.",
+                    chat_id=chat_id,
+                )
+                return
+
+            pantry_item_id = int(pantry_ids[selection - 1])
+            selected = next(
+                (
+                    item for item in list_pantry_items()
+                    if int(item["pantry_item_id"]) == pantry_item_id
+                ),
+                None,
+            )
+            if selected is None:
+                send_telegram_msg(
+                    "That Pantry item is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_remove_confirmation",
+                known_data={
+                    "pantry_remove_id": pantry_item_id,
+                    "pantry_remove_name": selected["display_name"],
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Remove this Pantry item?\n\n"
+                f"{selected['display_name']}\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_remove_confirmation":
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Nothing was removed.\n\n"
+                    + healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "yes", "remove"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+
+            pantry_item_id = int(
+                known_data.get("pantry_remove_id") or 0
+            )
+            name = str(
+                known_data.get("pantry_remove_name")
+                or "Pantry item"
+            )
+            removed = remove_pantry_item(pantry_item_id)
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry",
+                known_data={},
+                missing_fields=[],
+            )
+            message = (
+                f"Removed {name} from My Pantry."
+                if removed
+                else "That Pantry item was already removed."
+            )
+            send_telegram_msg(
+                message + "\n\n" + healthcoach_pantry_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_clear_confirmation":
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "My Pantry was not cleared.\n\n"
+                    + healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "yes", "clear"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+
+            removed_count = clear_pantry()
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                f"Cleared {removed_count} item(s) from My Pantry.\n\n"
+                + healthcoach_pantry_menu_text(),
                 chat_id=chat_id,
             )
             return
@@ -4672,6 +5145,66 @@ def process_telegram_update(update):
             barcode_saved = bool(
                 known_data.get("barcode_saved")
             )
+
+            if lowered in {
+                "add to pantry",
+                "add pantry",
+                "pantry",
+            }:
+                try:
+                    saved = save_barcode_product_result(
+                        result,
+                        barcode=barcode,
+                    )
+                    product = dict(result.get("food") or {})
+                    pantry_item = add_pantry_item(
+                        display_name=str(
+                            product.get("canonical_name")
+                            or "Scanned product"
+                        ),
+                        food_id=int(saved["food"]["food_id"]),
+                        source="barcode",
+                        barcode_text=barcode,
+                    )
+                except Exception:
+                    logging.exception(
+                        "Could not add barcode product to Pantry"
+                    )
+                    send_telegram_msg(
+                        "I couldn't add that scanned product to "
+                        "My Pantry. Nothing was changed.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="barcode_result",
+                    known_data={
+                        **known_data,
+                        "barcode_saved": True,
+                        "barcode_food_id": int(
+                            saved["food"]["food_id"]
+                        ),
+                    },
+                    missing_fields=[],
+                )
+                pantry_message = (
+                    "Added this scanned product to My Pantry."
+                    if pantry_item.get("created")
+                    else "This product is already in My Pantry."
+                )
+                send_telegram_msg(
+                    pantry_message
+                    + "\n\n"
+                    + format_barcode_product(
+                        result,
+                        barcode=barcode,
+                        saved=True,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
 
             if lowered in {
                 "1",

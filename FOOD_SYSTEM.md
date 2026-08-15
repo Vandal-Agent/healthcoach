@@ -271,11 +271,36 @@ learn the product from its package:
 - Previously logged Food entries retain their original nutrition
   snapshots.
 
+---
+
+# My Pantry
+
+My Pantry is a separate presence-only list under the Telegram Food menu.
+It does not treat every Saved Food as currently available.
+
+Supported foundation workflow:
+
+- View the foods currently available at home.
+- Add up to 30 items at once using a comma-separated or line-separated
+  natural-language list.
+- Add a confirmed barcode product using the Add to Pantry button.
+- Remove one Pantry item without deleting its Saved Food or Food Ledger
+  history.
+- Clear the entire Pantry only after explicit confirmation.
+- Keep Pantry items available until the user removes or clears them.
+- Avoid quantity and depletion tracking in this version.
+
+Manual items may be fresh ingredients without nutrition records. Scanned
+items retain a link to their Saved Food and active verified nutrition so a
+future meal-idea engine can use stronger nutrition data when it is available.
+
+Duplicate names are matched case-insensitively and are not added twice.
+
 
 # Future Features
 
 - Voice logging
-- Recipe builder
+- Pantry meal ideas and Saved Recipes
 - Same as yesterday
 - Restaurant history
 - Grocery suggestions

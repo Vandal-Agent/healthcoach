@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 5
+SCHEMA_VERSION: Final[int] = 6
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -447,6 +447,34 @@ def create_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_barcode_mappings_food_id
             ON barcode_mappings (food_id);
 
+        CREATE TABLE IF NOT EXISTS pantry_items (
+            pantry_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            food_id INTEGER,
+            source TEXT NOT NULL
+                CHECK (
+                    source IN (
+                        'manual',
+                        'barcode',
+                        'saved_food'
+                    )
+                ),
+            barcode_text TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_food_id
+            ON pantry_items (food_id);
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_display_name
+            ON pantry_items (display_name);
+
         CREATE INDEX IF NOT EXISTS idx_food_entries_date
             ON food_entries (entry_date);
 
@@ -525,8 +553,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=5,
         description="Add persistent barcode mappings",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add persistent Pantry items",
     )
 
 
@@ -665,6 +699,43 @@ def create_barcode_mapping_schema(
 
         CREATE INDEX IF NOT EXISTS idx_barcode_mappings_food_id
             ON barcode_mappings (food_id);
+        """
+    )
+
+
+def create_pantry_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create the persistent presence-only Pantry list."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS pantry_items (
+            pantry_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            food_id INTEGER,
+            source TEXT NOT NULL
+                CHECK (
+                    source IN (
+                        'manual',
+                        'barcode',
+                        'saved_food'
+                    )
+                ),
+            barcode_text TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_food_id
+            ON pantry_items (food_id);
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_display_name
+            ON pantry_items (display_name);
         """
     )
 
@@ -822,6 +893,19 @@ def migrate_version_4_to_5(
     )
 
 
+def migrate_version_5_to_6(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add the persistent presence-only Pantry list."""
+    create_pantry_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=6,
+        description="Add persistent Pantry items",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -848,6 +932,10 @@ def apply_migrations(
         migrate_version_4_to_5(connection)
         version = 5
 
+    if version < 6:
+        migrate_version_5_to_6(connection)
+        version = 6
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -859,6 +947,7 @@ def apply_migrations(
     create_unresolved_food_schema(connection)
     create_food_favorites_schema(connection)
     create_barcode_mapping_schema(connection)
+    create_pantry_schema(connection)
 
 
 def validate_database(
@@ -894,6 +983,7 @@ def validate_database(
         "unresolved_foods",
         "food_favorites",
         "barcode_mappings",
+        "pantry_items",
     }
 
     actual_tables = {

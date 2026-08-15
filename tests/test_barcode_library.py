@@ -80,7 +80,10 @@ class BarcodeLibraryTests(unittest.TestCase):
 
         result = database.initialize_database()
 
-        self.assertEqual(result["schema_version"]["version"], 5)
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
         self.assertIn("barcode_mappings", result["tables"])
 
     def test_equivalent_gtin_resolves_saved_food(self) -> None:
