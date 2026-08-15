@@ -23,11 +23,16 @@ class PantryMenuTests(unittest.TestCase):
         keyboard = app.menu_reply_markup(message)
 
         self.assertIn("View pantry", message)
-        self.assertIn("Add pantry items", message)
+        self.assertIn("Add items manually", message)
+        self.assertIn("Scan product into Pantry", message)
         self.assertIn("Remove pantry item", message)
         self.assertIn("Clear pantry", message)
         self.assertIn(
-            ["View pantry", "Add pantry items"],
+            ["View pantry", "Add items manually"],
+            keyboard["keyboard"],
+        )
+        self.assertIn(
+            ["Scan product into Pantry"],
             keyboard["keyboard"],
         )
 
@@ -112,6 +117,7 @@ class PantryMenuTests(unittest.TestCase):
                 "barcode": "036000291452",
                 "barcode_result": result,
                 "barcode_saved": False,
+                "pantry_scan_mode": True,
             },
         }
         with (
@@ -130,7 +136,7 @@ class PantryMenuTests(unittest.TestCase):
                 "add_pantry_item",
                 return_value={"created": True},
             ) as add_pantry,
-            patch.object(app, "update_conversation"),
+            patch.object(app, "update_conversation") as update,
             patch.object(app, "send_telegram_msg") as send,
         ):
             app.process_telegram_update({
@@ -151,6 +157,78 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn(
             "Added this scanned product to My Pantry.",
+            send.call_args.args[0],
+        )
+        self.assertIn(
+            "My Pantry Menu",
+            send.call_args.args[0],
+        )
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry",
+        )
+
+    def test_pantry_scan_action_waits_for_barcode_photo(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Scan product into Pantry",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "await_barcode_photo",
+        )
+        self.assertTrue(
+            update.call_args.kwargs["known_data"]["pantry_scan_mode"]
+        )
+        self.assertIn(
+            "Send a clear photo of a product barcode",
+            send.call_args.args[0],
+        )
+
+    def test_photo_in_manual_add_explains_correct_scan_path(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_add_items",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "photo": [{"file_id": "test-photo"}],
+                }
+            })
+
+        self.assertIn(
+            "accepts a typed list only",
+            send.call_args.args[0],
+        )
+        self.assertIn(
+            "Scan product into Pantry",
             send.call_args.args[0],
         )
 

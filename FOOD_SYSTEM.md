@@ -283,7 +283,8 @@ Supported foundation workflow:
 - View the foods currently available at home.
 - Add up to 30 items at once using a comma-separated or line-separated
   natural-language list.
-- Add a confirmed barcode product using the Add to Pantry button.
+- Select Scan product into Pantry before sending a barcode photo, then add
+  the confirmed product using the Add to Pantry button.
 - Remove one Pantry item without deleting its Saved Food or Food Ledger
   history.
 - Clear the entire Pantry only after explicit confirmation.

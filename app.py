@@ -528,7 +528,8 @@ def menu_reply_markup(message):
         ]
     elif "My Pantry Menu\n\n" in message:
         rows = [
-            ["View pantry", "Add pantry items"],
+            ["View pantry", "Add items manually"],
+            ["Scan product into Pantry"],
             ["Remove pantry item", "Clear pantry"],
             ["Back", "Cancel"],
         ]
@@ -3014,10 +3015,11 @@ def healthcoach_pantry_menu_text() -> str:
     return (
         "My Pantry Menu\n\n"
         "1. View pantry\n"
-        "2. Add pantry items\n"
-        "3. Remove pantry item\n"
-        "4. Clear pantry\n"
-        "5. Back\n\n"
+        "2. Add items manually\n"
+        "3. Scan product into Pantry\n"
+        "4. Remove pantry item\n"
+        "5. Clear pantry\n"
+        "6. Back\n\n"
         "Pantry items stay available until you remove or clear "
         "them. Quantities are not tracked."
     )
@@ -3752,6 +3754,15 @@ def process_telegram_update(update):
             )
             return
 
+        if photo_step == "pantry_add_items":
+            send_telegram_msg(
+                "This Pantry option accepts a typed list only.\n\n"
+                "Reply Back, then choose Scan product into Pantry "
+                "before sending a barcode photo.",
+                chat_id=chat_id,
+            )
+            return
+
         if label_photo:
             progress_message = (
                 "I'm reading the Nutrition Facts label. "
@@ -4380,6 +4391,7 @@ def process_telegram_update(update):
                 "add",
                 "add pantry items",
                 "add items",
+                "add items manually",
             }:
                 update_conversation(
                     chat_id=chat_id,
@@ -4399,6 +4411,29 @@ def process_telegram_update(update):
 
             if lowered in {
                 "3",
+                "scan product into pantry",
+                "scan into pantry",
+                "scan pantry item",
+                "scan product",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_barcode_photo",
+                    known_data={"pantry_scan_mode": True},
+                    missing_fields=["barcode_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of a product barcode to add "
+                    "to My Pantry.\n\n"
+                    "Keep the entire barcode and the small digits on "
+                    "both ends visible. You can also type the barcode "
+                    "number instead.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "4",
                 "remove",
                 "remove pantry item",
             }:
@@ -4428,7 +4463,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "4",
+                "5",
                 "clear",
                 "clear pantry",
             }:
@@ -4458,7 +4493,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"5", "back"}:
+            if lowered in {"6", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -4794,7 +4829,7 @@ def process_telegram_update(update):
                 update_conversation(
                     chat_id=chat_id,
                     current_step="await_barcode_photo",
-                    known_data={},
+                    known_data={"pantry_scan_mode": False},
                     missing_fields=["barcode_photo"],
                 )
                 send_telegram_msg(
@@ -4876,14 +4911,22 @@ def process_telegram_update(update):
                 return
 
             if lowered in {"3", "back"}:
+                if known_data.get("pantry_scan_mode"):
+                    destination_step = "pantry"
+                    destination_message = healthcoach_pantry_menu_text()
+                else:
+                    destination_step = "photo_tools"
+                    destination_message = (
+                        healthcoach_photo_tools_menu_text()
+                    )
                 update_conversation(
                     chat_id=chat_id,
-                    current_step="photo_tools",
+                    current_step=destination_step,
                     known_data={},
                     missing_fields=[],
                 )
                 send_telegram_msg(
-                    healthcoach_photo_tools_menu_text(),
+                    destination_message,
                     chat_id=chat_id,
                 )
                 return
@@ -5177,33 +5220,54 @@ def process_telegram_update(update):
                     )
                     return
 
-                update_conversation(
-                    chat_id=chat_id,
-                    current_step="barcode_result",
-                    known_data={
-                        **known_data,
-                        "barcode_saved": True,
-                        "barcode_food_id": int(
-                            saved["food"]["food_id"]
-                        ),
-                    },
-                    missing_fields=[],
-                )
                 pantry_message = (
                     "Added this scanned product to My Pantry."
                     if pantry_item.get("created")
                     else "This product is already in My Pantry."
                 )
-                send_telegram_msg(
-                    pantry_message
-                    + "\n\n"
-                    + format_barcode_product(
-                        result,
-                        barcode=barcode,
-                        saved=True,
-                    ),
-                    chat_id=chat_id,
-                )
+                if known_data.get("pantry_scan_mode"):
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="pantry",
+                        known_data={
+                            **known_data,
+                            "barcode_saved": True,
+                            "barcode_food_id": int(
+                                saved["food"]["food_id"]
+                            ),
+                            "pantry_scan_mode": False,
+                        },
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        pantry_message
+                        + "\n\n"
+                        + healthcoach_pantry_menu_text(),
+                        chat_id=chat_id,
+                    )
+                else:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="barcode_result",
+                        known_data={
+                            **known_data,
+                            "barcode_saved": True,
+                            "barcode_food_id": int(
+                                saved["food"]["food_id"]
+                            ),
+                        },
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        pantry_message
+                        + "\n\n"
+                        + format_barcode_product(
+                            result,
+                            barcode=barcode,
+                            saved=True,
+                        ),
+                        chat_id=chat_id,
+                    )
                 return
 
             if lowered in {
@@ -5310,14 +5374,22 @@ def process_telegram_update(update):
                 return
 
             if lowered == "back":
+                if known_data.get("pantry_scan_mode"):
+                    destination_step = "pantry"
+                    destination_message = healthcoach_pantry_menu_text()
+                else:
+                    destination_step = "photo_tools"
+                    destination_message = (
+                        healthcoach_photo_tools_menu_text()
+                    )
                 update_conversation(
                     chat_id=chat_id,
-                    current_step="photo_tools",
+                    current_step=destination_step,
                     known_data={},
                     missing_fields=[],
                 )
                 send_telegram_msg(
-                    healthcoach_photo_tools_menu_text(),
+                    destination_message,
                     chat_id=chat_id,
                 )
                 return
@@ -5524,14 +5596,22 @@ def process_telegram_update(update):
             "await_barcode_number",
         }:
             if lowered == "back":
+                if known_data.get("pantry_scan_mode"):
+                    destination_step = "pantry"
+                    destination_message = healthcoach_pantry_menu_text()
+                else:
+                    destination_step = "photo_tools"
+                    destination_message = (
+                        healthcoach_photo_tools_menu_text()
+                    )
                 update_conversation(
                     chat_id=chat_id,
-                    current_step="photo_tools",
+                    current_step=destination_step,
                     known_data={},
                     missing_fields=[],
                 )
                 send_telegram_msg(
-                    healthcoach_photo_tools_menu_text(),
+                    destination_message,
                     chat_id=chat_id,
                 )
                 return
