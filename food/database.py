@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 4
+SCHEMA_VERSION: Final[int] = 5
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -431,6 +431,22 @@ def create_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_food_aliases_food_id
             ON food_aliases (food_id);
 
+        CREATE TABLE IF NOT EXISTS barcode_mappings (
+            barcode_mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            barcode_key TEXT NOT NULL UNIQUE,
+            barcode_text TEXT NOT NULL,
+            food_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_barcode_mappings_food_id
+            ON barcode_mappings (food_id);
+
         CREATE INDEX IF NOT EXISTS idx_food_entries_date
             ON food_entries (entry_date);
 
@@ -503,8 +519,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=4,
         description="Add saved Food favorites",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add persistent barcode mappings",
     )
 
 
@@ -618,6 +640,31 @@ def create_food_favorites_schema(
 
         CREATE INDEX IF NOT EXISTS idx_food_favorites_food_id
             ON food_favorites (food_id);
+        """
+    )
+
+
+def create_barcode_mapping_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create persistent barcode-to-Food mappings."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS barcode_mappings (
+            barcode_mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            barcode_key TEXT NOT NULL UNIQUE,
+            barcode_text TEXT NOT NULL,
+            food_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_barcode_mappings_food_id
+            ON barcode_mappings (food_id);
         """
     )
 
@@ -762,6 +809,19 @@ def migrate_version_3_to_4(
     )
 
 
+def migrate_version_4_to_5(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add persistent barcode-to-Food mappings."""
+    create_barcode_mapping_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=5,
+        description="Add persistent barcode mappings",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -784,6 +844,10 @@ def apply_migrations(
         migrate_version_3_to_4(connection)
         version = 4
 
+    if version < 5:
+        migrate_version_4_to_5(connection)
+        version = 5
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -794,6 +858,7 @@ def apply_migrations(
     create_alias_schema(connection)
     create_unresolved_food_schema(connection)
     create_food_favorites_schema(connection)
+    create_barcode_mapping_schema(connection)
 
 
 def validate_database(
@@ -828,6 +893,7 @@ def validate_database(
         "food_aliases",
         "unresolved_foods",
         "food_favorites",
+        "barcode_mappings",
     }
 
     actual_tables = {

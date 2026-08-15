@@ -38,6 +38,7 @@ from food.library import (
     add_food_with_nutrition,
     add_user_nutrition_version,
     list_user_saved_foods,
+    save_barcode_mapping,
 )
 from food.ledger import (
     add_food_entry,
@@ -60,6 +61,7 @@ from food.menu_photo_advisor import (
     is_food_photo_request,
     midpoint_food_photo_nutrition,
     read_barcode_photo,
+    read_nutrition_label_photo,
     refine_food_photo_estimate,
 )
 from food.barcode_provider import lookup_barcode_nutrition
@@ -466,6 +468,20 @@ def menu_reply_markup(message):
             ["Back", "Cancel"],
         ]
         one_time = True
+    elif "Teach this barcode from the package label?" in message:
+        rows = [
+            ["Teach from label"],
+            ["Try another barcode"],
+            ["Back", "Cancel"],
+        ]
+        one_time = True
+    elif "Teach This Barcode\n\n" in message:
+        rows = [
+            ["Yes, save it"],
+            ["Retake label photo"],
+            ["Cancel"],
+        ]
+        one_time = True
     elif "Barcode Product\n\n" in message:
         rows = [
             ["Save Product", "Log It"],
@@ -483,6 +499,7 @@ def menu_reply_markup(message):
         "Send a clear restaurant menu photo." in message
         or "Send a clear photo of the actual meal." in message
         or "Send a clear photo of a product barcode." in message
+        or "Send a clear photo of the Nutrition Facts label." in message
         or "Type the barcode number printed beneath the bars." in message
     ):
         rows = [["Back", "Cancel"]]
@@ -2730,6 +2747,8 @@ def healthcoach_photo_tools_menu_text() -> str:
 
 def save_barcode_product_result(
     result: dict,
+    *,
+    barcode: str | None = None,
 ) -> dict:
     if not result.get("found"):
         raise ValueError(
@@ -2765,7 +2784,7 @@ def save_barcode_product_result(
             verification_source or "barcode"
         )
 
-    return add_food_with_nutrition(
+    saved = add_food_with_nutrition(
         canonical_name=str(
             food.get("canonical_name")
             or "Scanned product"
@@ -2802,6 +2821,92 @@ def save_barcode_product_result(
         source_url=verification.get("source_url"),
     )
 
+    if barcode:
+        save_barcode_mapping(
+            barcode=barcode,
+            food_id=int(saved["food"]["food_id"]),
+        )
+
+    return saved
+
+
+def build_taught_barcode_result(
+    *,
+    barcode: str,
+    product_name: str,
+    brand: str | None,
+    label: dict,
+) -> dict:
+    """Convert a user-confirmed label reading into a barcode result."""
+    return {
+        "found": True,
+        "provider": "user_package_label",
+        "food": {
+            "canonical_name": product_name.strip(),
+            "restaurant": None,
+            "brand": (brand or "").strip() or None,
+            "food_type": "food",
+            "serving_description": label["serving_description"],
+            "serving_amount": float(label["serving_amount"]),
+            "serving_unit": label["serving_unit"],
+        },
+        "nutrition": {
+            "calories": float(label["calories"]),
+            "protein_g": float(label["protein_g"]),
+            "carbohydrates_g": float(label["carbohydrates_g"]),
+            "fat_g": float(label["fat_g"]),
+            "fiber_g": float(label["fiber_g"]),
+            "sugar_g": float(label["sugar_g"]),
+            "sodium_mg": float(label["sodium_mg"]),
+        },
+        "verification": {
+            "status": "verified",
+            "source": "user_package_label",
+            "source_item_id": barcode,
+            "source_url": None,
+        },
+        "missing_fields": [],
+        "clarification_question": None,
+        "notes": [
+            "Nutrition was read from the package label and "
+            "confirmed by the user."
+        ],
+    }
+
+
+def format_barcode_teaching_confirmation(
+    *,
+    barcode: str,
+    product_name: str,
+    brand: str | None,
+    label: dict,
+) -> str:
+    """Format the final review before saving a taught barcode."""
+    result = build_taught_barcode_result(
+        barcode=barcode,
+        product_name=product_name,
+        brand=brand,
+        label=label,
+    )
+    product_text = format_barcode_product(
+        result,
+        barcode=barcode,
+    )
+    product_text = product_text.replace(
+        "Barcode Product\n\n",
+        "Teach This Barcode\n\n",
+        1,
+    ).replace(
+        "Nothing has been saved or logged.\n\n"
+        "Reply Save Product, Log It, Scan Another, Back, or Cancel.",
+        "Save this product and teach HealthCoach this barcode?\n\n"
+        "Previously logged food will not change.\n\n"
+        "1. Yes, save it\n"
+        "2. Retake label photo\n"
+        "3. Cancel",
+    )
+    return product_text
+
 
 def format_barcode_product(
     result: dict,
@@ -2830,13 +2935,21 @@ def format_barcode_product(
     if food.get("brand"):
         lines.append(f"Brand: {food['brand']}")
 
+    source = str(
+        verification.get("source") or "USDA"
+    ).strip()
+    source = {
+        "user_package_label": "Package label entered by user",
+        "user_entered": "User-entered nutrition",
+    }.get(source, source)
+
     lines.extend([
         f"Barcode: {barcode}",
         (
             "Serving: "
             f"{food.get('serving_description') or 'not available'}"
         ),
-        f"Source: {verification.get('source') or 'USDA'}",
+        f"Source: {source}",
         "",
         f"Calories: {nutrient('calories', 'cal')}",
         f"Protein: {nutrient('protein_g', 'g')}",
@@ -3542,12 +3655,17 @@ def process_telegram_update(update):
             }
         )
 
+        label_photo = (
+            photo_step == "barcode_teach_label_photo"
+        )
+
         food_photo = (
             photo_step == "await_food_photo"
             or (
                 photo_step not in {
                     "await_menu_photo",
                     "await_barcode_photo",
+                    "barcode_teach_label_photo",
                 }
                 and is_food_photo_request(caption)
             )
@@ -3561,7 +3679,12 @@ def process_telegram_update(update):
             )
             return
 
-        if barcode_photo:
+        if label_photo:
+            progress_message = (
+                "I'm reading the Nutrition Facts label. "
+                "This may take a moment."
+            )
+        elif barcode_photo:
             progress_message = (
                 "I'm reading the barcode and checking the exact "
                 "product in our food databases. This may take a moment."
@@ -3588,7 +3711,51 @@ def process_telegram_update(update):
                 file_id=file_id,
             )
 
-            if barcode_photo:
+            if label_photo:
+                label_result = read_nutrition_label_photo(
+                    image_bytes,
+                    mime_type=mime_type,
+                )
+
+                if not label_result.get("readable"):
+                    notes = list(
+                        label_result.get("notes") or []
+                    )
+                    note_text = (
+                        "\n".join(f"- {note}" for note in notes)
+                        or "- One or more required values were unreadable."
+                    )
+                    response_message = (
+                        "I couldn't read a complete Nutrition Facts "
+                        "serving from that photo.\n\n"
+                        f"{note_text}\n\n"
+                        "Try another close, straight-on photo that "
+                        "shows the serving size and all nutrient lines."
+                    )
+                else:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="barcode_teach_product_name",
+                        known_data={
+                            "barcode_label": label_result,
+                        },
+                        missing_fields=["product_name"],
+                    )
+                    suggested_name = str(
+                        label_result.get("product_name") or ""
+                    ).strip()
+                    suggestion = (
+                        f"\n\nThe photo may show: {suggested_name}"
+                        if suggested_name
+                        else ""
+                    )
+                    response_message = (
+                        "I read the Nutrition Facts label. What should "
+                        "this product be called in HealthCoach?"
+                        f"{suggestion}\n\n"
+                        "Example: Great Value Black Beans"
+                    )
+            elif barcode_photo:
                 barcode_read = read_barcode_photo(
                     image_bytes,
                     mime_type=mime_type,
@@ -3621,6 +3788,12 @@ def process_telegram_update(update):
                             known_data={
                                 "barcode": barcode,
                                 "barcode_result": result,
+                                "barcode_saved": bool(
+                                    result.get("saved_food_id")
+                                ),
+                                "barcode_food_id": result.get(
+                                    "saved_food_id"
+                                ),
                             },
                             missing_fields=[],
                         )
@@ -3628,14 +3801,22 @@ def process_telegram_update(update):
                             format_barcode_product(
                                 result,
                                 barcode=barcode,
+                                saved=bool(
+                                    result.get("saved_food_id")
+                                ),
                             )
                         )
                     else:
                         update_conversation(
                             chat_id=chat_id,
-                            current_step="await_barcode_number",
-                            known_data={},
-                            missing_fields=["barcode"],
+                            current_step="barcode_teach_offer",
+                            known_data={
+                                "barcode": barcode,
+                                "barcode_lookup_notes": list(
+                                    result.get("notes") or []
+                                ),
+                            },
+                            missing_fields=[],
                         )
                         notes = list(result.get("notes") or [])
                         note_text = (
@@ -3646,9 +3827,11 @@ def process_telegram_update(update):
                             f"I read barcode {barcode}, but couldn't "
                             "retrieve complete verified nutrition.\n\n"
                             f"{note_text}\n\n"
-                            "If the number was read incorrectly, type "
-                            "the barcode printed beneath the bars. "
-                            "Otherwise reply Back or Cancel."
+                            "Teach this barcode from the package label?\n\n"
+                            "1. Teach from label\n"
+                            "2. Try another barcode\n"
+                            "3. Back\n"
+                            "4. Cancel"
                         )
 
             elif food_photo:
@@ -3693,7 +3876,9 @@ def process_telegram_update(update):
             logging.exception(
                 "%s photo analysis failed",
                 (
-                    "Barcode"
+                    "Nutrition label"
+                    if label_photo
+                    else "Barcode"
                     if barcode_photo
                     else "Food"
                     if food_photo
@@ -3701,7 +3886,13 @@ def process_telegram_update(update):
                 ),
             )
 
-            if barcode_photo:
+            if label_photo:
+                error_message = (
+                    "I couldn't read that Nutrition Facts photo. "
+                    "Try a closer, brighter picture showing the "
+                    "serving size and every nutrient line."
+                )
+            elif barcode_photo:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="await_barcode_number",
@@ -4161,6 +4352,316 @@ def process_telegram_update(update):
             )
             return
 
+        if current_step == "barcode_teach_offer":
+            if lowered == "4":
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "Barcode setup cancelled. Nothing was saved.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {
+                "1",
+                "teach",
+                "teach from label",
+                "teach this barcode",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="barcode_teach_label_photo",
+                    known_data=known_data,
+                    missing_fields=["nutrition_label_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of the Nutrition Facts label.\n\n"
+                    "Include the serving size, calories, protein, "
+                    "carbohydrates, fat, fiber, sugar, and sodium. "
+                    "Nothing will be saved until you confirm it.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "2",
+                "try another",
+                "try another barcode",
+                "scan another",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_barcode_photo",
+                    known_data={},
+                    missing_fields=["barcode_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of a product barcode, or "
+                    "type the complete number beneath the bars.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="photo_tools",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_photo_tools_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                "Teach this barcode from the package label?\n\n"
+                "1. Teach from label\n"
+                "2. Try another barcode\n"
+                "3. Back\n"
+                "4. Cancel",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "barcode_teach_label_photo":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="barcode_teach_offer",
+                    known_data=known_data,
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Teach this barcode from the package label?\n\n"
+                    "1. Teach from label\n"
+                    "2. Try another barcode\n"
+                    "3. Back\n"
+                    "4. Cancel",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                "Send a clear photo of the Nutrition Facts label.\n\n"
+                "The serving size and every nutrient line must be visible.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "barcode_teach_product_name":
+            product_name = text.strip()
+
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="barcode_teach_label_photo",
+                    known_data=known_data,
+                    missing_fields=["nutrition_label_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of the Nutrition Facts label.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if not product_name or len(product_name) > 120:
+                send_telegram_msg(
+                    "Enter a product name between 1 and 120 characters.",
+                    chat_id=chat_id,
+                )
+                return
+
+            label = dict(known_data.get("barcode_label") or {})
+            suggested_brand = str(
+                label.get("brand") or ""
+            ).strip()
+            brand_hint = (
+                f"\n\nThe photo may show: {suggested_brand}"
+                if suggested_brand
+                else ""
+            )
+            update_conversation(
+                chat_id=chat_id,
+                current_step="barcode_teach_brand",
+                known_data={
+                    **known_data,
+                    "barcode_product_name": product_name,
+                },
+                missing_fields=["brand"],
+            )
+            send_telegram_msg(
+                "What brand is this product?"
+                f"{brand_hint}\n\n"
+                "Type the brand, or reply Skip if there is none.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "barcode_teach_brand":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="barcode_teach_product_name",
+                    known_data=known_data,
+                    missing_fields=["product_name"],
+                )
+                send_telegram_msg(
+                    "What should this product be called in HealthCoach?",
+                    chat_id=chat_id,
+                )
+                return
+
+            brand = None if lowered in {"skip", "none", "no brand"} else text.strip()
+            if brand is not None and len(brand) > 120:
+                send_telegram_msg(
+                    "Enter a brand under 120 characters, or reply Skip.",
+                    chat_id=chat_id,
+                )
+                return
+
+            barcode = str(known_data.get("barcode") or "")
+            product_name = str(
+                known_data.get("barcode_product_name") or ""
+            )
+            label = dict(known_data.get("barcode_label") or {})
+
+            if not barcode or not product_name or not label:
+                send_telegram_msg(
+                    "The barcode setup is incomplete. Please start the "
+                    "scan again.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="barcode_teach_confirmation",
+                known_data={
+                    **known_data,
+                    "barcode_brand": brand,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_barcode_teaching_confirmation(
+                    barcode=barcode,
+                    product_name=product_name,
+                    brand=brand,
+                    label=label,
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "barcode_teach_confirmation":
+            if lowered == "3":
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "Barcode setup cancelled. Nothing was saved.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {
+                "1",
+                "yes",
+                "yes save it",
+                "yes, save it",
+                "save",
+            }:
+                barcode = str(known_data.get("barcode") or "")
+                product_name = str(
+                    known_data.get("barcode_product_name") or ""
+                )
+                brand = known_data.get("barcode_brand")
+                label = dict(
+                    known_data.get("barcode_label") or {}
+                )
+                result = build_taught_barcode_result(
+                    barcode=barcode,
+                    product_name=product_name,
+                    brand=brand,
+                    label=label,
+                )
+
+                try:
+                    saved = save_barcode_product_result(
+                        result,
+                        barcode=barcode,
+                    )
+                except Exception:
+                    logging.exception(
+                        "Taught barcode product save failed"
+                    )
+                    send_telegram_msg(
+                        "I couldn't save that label and barcode. "
+                        "Nothing was changed.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="barcode_result",
+                    known_data={
+                        **known_data,
+                        "barcode_result": result,
+                        "barcode_saved": True,
+                        "barcode_food_id": int(
+                            saved["food"]["food_id"]
+                        ),
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Saved this product and taught HealthCoach "
+                    "the barcode. It will be recognized locally "
+                    "next time.\n\n"
+                    + format_barcode_product(
+                        result,
+                        barcode=barcode,
+                        saved=True,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "2",
+                "retake",
+                "retake label photo",
+                "change",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="barcode_teach_label_photo",
+                    known_data=known_data,
+                    missing_fields=["nutrition_label_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of the Nutrition Facts label.",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                format_barcode_teaching_confirmation(
+                    barcode=str(known_data.get("barcode") or ""),
+                    product_name=str(
+                        known_data.get("barcode_product_name") or ""
+                    ),
+                    brand=known_data.get("barcode_brand"),
+                    label=dict(
+                        known_data.get("barcode_label") or {}
+                    ),
+                ),
+                chat_id=chat_id,
+            )
+            return
+
         if current_step == "barcode_result":
             result = dict(
                 known_data.get("barcode_result") or {}
@@ -4179,7 +4680,8 @@ def process_telegram_update(update):
             }:
                 try:
                     saved = save_barcode_product_result(
-                        result
+                        result,
+                        barcode=barcode,
                     )
                 except Exception:
                     logging.exception(
@@ -4223,7 +4725,8 @@ def process_telegram_update(update):
             }:
                 try:
                     saved = save_barcode_product_result(
-                        result
+                        result,
+                        barcode=barcode,
                     )
                 except Exception:
                     logging.exception(
@@ -4542,11 +5045,24 @@ def process_telegram_update(update):
                         "\n".join(f"- {note}" for note in notes)
                         or "- No exact usable USDA product was found."
                     )
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="barcode_teach_offer",
+                        known_data={
+                            "barcode": barcode,
+                            "barcode_lookup_notes": notes,
+                        },
+                        missing_fields=[],
+                    )
                     send_telegram_msg(
                         "I couldn't retrieve complete verified "
                         f"nutrition for {barcode}.\n\n"
                         f"{note_text}\n\n"
-                        "Try another barcode, reply Back, or Cancel.",
+                        "Teach this barcode from the package label?\n\n"
+                        "1. Teach from label\n"
+                        "2. Try another barcode\n"
+                        "3. Back\n"
+                        "4. Cancel",
                         chat_id=chat_id,
                     )
                     return
@@ -4557,6 +5073,12 @@ def process_telegram_update(update):
                     known_data={
                         "barcode": barcode,
                         "barcode_result": result,
+                        "barcode_saved": bool(
+                            result.get("saved_food_id")
+                        ),
+                        "barcode_food_id": result.get(
+                            "saved_food_id"
+                        ),
                     },
                     missing_fields=[],
                 )
@@ -4564,6 +5086,9 @@ def process_telegram_update(update):
                     format_barcode_product(
                         result,
                         barcode=barcode,
+                        saved=bool(
+                            result.get("saved_food_id")
+                        ),
                     ),
                     chat_id=chat_id,
                 )

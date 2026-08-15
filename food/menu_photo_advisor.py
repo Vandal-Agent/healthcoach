@@ -285,6 +285,123 @@ Rules:
     return result.model_dump()
 
 
+class NutritionLabelPhotoRead(BaseModel):
+    readable: bool
+    product_name: str | None = None
+    brand: str | None = None
+    serving_description: str | None = None
+    serving_amount: float | None = Field(default=None, gt=0)
+    serving_unit: str | None = None
+    calories: float | None = Field(default=None, ge=0)
+    protein_g: float | None = Field(default=None, ge=0)
+    carbohydrates_g: float | None = Field(default=None, ge=0)
+    fat_g: float | None = Field(default=None, ge=0)
+    fiber_g: float | None = Field(default=None, ge=0)
+    sugar_g: float | None = Field(default=None, ge=0)
+    sodium_mg: float | None = Field(default=None, ge=0)
+    notes: list[str] = Field(default_factory=list)
+
+
+def read_nutrition_label_photo(
+    image_bytes: bytes,
+    *,
+    mime_type: str,
+) -> dict[str, Any]:
+    """Read one complete serving of printed Nutrition Facts."""
+    if not image_bytes:
+        raise ValueError("image_bytes is required.")
+    if mime_type not in ALLOWED_IMAGE_TYPES:
+        raise ValueError("Unsupported nutrition-label photo type.")
+
+    prompt = """
+Read the printed Nutrition Facts label in this product photo for
+HealthCoach.
+
+Rules:
+1. Transcribe only values visibly printed on the package.
+2. Read values for exactly one labeled serving, never the whole
+   container unless the label says one serving per container.
+3. Capture the complete serving description, numeric serving amount,
+   and a concise serving unit. Example: "2/3 cup (55 g)", amount 55,
+   unit "g". If only a household amount is printed, use that amount
+   and unit.
+4. Sodium must be returned in milligrams. Other macronutrients must
+   be returned in grams. Calories are kcal.
+5. Return zero only when the label visibly prints zero. Never replace
+   a missing or unreadable value with zero.
+6. Product name and brand may be returned only when visibly supported
+   by the photo; otherwise return null for them.
+7. Set readable=false when serving information or any of calories,
+   protein, total carbohydrate, total fat, dietary fiber, total sugar,
+   or sodium cannot be read confidently.
+8. Do not estimate, infer, calculate, or use outside knowledge.
+9. Explain cropped, blurry, or missing fields briefly in notes.
+"""
+
+    client = get_client()
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[
+                prompt,
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=mime_type,
+                ),
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=NutritionLabelPhotoRead,
+            ),
+        )
+    finally:
+        client.close()
+
+    if response.parsed is not None:
+        result = (
+            response.parsed
+            if isinstance(response.parsed, NutritionLabelPhotoRead)
+            else NutritionLabelPhotoRead.model_validate(response.parsed)
+        )
+    elif response.text:
+        result = NutritionLabelPhotoRead.model_validate_json(
+            response.text
+        )
+    else:
+        raise RuntimeError(
+            "Gemini returned no nutrition-label result."
+        )
+
+    required_fields = (
+        "serving_description",
+        "serving_amount",
+        "serving_unit",
+        "calories",
+        "protein_g",
+        "carbohydrates_g",
+        "fat_g",
+        "fiber_g",
+        "sugar_g",
+        "sodium_mg",
+    )
+    missing = [
+        field
+        for field in required_fields
+        if getattr(result, field) in (None, "")
+    ]
+
+    if missing:
+        result.readable = False
+        result.notes.append(
+            "Missing or unreadable label fields: "
+            + ", ".join(missing)
+            + "."
+        )
+
+    return result.model_dump()
+
+
 class FoodPhotoEstimate(BaseModel):
     readable: bool
     dish_name: str | None = None

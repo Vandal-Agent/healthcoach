@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 
+from food.library import get_barcode_food
 from food.usda_provider import (
     barcode_match_key,
     lookup_usda_barcode_nutrition,
@@ -280,10 +281,67 @@ def lookup_open_food_facts_barcode_nutrition(
     }
 
 
+def lookup_local_barcode_nutrition(
+    barcode: str | int,
+) -> dict[str, Any]:
+    """Return a user-confirmed product from the local Food library."""
+    normalized = normalize_barcode(barcode)
+    saved = get_barcode_food(normalized)
+
+    if saved is None:
+        return unsupported_result(
+            notes=["No saved HealthCoach barcode mapping was found."]
+        )
+
+    return {
+        "found": True,
+        "provider": "healthcoach_local_barcode",
+        "saved_food_id": int(saved["food_id"]),
+        "food": {
+            "canonical_name": saved["canonical_name"],
+            "restaurant": saved.get("restaurant"),
+            "brand": saved.get("brand"),
+            "food_type": saved.get("food_type") or "food",
+            "serving_description": saved["serving_description"],
+            "serving_amount": saved["serving_amount"],
+            "serving_unit": saved["serving_unit"],
+        },
+        "nutrition": {
+            "calories": saved.get("calories"),
+            "protein_g": saved.get("protein_g"),
+            "carbohydrates_g": saved.get("carbohydrates_g"),
+            "fat_g": saved.get("fat_g"),
+            "fiber_g": saved.get("fiber_g"),
+            "sugar_g": saved.get("sugar_g"),
+            "sodium_mg": saved.get("sodium_mg"),
+        },
+        "verification": {
+            "status": saved.get("verification_status") or "verified",
+            "source": saved.get("verification_source") or "user_entered",
+            "source_item_id": normalized,
+            "source_url": saved.get("source_url"),
+        },
+        "missing_fields": [],
+        "clarification_question": None,
+        "notes": [
+            "This barcode was recognized from your saved "
+            "HealthCoach food library.",
+            f"Exact barcode match: {normalized}.",
+        ],
+    }
+
+
 def lookup_barcode_nutrition(
     barcode: str | int,
 ) -> dict[str, Any]:
     normalized = normalize_barcode(barcode)
+
+    local_result = lookup_local_barcode_nutrition(
+        normalized
+    )
+
+    if local_result.get("found"):
+        return local_result
 
     usda_result = lookup_usda_barcode_nutrition(
         normalized

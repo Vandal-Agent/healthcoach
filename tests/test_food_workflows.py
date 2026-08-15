@@ -101,6 +101,7 @@ class FoodWorkflowTests(unittest.TestCase):
         )
         self.assertIn("food_entries", result["tables"])
         self.assertIn("food_favorites", result["tables"])
+        self.assertIn("barcode_mappings", result["tables"])
 
     def test_logging_scales_nutrition_and_totals(self) -> None:
         entry = self.add_entry(quantity=1.5)

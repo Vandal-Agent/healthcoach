@@ -243,6 +243,7 @@ Supported workflow:
 - Scale nutrition snapshots by the logged serving quantity.
 - Synchronize Food Ledger totals after logging.
 - Allow consecutive barcode scans without returning to the menu.
+- Check permanent local barcode mappings before outside databases.
 - Never save or log anything without user confirmation.
 
 Choosing Log It also stores the product so it can be reused later.
@@ -254,11 +255,26 @@ USDA records are treated as official exact-barcode data. Open Food
 Facts records are community-contributed and must be reviewed by the
 user before Save Product or Log It makes them trusted Saved Foods.
 
+When neither provider has complete nutrition, HealthCoach offers to
+learn the product from its package:
+
+- The user sends a clear Nutrition Facts photo.
+- HealthCoach transcribes one printed serving without estimating.
+- Missing or unreadable nutrients are rejected rather than changed to
+  zero.
+- The user supplies the product name and optional brand.
+- A final confirmation displays the barcode, serving, and all supported
+  nutrition fields.
+- Confirmation saves the Food, its nutrition, and a permanent barcode
+  mapping.
+- Future scans resolve locally before USDA or Open Food Facts.
+- Previously logged Food entries retain their original nutrition
+  snapshots.
+
 
 # Future Features
 
 - Voice logging
-- Barcode label-photo teaching and permanent local barcode mappings
 - Recipe builder
 - Same as yesterday
 - Restaurant history

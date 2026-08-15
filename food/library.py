@@ -11,6 +11,7 @@ from food.database import (
     initialize_database,
     save_food_alias,
 )
+from food.usda_provider import barcode_match_key, normalize_barcode
 
 REVERIFY_USE_COUNT = 20
 REVERIFY_MIN_DAYS = 30
@@ -121,6 +122,126 @@ def get_active_nutrition(
         ).fetchone()
 
     return dict(row) if row else None
+
+
+def get_barcode_food(
+    barcode: str | int,
+) -> dict[str, Any] | None:
+    """Return the saved Food and active nutrition for a barcode."""
+    initialize_database()
+    normalized = normalize_barcode(barcode)
+    barcode_key = barcode_match_key(normalized)
+
+    if barcode_key is None:
+        return None
+
+    with get_connection(DATABASE_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT
+                barcode_mappings.barcode_mapping_id,
+                barcode_mappings.barcode_key,
+                barcode_mappings.barcode_text,
+                foods.food_id,
+                foods.canonical_name,
+                foods.brand,
+                foods.restaurant,
+                foods.food_type,
+                foods.serving_description,
+                foods.serving_amount,
+                foods.serving_unit,
+                foods.verification_status,
+                foods.verification_source,
+                foods.source_item_id,
+                foods.source_url,
+                nutrition_versions.nutrition_version_id,
+                nutrition_versions.calories,
+                nutrition_versions.protein_g,
+                nutrition_versions.carbohydrates_g,
+                nutrition_versions.fat_g,
+                nutrition_versions.fiber_g,
+                nutrition_versions.sugar_g,
+                nutrition_versions.sodium_mg
+            FROM barcode_mappings
+            JOIN foods
+              ON foods.food_id = barcode_mappings.food_id
+            JOIN nutrition_versions
+              ON nutrition_versions.nutrition_version_id =
+                 foods.active_nutrition_version_id
+            WHERE barcode_mappings.barcode_key = ?
+            LIMIT 1
+            """,
+            (barcode_key,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def save_barcode_mapping(
+    *,
+    barcode: str | int,
+    food_id: int,
+) -> dict[str, Any]:
+    """Create or refresh one permanent barcode-to-Food mapping."""
+    initialize_database()
+    normalized = normalize_barcode(barcode)
+    barcode_key = barcode_match_key(normalized)
+
+    if barcode_key is None:
+        raise ValueError("barcode did not produce a matching key.")
+
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        food = connection.execute(
+            """
+            SELECT food_id
+            FROM foods
+            WHERE food_id = ?
+            """,
+            (int(food_id),),
+        ).fetchone()
+
+        if food is None:
+            raise ValueError(f"Food not found: {food_id}")
+
+        connection.execute(
+            """
+            INSERT INTO barcode_mappings (
+                barcode_key,
+                barcode_text,
+                food_id,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(barcode_key)
+            DO UPDATE SET
+                barcode_text = excluded.barcode_text,
+                food_id = excluded.food_id,
+                updated_at = excluded.updated_at
+            """,
+            (
+                barcode_key,
+                normalized,
+                int(food_id),
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT *
+            FROM barcode_mappings
+            WHERE barcode_key = ?
+            LIMIT 1
+            """,
+            (barcode_key,),
+        ).fetchone()
+
+    return dict(row)
 
 
 def add_food_with_nutrition(

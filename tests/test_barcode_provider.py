@@ -10,6 +10,33 @@ from food.barcode_provider import (
 
 
 class BarcodeProviderTests(unittest.TestCase):
+    @patch(
+        "food.barcode_provider.lookup_usda_barcode_nutrition"
+    )
+    @patch(
+        "food.barcode_provider.lookup_local_barcode_nutrition"
+    )
+    def test_uses_saved_mapping_before_external_lookup(
+        self,
+        mock_local,
+        mock_usda,
+    ):
+        mock_local.return_value = {
+            "found": True,
+            "provider": "healthcoach_local_barcode",
+        }
+
+        result = lookup_barcode_nutrition(
+            "034000052004"
+        )
+
+        self.assertTrue(result["found"])
+        self.assertEqual(
+            result["provider"],
+            "healthcoach_local_barcode",
+        )
+        mock_usda.assert_not_called()
+
     @patch("food.barcode_provider.requests.get")
     def test_accepts_equivalent_gtin_with_serving_data(
         self,
@@ -103,11 +130,20 @@ class BarcodeProviderTests(unittest.TestCase):
         "food.barcode_provider."
         "lookup_usda_barcode_nutrition"
     )
+    @patch(
+        "food.barcode_provider."
+        "lookup_local_barcode_nutrition"
+    )
     def test_uses_secondary_provider_after_usda_miss(
         self,
+        mock_local,
         mock_usda,
         mock_open_food_facts,
     ):
+        mock_local.return_value = {
+            "found": False,
+            "notes": ["Not found locally."],
+        }
         mock_usda.return_value = {
             "found": False,
             "notes": ["Not found in USDA."],
