@@ -221,10 +221,44 @@ capabilities remain discoverable as HealthCoach grows.
 
 ---
 
+
+# Barcode Scanner
+
+Barcode Scanner v1 is available under Food > Photo Tools.
+
+Supported workflow:
+
+- Accept a clear Telegram photo of a product barcode.
+- Accept typed GTIN-8, UPC-A, EAN-13, or GTIN-14 digits.
+- Validate barcode length and checksum before lookup.
+- Preserve small outside digits and leading zeroes.
+- Check USDA FoodData Central for an exact branded barcode.
+- Fall back to Open Food Facts when USDA has no exact match.
+- Clearly identify community-contributed Open Food Facts data.
+- Reject records without a usable serving size or calories.
+- Display serving-level calories, protein, carbohydrates, fat,
+  fiber, sugar, and sodium.
+- Save a confirmed product to the Saved Foods library.
+- Log a confirmed number of servings to a selected meal.
+- Scale nutrition snapshots by the logged serving quantity.
+- Synchronize Food Ledger totals after logging.
+- Allow consecutive barcode scans without returning to the menu.
+- Never save or log anything without user confirmation.
+
+Choosing Log It also stores the product so it can be reused later.
+
+Incomplete barcode records are not treated as zero-calorie foods.
+The user is directed toward package-label entry instead.
+
+USDA records are treated as official exact-barcode data. Open Food
+Facts records are community-contributed and must be reviewed by the
+user before Save Product or Log It makes them trusted Saved Foods.
+
+
 # Future Features
 
 - Voice logging
-- Barcode scanner
+- Barcode label-photo teaching and permanent local barcode mappings
 - Recipe builder
 - Same as yesterday
 - Restaurant history
