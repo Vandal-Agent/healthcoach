@@ -6,6 +6,10 @@ from unittest.mock import patch
 with patch("logging.basicConfig"):
     import app
 
+# Menu routing tests use a synthetic chat ID and must not inherit the
+# production Telegram allowlist from the server environment.
+app.CHAT_ID = None
+
 
 class PantryMenuTests(unittest.TestCase):
     def test_food_menu_contains_separate_pantry_entry(self) -> None:
