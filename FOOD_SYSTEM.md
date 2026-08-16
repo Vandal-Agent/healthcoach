@@ -186,10 +186,27 @@ Flow:
 
 Photo Tools are available from the Telegram Food menu.
 
+## Universal Photo Chooser
+
+When a Telegram photo is sent without first selecting a photo tool,
+HealthCoach keeps that photo and asks what it should be used for:
+
+- Estimate or log an actual meal.
+- Read a restaurant menu.
+- Scan a product barcode.
+- Scan a product barcode directly into My Pantry.
+
+The selected workflow reuses the original photo; the user does not need to
+send it again. Explicit captions such as "Estimate this meal" may continue
+directly to their matching workflow. A photo sent while HealthCoach is already
+waiting for a menu, meal, barcode, or Nutrition Facts label stays in that
+active workflow. Nothing is saved or logged at the chooser step.
+
 ## Restaurant Menu Photos
 
 Flow:
-- User selects Read a restaurant menu photo or sends a menu photo directly.
+- User selects Read a restaurant menu photo or chooses that purpose after
+  sending an unprompted photo.
 - HealthCoach reads only information visible in the photograph.
 - It recommends up to three promising entrees.
 - Printed calories are displayed only when visible in the photograph.

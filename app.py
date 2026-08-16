@@ -513,6 +513,15 @@ def menu_reply_markup(message):
             ["Scan product barcode"],
             ["Back", "Cancel"],
         ]
+    elif "What should I do with this photo?" in message:
+        rows = [
+            ["Estimate or log this meal"],
+            ["Read restaurant menu"],
+            ["Scan product barcode"],
+            ["Add scanned product to Pantry"],
+            ["Cancel"],
+        ]
+        one_time = True
     elif (
         "Send a clear restaurant menu photo." in message
         or "Send a clear photo of the actual meal." in message
@@ -2797,6 +2806,46 @@ def healthcoach_photo_tools_menu_text() -> str:
     )
 
 
+def healthcoach_photo_intent_text() -> str:
+    return (
+        "What should I do with this photo?\n\n"
+        "1. Estimate or log this meal\n"
+        "2. Read a restaurant menu\n"
+        "3. Scan a product barcode\n"
+        "4. Add a scanned product to My Pantry\n"
+        "5. Cancel\n\n"
+        "Nothing will be saved or logged without your confirmation."
+    )
+
+
+def photo_intent_from_caption(caption: str | None) -> str | None:
+    """Return an explicit photo purpose supplied in its caption."""
+    lowered = str(caption or "").strip().lower()
+
+    if not lowered:
+        return None
+
+    if is_food_photo_request(lowered):
+        return "meal"
+
+    if "pantry" in lowered and (
+        "barcode" in lowered or "scan" in lowered
+    ):
+        return "pantry_barcode"
+
+    if "barcode" in lowered or "scan product" in lowered:
+        return "barcode"
+
+    if "menu" in lowered and (
+        "read" in lowered
+        or "restaurant" in lowered
+        or "recommend" in lowered
+    ):
+        return "menu"
+
+    return None
+
+
 def save_barcode_product_result(
     result: dict,
     *,
@@ -4143,6 +4192,65 @@ def process_telegram_update(update):
             else None
         )
 
+        if not file_id:
+            send_telegram_msg(
+                "I received the photo, but Telegram did not "
+                "provide a usable file.",
+                chat_id=chat_id,
+            )
+            return
+
+        expected_photo_steps = {
+            "await_menu_photo",
+            "await_food_photo",
+            "await_barcode_photo",
+            "await_barcode_number",
+            "barcode_teach_label_photo",
+        }
+        caption_intent = photo_intent_from_caption(caption)
+
+        if (
+            photo_step not in expected_photo_steps
+            and caption_intent is None
+        ):
+            start_conversation(
+                chat_id=chat_id,
+                conversation_type="healthcoach_menu",
+                current_step="photo_intent",
+                known_data={
+                    "photo_file_id": file_id,
+                    "photo_caption": caption,
+                },
+                missing_fields=["photo_intent"],
+                original_message=caption or "Telegram photo",
+            )
+            send_telegram_msg(
+                healthcoach_photo_intent_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if photo_step not in expected_photo_steps:
+            intent_step = {
+                "meal": "await_food_photo",
+                "menu": "await_menu_photo",
+                "barcode": "await_barcode_photo",
+                "pantry_barcode": "await_barcode_photo",
+            }[caption_intent]
+            start_conversation(
+                chat_id=chat_id,
+                conversation_type="healthcoach_menu",
+                current_step=intent_step,
+                known_data={
+                    "pantry_scan_mode": (
+                        caption_intent == "pantry_barcode"
+                    ),
+                },
+                missing_fields=[],
+                original_message=caption or "Telegram photo",
+            )
+            photo_step = intent_step
+
         barcode_photo = (
             photo_step in {
                 "await_barcode_photo",
@@ -4165,23 +4273,6 @@ def process_telegram_update(update):
                 and is_food_photo_request(caption)
             )
         )
-
-        if not file_id:
-            send_telegram_msg(
-                "I received the photo, but Telegram did not "
-                "provide a usable file.",
-                chat_id=chat_id,
-            )
-            return
-
-        if photo_step == "pantry_add_items":
-            send_telegram_msg(
-                "This Pantry option accepts a typed list only.\n\n"
-                "Reply Back, then choose Scan product into Pantry "
-                "before sending a barcode photo.",
-                chat_id=chat_id,
-            )
-            return
 
         if label_photo:
             progress_message = (
@@ -5715,6 +5806,93 @@ def process_telegram_update(update):
                 healthcoach_photo_tools_menu_text(),
                 chat_id=chat_id,
             )
+            return
+
+        if current_step == "photo_intent":
+            intent = None
+            if lowered in {
+                "1",
+                "estimate or log this meal",
+                "estimate meal",
+                "log meal",
+            }:
+                intent = "meal"
+            elif lowered in {
+                "2",
+                "read restaurant menu",
+                "read a restaurant menu",
+                "read menu",
+            }:
+                intent = "menu"
+            elif lowered in {
+                "3",
+                "scan product barcode",
+                "scan barcode",
+            }:
+                intent = "barcode"
+            elif lowered in {
+                "4",
+                "add scanned product to pantry",
+                "add scanned product to my pantry",
+                "scan into pantry",
+            }:
+                intent = "pantry_barcode"
+            elif lowered in {"5", "cancel"}:
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "Photo cancelled. Nothing was saved or logged.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if intent is None:
+                send_telegram_msg(
+                    healthcoach_photo_intent_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            file_id = str(
+                known_data.get("photo_file_id") or ""
+            ).strip()
+            caption = str(
+                known_data.get("photo_caption") or ""
+            ).strip()
+
+            if not file_id:
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "That photo expired. Please send it again.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            destination_step = {
+                "meal": "await_food_photo",
+                "menu": "await_menu_photo",
+                "barcode": "await_barcode_photo",
+                "pantry_barcode": "await_barcode_photo",
+            }[intent]
+            update_conversation(
+                chat_id=chat_id,
+                current_step=destination_step,
+                known_data={
+                    "pantry_scan_mode": (
+                        intent == "pantry_barcode"
+                    ),
+                },
+                missing_fields=[],
+            )
+
+            process_telegram_update({
+                "message": {
+                    "chat": {"id": chat_id},
+                    "photo": [{"file_id": file_id}],
+                    "caption": caption,
+                },
+            })
             return
 
         if current_step == "barcode_teach_offer":

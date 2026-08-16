@@ -346,7 +346,7 @@ class PantryMenuTests(unittest.TestCase):
             send.call_args.args[0],
         )
 
-    def test_photo_in_manual_add_explains_correct_scan_path(self) -> None:
+    def test_photo_in_manual_add_opens_universal_chooser(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",
             "current_step": "pantry_add_items",
@@ -358,6 +358,7 @@ class PantryMenuTests(unittest.TestCase):
                 "get_active_conversation",
                 return_value=conversation,
             ),
+            patch.object(app, "start_conversation") as start,
             patch.object(app, "send_telegram_msg") as send,
         ):
             app.process_telegram_update({
@@ -367,12 +368,12 @@ class PantryMenuTests(unittest.TestCase):
                 }
             })
 
-        self.assertIn(
-            "accepts a typed list only",
-            send.call_args.args[0],
+        self.assertEqual(
+            start.call_args.kwargs["current_step"],
+            "photo_intent",
         )
         self.assertIn(
-            "Scan product into Pantry",
+            "What should I do with this photo?",
             send.call_args.args[0],
         )
 
