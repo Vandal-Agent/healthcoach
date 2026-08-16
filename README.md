@@ -7,6 +7,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Receives health data from an iPhone Shortcut
 - Updates the Google Sheet named `Health Tracker`
 - Tracks steps, protein, sleep, weight, HRV, and calorie data
+- Shows 7-, 14-, and 30-day weight and sleep history in Telegram,
+  including daily entries, missing days, averages, and weight change
 - Reads Lose It CSV summaries from Gmail
 - Sends daily and weekly coaching through Telegram
 - Runs scheduled health checks and reminders

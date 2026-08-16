@@ -561,7 +561,12 @@ def menu_reply_markup(message):
     elif "Health Menu\n\n" in message:
         rows = [
             ["Current status", "Record sleep"],
-            ["Record weight"],
+            ["Record weight", "Health history"],
+            ["Back", "Cancel"],
+        ]
+    elif message.startswith("Health History"):
+        rows = [
+            ["7 days", "14 days", "30 days"],
             ["Back", "Cancel"],
         ]
     elif "Reports Menu\n\n" in message:
@@ -3462,8 +3467,192 @@ def healthcoach_health_menu_text() -> str:
         "1. Current status\n"
         "2. Record sleep\n"
         "3. Record weight\n"
+        "4. Health history\n"
+        "5. Back"
+    )
+
+
+def healthcoach_health_history_menu_text() -> str:
+    return (
+        "Health History\n\n"
+        "Choose how much weight and sleep history to view.\n\n"
+        "1. Last 7 days\n"
+        "2. Last 14 days\n"
+        "3. Last 30 days\n"
         "4. Back"
     )
+
+
+def build_health_history_data(
+    *,
+    reference_date,
+    days: int,
+    rows: list,
+) -> dict:
+    period_days = int(days)
+    if period_days not in {7, 14, 30}:
+        raise ValueError("days must be 7, 14, or 30.")
+
+    start_date = reference_date - timedelta(
+        days=period_days - 1
+    )
+    metrics_by_date = {}
+
+    for row in rows:
+        row_date = parse_row_date(row)
+        if row_date is None:
+            continue
+        if not start_date <= row_date <= reference_date:
+            continue
+        metrics = row_to_metrics(row)
+        if metrics is not None:
+            metrics_by_date[row_date] = metrics
+
+    history_days = []
+    weights = []
+    sleep_values = []
+
+    for offset in range(period_days):
+        current_date = start_date + timedelta(days=offset)
+        metrics = metrics_by_date.get(current_date) or {}
+        weight = metrics.get("weight")
+        sleep_hours = metrics.get("sleep_hours")
+
+        if weight is not None:
+            weights.append(float(weight))
+        if sleep_hours is not None:
+            sleep_values.append(float(sleep_hours))
+
+        history_days.append(
+            {
+                "date": current_date,
+                "weight": (
+                    float(weight)
+                    if weight is not None
+                    else None
+                ),
+                "sleep_hours": (
+                    float(sleep_hours)
+                    if sleep_hours is not None
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "period_days": period_days,
+        "start_date": start_date,
+        "end_date": reference_date,
+        "days": history_days,
+        "average_weight": (
+            sum(weights) / len(weights)
+            if weights
+            else None
+        ),
+        "weight_change": (
+            weights[-1] - weights[0]
+            if len(weights) >= 2
+            else None
+        ),
+        "weight_entries": len(weights),
+        "average_sleep": (
+            sum(sleep_values) / len(sleep_values)
+            if sleep_values
+            else None
+        ),
+        "sleep_entries": len(sleep_values),
+    }
+
+
+def format_health_history(history: dict) -> str:
+    period_days = int(history.get("period_days") or 0)
+    lines = [
+        f"Health History - Last {period_days} Days",
+        "",
+    ]
+
+    for item in history.get("days") or []:
+        day = item["date"]
+        weight = item.get("weight")
+        sleep_hours = item.get("sleep_hours")
+        weight_text = (
+            f"{format_display_number(weight)} lb"
+            if weight is not None
+            else "not recorded"
+        )
+        sleep_text = (
+            f"{format_display_number(sleep_hours)} h"
+            if sleep_hours is not None
+            else "not recorded"
+        )
+        lines.append(
+            f"{day.strftime('%a %b ')}{day.day}: "
+            f"weight {weight_text}; sleep {sleep_text}"
+        )
+
+    lines.extend(["", "Summary"])
+    average_weight = history.get("average_weight")
+    weight_change = history.get("weight_change")
+    average_sleep = history.get("average_sleep")
+
+    lines.append(
+        "- Average weight: "
+        + (
+            f"{format_display_number(average_weight)} lb"
+            if average_weight is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Recorded weight change: "
+        + (
+            f"{float(weight_change):+.1f} lb"
+            if weight_change is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Average sleep: "
+        + (
+            f"{format_display_number(average_sleep)} h"
+            if average_sleep is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Weight recorded: "
+        f"{int(history.get('weight_entries') or 0)}/{period_days} days"
+    )
+    lines.append(
+        "- Sleep recorded: "
+        f"{int(history.get('sleep_entries') or 0)}/{period_days} days"
+    )
+    lines.extend(
+        [
+            "",
+            "Weight change compares the first and last recorded "
+            "weights in this period.",
+            "Reply 7 days, 14 days, 30 days, Back, or Cancel.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def get_formatted_health_history(
+    *,
+    reference_date,
+    days: int,
+) -> str:
+    rows = get_recent_rows(
+        reference_date,
+        days_back=int(days) - 1,
+    )
+    history = build_health_history_data(
+        reference_date=reference_date,
+        days=days,
+        rows=rows,
+    )
+    return format_health_history(history)
 
 
 def healthcoach_reports_menu_text() -> str:
@@ -8045,7 +8234,26 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"4", "back"}:
+            if lowered in {
+                "4",
+                "history",
+                "health history",
+                "weight history",
+                "sleep history",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health_history",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_health_history_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"5", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -8060,6 +8268,66 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_health_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "health_history":
+            if lowered in {"4", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_health_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            period_days = (
+                7
+                if lowered in {"1", "7", "7 days", "last 7 days"}
+                else 14
+                if lowered in {
+                    "2",
+                    "14",
+                    "14 days",
+                    "last 14 days",
+                }
+                else 30
+                if lowered in {
+                    "3",
+                    "30",
+                    "30 days",
+                    "last 30 days",
+                }
+                else None
+            )
+            if period_days is None:
+                send_telegram_msg(
+                    healthcoach_health_history_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                message = get_formatted_health_history(
+                    reference_date=today,
+                    days=period_days,
+                )
+            except Exception:
+                logging.exception("Health history lookup failed")
+                send_telegram_msg(
+                    "I couldn't load Health History right now. "
+                    "No health data was changed.",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                message,
                 chat_id=chat_id,
             )
             return
