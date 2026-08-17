@@ -170,6 +170,118 @@ class SavedRecipeTests(unittest.TestCase):
                 meal_type="dinner",
             )
 
+    def test_updates_recipe_details_and_name(self) -> None:
+        saved = recipes.save_pantry_meal_idea(
+            RECIPE_IDEA,
+            meal_type="dinner",
+        )["recipe"]
+
+        updated = recipes.update_saved_recipe(
+            int(saved["saved_recipe_id"]),
+            name="Chicken Garden Bowl",
+            meal_type="lunch",
+            summary="An updated quick lunch.",
+            ingredients=[
+                {
+                    "name": "Chicken breast",
+                    "amount": "3 ounces",
+                    "source": "pantry",
+                },
+            ],
+            preparation_steps=["Cook, slice, and serve."],
+        )
+
+        self.assertEqual(updated["canonical_name"], "Chicken Garden Bowl")
+        self.assertEqual(updated["meal_type"], "lunch")
+        self.assertEqual(updated["ingredients"][0]["amount"], "3 ounces")
+        self.assertEqual(updated["version_number"], 1)
+
+    def test_nutrition_edit_versions_future_logs_only(self) -> None:
+        saved = recipes.save_pantry_meal_idea(
+            RECIPE_IDEA,
+            meal_type="dinner",
+        )["recipe"]
+        old_entry = ledger.add_food_entry(
+            entry_date=date(2026, 8, 15),
+            meal_category="dinner",
+            food_id=int(saved["food_id"]),
+            quantity=1,
+            logging_source="recipe",
+            quantity_is_estimated=True,
+            user_confirmed=True,
+        )
+
+        updated = recipes.update_saved_recipe_nutrition(
+            int(saved["saved_recipe_id"]),
+            calories=390,
+            protein_g=44,
+            carbohydrates_g=30,
+            fat_g=11,
+            fiber_g=7,
+            sugar_g=5,
+            sodium_mg=480,
+        )
+        new_entry = ledger.add_food_entry(
+            entry_date=date(2026, 8, 16),
+            meal_category="dinner",
+            food_id=int(saved["food_id"]),
+            quantity=1,
+            logging_source="recipe",
+            quantity_is_estimated=True,
+            user_confirmed=True,
+        )
+
+        self.assertEqual(updated["version_number"], 2)
+        self.assertEqual(updated["verification_status"], "estimated")
+        self.assertEqual(old_entry["calories"], 450)
+        self.assertEqual(new_entry["calories"], 390)
+
+    def test_delete_preserves_food_and_logged_history(self) -> None:
+        saved = recipes.save_pantry_meal_idea(
+            RECIPE_IDEA,
+            meal_type="dinner",
+        )["recipe"]
+        entry = ledger.add_food_entry(
+            entry_date=date(2026, 8, 16),
+            meal_category="dinner",
+            food_id=int(saved["food_id"]),
+            quantity=1,
+            logging_source="recipe",
+            quantity_is_estimated=True,
+            user_confirmed=True,
+        )
+
+        deleted = recipes.delete_saved_recipe(
+            int(saved["saved_recipe_id"])
+        )
+
+        self.assertEqual(deleted["canonical_name"], "Chicken Pepper Bowl")
+        self.assertIsNone(
+            recipes.get_saved_recipe(int(saved["saved_recipe_id"]))
+        )
+        self.assertIsNotNone(library.get_food(int(saved["food_id"])))
+        history = ledger.list_food_entries(entry_date=date(2026, 8, 16))
+        self.assertEqual(history[0]["food_entry_id"], entry["food_entry_id"])
+        self.assertEqual(history[0]["calories"], 450)
+
+    def test_rename_rejects_existing_recipe_identity(self) -> None:
+        first = recipes.save_pantry_meal_idea(
+            RECIPE_IDEA,
+            meal_type="dinner",
+        )["recipe"]
+        second_idea = dict(RECIPE_IDEA)
+        second_idea["name"] = "Second Recipe"
+        recipes.save_pantry_meal_idea(
+            second_idea,
+            meal_type="lunch",
+        )
+
+        with self.assertRaisesRegex(ValueError, "already uses"):
+            recipes.update_saved_recipe(
+                int(first["saved_recipe_id"]),
+                name="Second Recipe",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

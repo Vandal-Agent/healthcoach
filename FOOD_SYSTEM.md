@@ -347,6 +347,17 @@ Supported workflow:
 - Reject duplicate recipe identities rather than silently replacing the
   original recipe.
 - Browse recipes alphabetically and view complete preparation details.
+- Edit a recipe's name, lunch/dinner type, summary, ingredients,
+  preparation steps, or estimated nutrition.
+- Require confirmation before saving any recipe change.
+- Create a new estimated nutrition version for future logs whenever recipe
+  nutrition is edited. Previously logged entries retain their original
+  nutrition snapshots.
+- Reject a rename when another Food or Saved Recipe already uses that
+  identity.
+- Delete a Saved Recipe only after explicit confirmation.
+- Preserve the recipe's underlying Food record, nutrition versions, and all
+  previously logged entries when the reusable recipe is deleted.
 - Choose a meal and serving amount when the recipe is actually eaten.
 - Show a final confirmation before logging.
 - Log from the recipe's existing Food and active nutrition version using
@@ -355,7 +366,9 @@ Supported workflow:
 - Preserve the nutrition snapshot on each Food Ledger entry so later
   nutrition changes cannot rewrite historical logs.
 
-Saved Recipes v1 does not yet provide recipe editing or deletion.
+Editing the ingredient or preparation list replaces that complete list.
+Ingredient edits use one `amount | ingredient` item per line so amounts stay
+separate from ingredient names.
 
 ---
 

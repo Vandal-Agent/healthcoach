@@ -504,6 +504,8 @@ def add_user_nutrition_version(
     fiber_g: float,
     sugar_g: float,
     sodium_mg: float,
+    verification_status: str = "verified",
+    verification_source: str = "user_entered",
 ) -> dict[str, Any]:
     """
     Create a new active nutrition version for future logs.
@@ -512,6 +514,11 @@ def add_user_nutrition_version(
     """
     initialize_database()
     timestamp = current_timestamp()
+    status = validate_verification_status(verification_status)
+    source = str(verification_source or "").strip()
+
+    if not source:
+        raise ValueError("verification_source is required.")
 
     nutrient_values = {
         "calories": calories,
@@ -580,7 +587,7 @@ def add_user_nutrition_version(
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                'verified', 'user_entered', NULL, NULL, ?, ?
+                ?, ?, NULL, NULL, ?, ?
             )
             """,
             (
@@ -595,6 +602,8 @@ def add_user_nutrition_version(
                 normalized["sodium_mg"],
                 float(food["serving_amount"]),
                 str(food["serving_unit"]),
+                status,
+                source,
                 timestamp,
                 timestamp,
             ),
@@ -604,8 +613,8 @@ def add_user_nutrition_version(
             """
             UPDATE foods
             SET active_nutrition_version_id = ?,
-                verification_status = 'verified',
-                verification_source = 'user_entered',
+                verification_status = ?,
+                verification_source = ?,
                 last_verified_at = ?,
                 uses_since_verification = 0,
                 updated_at = ?
@@ -613,6 +622,8 @@ def add_user_nutrition_version(
             """,
             (
                 cursor.lastrowid,
+                status,
+                source,
                 timestamp,
                 timestamp,
                 int(food_id),

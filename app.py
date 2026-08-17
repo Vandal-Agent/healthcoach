@@ -66,9 +66,12 @@ from food.pantry_advisor import (
     scale_pantry_meal_nutrition,
 )
 from food.recipes import (
+    delete_saved_recipe,
     get_saved_recipe,
     list_saved_recipes,
     save_pantry_meal_idea,
+    update_saved_recipe,
+    update_saved_recipe_nutrition,
 )
 from food.nutrition_provider import lookup_official_nutrition
 from food.menu_photo_advisor import (
@@ -390,6 +393,8 @@ def menu_reply_markup(message):
             "Choose a saved food to view:",
             "Choose a saved food to edit:",
             "Choose a saved recipe to view:",
+            "Choose a saved recipe to edit:",
+            "Choose a saved recipe to delete:",
             "Choose a Pantry item to remove:",
             "Choose a meal from yesterday to copy:",
         )
@@ -448,6 +453,9 @@ def menu_reply_markup(message):
             "Remove this Pantry item?",
             "Clear My Pantry?",
             "Save this recipe?",
+            "Save this recipe change?",
+            "Save these recipe nutrition changes?",
+            "Delete this Saved Recipe?",
             "Copy yesterday's food?",
             "Copy this meal from yesterday?",
         )
@@ -469,11 +477,26 @@ def menu_reply_markup(message):
         ]
     elif "Saved Recipes Menu\n\n" in message:
         rows = [
-            ["Browse saved recipes"],
+            ["Browse saved recipes", "Edit saved recipe"],
+            ["Delete saved recipe"],
             ["Back", "Cancel"],
         ]
     elif "Saved Recipe Details\n\n" in message:
-        rows = [["Log Recipe"], ["Back", "Cancel"]]
+        rows = [
+            ["Log Recipe", "Edit Recipe"],
+            ["Delete Recipe"],
+            ["Back", "Cancel"],
+        ]
+    elif "Saved Recipe Edit Menu\n\n" in message:
+        rows = [
+            ["Name", "Meal type"],
+            ["Summary", "Ingredients"],
+            ["Preparation", "Nutrition"],
+            ["Back", "Cancel"],
+        ]
+    elif "Should this recipe be for lunch or dinner?" in message:
+        rows = [["Lunch", "Dinner"], ["Back", "Cancel"]]
+        one_time = True
     elif "Which meal should this recipe be logged under?" in message:
         rows = [
             ["Before breakfast", "Breakfast"],
@@ -3134,7 +3157,9 @@ def healthcoach_saved_recipes_menu_text() -> str:
     return (
         "Saved Recipes Menu\n\n"
         "1. Browse saved recipes\n"
-        "2. Back\n\n"
+        "2. Edit saved recipe\n"
+        "3. Delete saved recipe\n"
+        "4. Back\n\n"
         "Recipes can be saved from Pantry meal ideas. Saving a "
         "recipe does not log it as eaten."
     )
@@ -3150,6 +3175,79 @@ def format_saved_recipe_choices(recipes: list[dict]) -> str:
         )
     lines.extend(["", "Reply Back to return or Cancel to close."])
     return "\n".join(lines)
+
+
+def format_saved_recipe_management_choices(
+    recipes: list[dict],
+    *,
+    action: str,
+) -> str:
+    verb = "edit" if action == "edit" else "delete"
+    lines = [f"Choose a saved recipe to {verb}:", ""]
+    for index, recipe in enumerate(recipes, start=1):
+        lines.append(
+            f"{index}. {recipe.get('canonical_name') or 'Recipe'} — "
+            f"{str(recipe.get('meal_type') or 'meal').title()}, "
+            f"{format_display_number(float(recipe.get('calories') or 0), decimals=0)} cal"
+        )
+    lines.extend(["", "Reply Back to return or Cancel to close."])
+    return "\n".join(lines)
+
+
+def format_saved_recipe_edit_menu(recipe: dict) -> str:
+    return (
+        "Saved Recipe Edit Menu\n\n"
+        f"Recipe: {recipe.get('canonical_name') or 'Saved recipe'}\n"
+        f"Current nutrition version: "
+        f"{int(recipe.get('version_number') or 1)}\n\n"
+        "1. Name\n"
+        "2. Meal type\n"
+        "3. Summary\n"
+        "4. Ingredients\n"
+        "5. Preparation\n"
+        "6. Nutrition\n"
+        "7. Back\n\n"
+        "Nutrition changes apply only to future logs."
+    )
+
+
+def parse_saved_recipe_ingredients(value: str) -> list[dict]:
+    lines = [
+        line.strip().lstrip("- ").strip()
+        for line in re.split(r"[\n;]+", str(value or ""))
+        if line.strip().lstrip("- ").strip()
+    ]
+    ingredients = []
+    for line in lines:
+        if "|" not in line:
+            raise ValueError(
+                "Use amount | ingredient for every line."
+            )
+        amount, name = [part.strip() for part in line.split("|", 1)]
+        if not amount or not name:
+            raise ValueError(
+                "Every ingredient needs both an amount and a name."
+            )
+        ingredients.append({
+            "name": name,
+            "amount": amount,
+            "source": "additional",
+        })
+    if not ingredients:
+        raise ValueError("Enter at least one ingredient.")
+    return ingredients
+
+
+def parse_saved_recipe_steps(value: str) -> list[str]:
+    steps = [
+        re.sub(r"^\d+[.)]\s*", "", line.strip()).strip()
+        for line in re.split(r"[\n;]+", str(value or ""))
+        if line.strip()
+    ]
+    steps = [step for step in steps if step]
+    if not steps:
+        raise ValueError("Enter at least one preparation step.")
+    return steps
 
 
 def format_saved_recipe_details(recipe: dict) -> str:
@@ -3194,7 +3292,7 @@ def format_saved_recipe_details(recipe: dict) -> str:
         "",
         "This recipe uses estimated nutrition. Nothing has been logged.",
         "",
-        "Reply Log Recipe, Back, or Cancel.",
+        "Reply Log Recipe, Edit Recipe, Delete Recipe, Back, or Cancel.",
     ])
     return "\n".join(lines).strip()
 
@@ -7480,7 +7578,63 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"2", "back"}:
+            if lowered in {"2", "edit", "edit saved recipe"}:
+                recipes = list_saved_recipes()
+                if not recipes:
+                    send_telegram_msg(
+                        "There are no Saved Recipes to edit yet.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_select",
+                    known_data={
+                        "saved_recipe_ids": [
+                            int(recipe["saved_recipe_id"])
+                            for recipe in recipes
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_management_choices(
+                        recipes,
+                        action="edit",
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "delete", "delete saved recipe"}:
+                recipes = list_saved_recipes()
+                if not recipes:
+                    send_telegram_msg(
+                        "There are no Saved Recipes to delete.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_delete_select",
+                    known_data={
+                        "saved_recipe_ids": [
+                            int(recipe["saved_recipe_id"])
+                            for recipe in recipes
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_management_choices(
+                        recipes,
+                        action="delete",
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -7603,8 +7757,612 @@ def process_telegram_update(update):
                 )
                 return
 
+            if lowered in {"edit", "edit recipe"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_menu",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_edit_menu(recipe),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"delete", "delete recipe"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_delete_confirmation",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Delete this Saved Recipe?\n\n"
+                    f"Recipe: {recipe.get('canonical_name')}\n\n"
+                    "It will disappear from Saved Recipes. Foods "
+                    "already logged from it will remain unchanged.\n\n"
+                    "1. Yes\n"
+                    "2. No",
+                    chat_id=chat_id,
+                )
+                return
+
             send_telegram_msg(
                 format_saved_recipe_details(recipe),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {
+            "saved_recipe_edit_select",
+            "saved_recipe_delete_select",
+        }:
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipes",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_recipes_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            recipe_ids = list(
+                known_data.get("saved_recipe_ids") or []
+            )
+            try:
+                selected_index = int(text.strip()) - 1
+                if selected_index < 0:
+                    raise IndexError
+                saved_recipe_id = int(recipe_ids[selected_index])
+                recipe = get_saved_recipe(saved_recipe_id)
+            except (IndexError, TypeError, ValueError):
+                recipe = None
+
+            action = (
+                "edit"
+                if current_step == "saved_recipe_edit_select"
+                else "delete"
+            )
+            if recipe is None:
+                recipes = list_saved_recipes()
+                send_telegram_msg(
+                    format_saved_recipe_management_choices(
+                        recipes,
+                        action=action,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if action == "edit":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_menu",
+                    known_data={
+                        "saved_recipe_id": saved_recipe_id,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_edit_menu(recipe),
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_delete_confirmation",
+                known_data={"saved_recipe_id": saved_recipe_id},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Delete this Saved Recipe?\n\n"
+                f"Recipe: {recipe.get('canonical_name')}\n\n"
+                "It will disappear from Saved Recipes. Foods "
+                "already logged from it will remain unchanged.\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_edit_menu":
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipes",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "That Saved Recipe is no longer available.\n\n"
+                    + healthcoach_saved_recipes_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"7", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_details",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_details(recipe),
+                    chat_id=chat_id,
+                )
+                return
+
+            edit_steps = {
+                "1": ("saved_recipe_edit_name", "What should this recipe be called?"),
+                "name": ("saved_recipe_edit_name", "What should this recipe be called?"),
+                "2": ("saved_recipe_edit_meal_type", "Should this recipe be for lunch or dinner?"),
+                "meal type": ("saved_recipe_edit_meal_type", "Should this recipe be for lunch or dinner?"),
+                "3": ("saved_recipe_edit_summary", "Enter a short recipe summary. Reply Clear to remove it."),
+                "summary": ("saved_recipe_edit_summary", "Enter a short recipe summary. Reply Clear to remove it."),
+                "4": (
+                    "saved_recipe_edit_ingredients",
+                    "Enter all ingredients, one per line, using:\n"
+                    "amount | ingredient\n\n"
+                    "Example:\n4 ounces | chicken breast\n"
+                    "1/2 cup | green peppers",
+                ),
+                "ingredients": (
+                    "saved_recipe_edit_ingredients",
+                    "Enter all ingredients, one per line, using:\n"
+                    "amount | ingredient\n\n"
+                    "Example:\n4 ounces | chicken breast\n"
+                    "1/2 cup | green peppers",
+                ),
+                "5": (
+                    "saved_recipe_edit_preparation",
+                    "Enter the preparation steps, one per line.",
+                ),
+                "preparation": (
+                    "saved_recipe_edit_preparation",
+                    "Enter the preparation steps, one per line.",
+                ),
+                "6": (
+                    "saved_recipe_edit_nutrition_calories",
+                    "Enter the new calories for one serving.",
+                ),
+                "nutrition": (
+                    "saved_recipe_edit_nutrition_calories",
+                    "Enter the new calories for one serving.",
+                ),
+            }
+            selection = edit_steps.get(lowered)
+            if selection is None:
+                send_telegram_msg(
+                    format_saved_recipe_edit_menu(recipe),
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step=selection[0],
+                known_data={
+                    "_saved_recipe_edit_kind": None,
+                    "_saved_recipe_edit_value": None,
+                    "_saved_recipe_edit_nutrition": None,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(selection[1], chat_id=chat_id)
+            return
+
+        if current_step in {
+            "saved_recipe_edit_name",
+            "saved_recipe_edit_meal_type",
+            "saved_recipe_edit_summary",
+            "saved_recipe_edit_ingredients",
+            "saved_recipe_edit_preparation",
+        }:
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                send_telegram_msg(
+                    "That Saved Recipe is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_menu",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_edit_menu(recipe),
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                if current_step == "saved_recipe_edit_name":
+                    value = text.strip()
+                    if not value:
+                        raise ValueError("Enter a recipe name.")
+                    kind = "name"
+                    preview = f"New name: {value}"
+                elif current_step == "saved_recipe_edit_meal_type":
+                    if lowered not in {"lunch", "dinner"}:
+                        raise ValueError("Choose Lunch or Dinner.")
+                    value = lowered
+                    kind = "meal_type"
+                    preview = f"New meal type: {value.title()}"
+                elif current_step == "saved_recipe_edit_summary":
+                    value = "" if lowered == "clear" else text.strip()
+                    kind = "summary"
+                    preview = f"New summary: {value or 'none'}"
+                elif current_step == "saved_recipe_edit_ingredients":
+                    value = parse_saved_recipe_ingredients(text)
+                    kind = "ingredients"
+                    preview = "New ingredients:\n" + "\n".join(
+                        f"- {item['amount']} {item['name']}"
+                        for item in value
+                    )
+                else:
+                    value = parse_saved_recipe_steps(text)
+                    kind = "preparation_steps"
+                    preview = "New preparation:\n" + "\n".join(
+                        f"{index}. {step}"
+                        for index, step in enumerate(value, start=1)
+                    )
+            except ValueError as exc:
+                send_telegram_msg(str(exc), chat_id=chat_id)
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_edit_confirmation",
+                known_data={
+                    "_saved_recipe_edit_kind": kind,
+                    "_saved_recipe_edit_value": value,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Save this recipe change?\n\n"
+                f"Recipe: {recipe.get('canonical_name')}\n"
+                f"{preview}\n\n"
+                "Previously logged meals will not change.\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_edit_confirmation":
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                send_telegram_msg(
+                    "That Saved Recipe is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_menu",
+                    known_data={
+                        "_saved_recipe_edit_kind": None,
+                        "_saved_recipe_edit_value": None,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_edit_menu(recipe),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg(
+                    "Reply Yes, No, Back, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+
+            kind = str(
+                known_data.get("_saved_recipe_edit_kind") or ""
+            )
+            value = known_data.get("_saved_recipe_edit_value")
+            allowed = {
+                "name",
+                "meal_type",
+                "summary",
+                "ingredients",
+                "preparation_steps",
+            }
+            if kind not in allowed:
+                send_telegram_msg(
+                    "That edit expired. Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                updated_recipe = update_saved_recipe(
+                    int(recipe["saved_recipe_id"]),
+                    **{kind: value},
+                )
+            except (TypeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't save that change: {exc}\n\n"
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_details",
+                known_data={
+                    "_saved_recipe_edit_kind": None,
+                    "_saved_recipe_edit_value": None,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Saved Recipe updated. Previously logged meals were "
+                "not changed.\n\n"
+                + format_saved_recipe_details(updated_recipe),
+                chat_id=chat_id,
+            )
+            return
+
+        nutrition_edit_steps = {
+            "saved_recipe_edit_nutrition_calories": (
+                "calories",
+                "saved_recipe_edit_nutrition_protein",
+                "Enter the new grams of protein.",
+            ),
+            "saved_recipe_edit_nutrition_protein": (
+                "protein_g",
+                "saved_recipe_edit_nutrition_carbohydrates",
+                "Enter the new grams of carbohydrates.",
+            ),
+            "saved_recipe_edit_nutrition_carbohydrates": (
+                "carbohydrates_g",
+                "saved_recipe_edit_nutrition_fat",
+                "Enter the new grams of fat.",
+            ),
+            "saved_recipe_edit_nutrition_fat": (
+                "fat_g",
+                "saved_recipe_edit_nutrition_fiber",
+                "Enter the new grams of fiber.",
+            ),
+            "saved_recipe_edit_nutrition_fiber": (
+                "fiber_g",
+                "saved_recipe_edit_nutrition_sugar",
+                "Enter the new grams of sugar.",
+            ),
+            "saved_recipe_edit_nutrition_sugar": (
+                "sugar_g",
+                "saved_recipe_edit_nutrition_sodium",
+                "Enter the new milligrams of sodium.",
+            ),
+        }
+        if current_step in {
+            *nutrition_edit_steps,
+            "saved_recipe_edit_nutrition_sodium",
+        }:
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                send_telegram_msg(
+                    "That Saved Recipe is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_menu",
+                    known_data={"_saved_recipe_edit_nutrition": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_edit_menu(recipe),
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                number = float(text.strip())
+            except (TypeError, ValueError):
+                number = -1
+            if number < 0:
+                send_telegram_msg(
+                    "Enter zero or a positive number.",
+                    chat_id=chat_id,
+                )
+                return
+
+            staged = dict(
+                known_data.get("_saved_recipe_edit_nutrition") or {}
+            )
+            if current_step == "saved_recipe_edit_nutrition_sodium":
+                staged["sodium_mg"] = number
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_nutrition_confirmation",
+                    known_data={
+                        "_saved_recipe_edit_nutrition": staged,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Save these recipe nutrition changes?\n\n"
+                    f"Recipe: {recipe.get('canonical_name')}\n"
+                    "New nutrition version: "
+                    f"{int(recipe.get('version_number') or 1) + 1}\n\n"
+                    f"Calories: {format_display_number(staged['calories'])}\n"
+                    f"Protein: {format_display_number(staged['protein_g'])} g\n"
+                    "Carbohydrates: "
+                    f"{format_display_number(staged['carbohydrates_g'])} g\n"
+                    f"Fat: {format_display_number(staged['fat_g'])} g\n"
+                    f"Fiber: {format_display_number(staged['fiber_g'])} g\n"
+                    f"Sugar: {format_display_number(staged['sugar_g'])} g\n"
+                    f"Sodium: {format_display_number(staged['sodium_mg'])} mg\n\n"
+                    "Previously logged meals will not change.\n\n"
+                    "1. Yes\n"
+                    "2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            field, next_step, prompt = nutrition_edit_steps[current_step]
+            staged[field] = number
+            update_conversation(
+                chat_id=chat_id,
+                current_step=next_step,
+                known_data={"_saved_recipe_edit_nutrition": staged},
+                missing_fields=[],
+            )
+            send_telegram_msg(prompt, chat_id=chat_id)
+            return
+
+        if current_step == "saved_recipe_edit_nutrition_confirmation":
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                send_telegram_msg(
+                    "That Saved Recipe is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_edit_menu",
+                    known_data={"_saved_recipe_edit_nutrition": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_edit_menu(recipe),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg(
+                    "Reply Yes, No, Back, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+            nutrition = dict(
+                known_data.get("_saved_recipe_edit_nutrition") or {}
+            )
+            required = {
+                "calories",
+                "protein_g",
+                "carbohydrates_g",
+                "fat_g",
+                "fiber_g",
+                "sugar_g",
+                "sodium_mg",
+            }
+            if set(nutrition) != required:
+                send_telegram_msg(
+                    "That nutrition edit expired. Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                updated_recipe = update_saved_recipe_nutrition(
+                    int(recipe["saved_recipe_id"]),
+                    **nutrition,
+                )
+            except (TypeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't save that nutrition: {exc}\n\n"
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_details",
+                known_data={"_saved_recipe_edit_nutrition": None},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Saved Recipe nutrition updated to version "
+                f"{updated_recipe.get('version_number')}. Previously "
+                "logged meals were not changed.\n\n"
+                + format_saved_recipe_details(updated_recipe),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_delete_confirmation":
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipes",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "That Saved Recipe is already gone.\n\n"
+                    + healthcoach_saved_recipes_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_details",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_details(recipe),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "delete"}:
+                send_telegram_msg(
+                    "Reply Yes, No, Back, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                deleted = delete_saved_recipe(
+                    int(recipe["saved_recipe_id"])
+                )
+            except (RuntimeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't delete that recipe: {exc}",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipes",
+                known_data={"saved_recipe_id": None},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                f"Deleted {deleted.get('canonical_name')} from Saved "
+                "Recipes. Previously logged meals were not changed.\n\n"
+                + healthcoach_saved_recipes_menu_text(),
                 chat_id=chat_id,
             )
             return

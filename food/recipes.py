@@ -5,11 +5,16 @@ from typing import Any
 
 from food.database import (
     DATABASE_PATH,
+    build_search_key,
     current_timestamp,
     get_connection,
     initialize_database,
+    normalize_key_part,
 )
-from food.library import add_food_with_nutrition
+from food.library import (
+    add_food_with_nutrition,
+    add_user_nutrition_version,
+)
 
 
 NUTRIENT_FIELDS = (
@@ -254,3 +259,191 @@ def list_saved_recipes() -> list[dict[str, Any]]:
             """
         ).fetchall()
     return [decode_saved_recipe(row) for row in rows]
+
+
+def update_saved_recipe(
+    saved_recipe_id: int,
+    *,
+    name: str | None = None,
+    meal_type: str | None = None,
+    summary: str | None = None,
+    ingredients: list[dict[str, Any]] | None = None,
+    preparation_steps: list[str] | None = None,
+    estimate_notes: str | None = None,
+) -> dict[str, Any]:
+    """Update recipe instructions without changing logged history."""
+    initialize_database()
+    existing = get_saved_recipe(int(saved_recipe_id))
+    if existing is None:
+        raise ValueError("Saved Recipe was not found.")
+
+    candidate = {
+        "name": existing["canonical_name"] if name is None else name,
+        "summary": existing["summary"] if summary is None else summary,
+        "ingredients": (
+            existing["ingredients"]
+            if ingredients is None
+            else ingredients
+        ),
+        "preparation_steps": (
+            existing["preparation_steps"]
+            if preparation_steps is None
+            else preparation_steps
+        ),
+        "estimate_notes": (
+            existing["estimate_notes"]
+            if estimate_notes is None
+            else estimate_notes
+        ),
+        **{
+            field: existing.get(field)
+            for field in NUTRIENT_FIELDS
+        },
+    }
+    cleaned = validate_recipe_idea(candidate)
+    normalized_meal = normalize_meal_type(
+        existing["meal_type"] if meal_type is None else meal_type
+    )
+    timestamp = current_timestamp()
+    food_id = int(existing["food_id"])
+
+    with get_connection(DATABASE_PATH) as connection:
+        food = connection.execute(
+            "SELECT * FROM foods WHERE food_id = ?",
+            (food_id,),
+        ).fetchone()
+        recipe = connection.execute(
+            "SELECT saved_recipe_id FROM saved_recipes "
+            "WHERE saved_recipe_id = ? AND food_id = ?",
+            (int(saved_recipe_id), food_id),
+        ).fetchone()
+        if food is None or recipe is None:
+            raise ValueError("Saved Recipe was not found.")
+
+        new_search_key = build_search_key(
+            canonical_name=cleaned["name"],
+            serving_description=food["serving_description"],
+            brand=food["brand"],
+            restaurant=food["restaurant"],
+        )
+        conflict = connection.execute(
+            "SELECT food_id FROM foods "
+            "WHERE lower(search_key) = lower(?) AND food_id != ?",
+            (new_search_key, food_id),
+        ).fetchone()
+        if conflict is not None:
+            raise ValueError(
+                "Another saved food or recipe already uses that name."
+            )
+
+        connection.execute(
+            """
+            UPDATE foods
+            SET canonical_name = ?, search_key = ?, updated_at = ?
+            WHERE food_id = ?
+            """,
+            (cleaned["name"], new_search_key, timestamp, food_id),
+        )
+        normalized_alias = normalize_key_part(cleaned["name"])
+        connection.execute(
+            """
+            INSERT INTO food_aliases (
+                food_id, alias_text, normalized_alias,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(food_id, normalized_alias)
+            DO UPDATE SET
+                alias_text = excluded.alias_text,
+                updated_at = excluded.updated_at
+            """,
+            (
+                food_id,
+                cleaned["name"],
+                normalized_alias,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE saved_recipes
+            SET meal_type = ?,
+                summary = ?,
+                ingredients_json = ?,
+                preparation_steps_json = ?,
+                estimate_notes = ?,
+                updated_at = ?
+            WHERE saved_recipe_id = ?
+            """,
+            (
+                normalized_meal,
+                cleaned["summary"],
+                json.dumps(cleaned["ingredients"]),
+                json.dumps(cleaned["preparation_steps"]),
+                cleaned["estimate_notes"],
+                timestamp,
+                int(saved_recipe_id),
+            ),
+        )
+        connection.commit()
+
+    updated = get_saved_recipe(int(saved_recipe_id))
+    if updated is None:
+        raise RuntimeError("Saved Recipe update could not be verified.")
+    return updated
+
+
+def update_saved_recipe_nutrition(
+    saved_recipe_id: int,
+    *,
+    calories: float,
+    protein_g: float,
+    carbohydrates_g: float,
+    fat_g: float,
+    fiber_g: float,
+    sugar_g: float,
+    sodium_mg: float,
+) -> dict[str, Any]:
+    """Create a new estimated nutrition version for future logs."""
+    recipe = get_saved_recipe(int(saved_recipe_id))
+    if recipe is None:
+        raise ValueError("Saved Recipe was not found.")
+
+    add_user_nutrition_version(
+        food_id=int(recipe["food_id"]),
+        calories=calories,
+        protein_g=protein_g,
+        carbohydrates_g=carbohydrates_g,
+        fat_g=fat_g,
+        fiber_g=fiber_g,
+        sugar_g=sugar_g,
+        sodium_mg=sodium_mg,
+        verification_status="estimated",
+        verification_source="saved_recipe_edit",
+    )
+    updated = get_saved_recipe(int(saved_recipe_id))
+    if updated is None:
+        raise RuntimeError("Saved Recipe nutrition could not be verified.")
+    return updated
+
+
+def delete_saved_recipe(saved_recipe_id: int) -> dict[str, Any]:
+    """
+    Remove a recipe from the library while preserving its Food history.
+    """
+    initialize_database()
+    existing = get_saved_recipe(int(saved_recipe_id))
+    if existing is None:
+        raise ValueError("Saved Recipe was not found.")
+
+    with get_connection(DATABASE_PATH) as connection:
+        cursor = connection.execute(
+            "DELETE FROM saved_recipes WHERE saved_recipe_id = ?",
+            (int(saved_recipe_id),),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Saved Recipe was not deleted.")
+        connection.commit()
+
+    return existing
