@@ -135,6 +135,64 @@ class SavedFoodLibraryTests(unittest.TestCase):
                 sodium_mg=900,
             )
 
+    def test_renames_saved_food_and_serving(self):
+        created = self.create_food()
+
+        updated = library.update_user_saved_food_identity(
+            food_id=created["food"]["food_id"],
+            canonical_name="Tracy's Home Salad",
+            serving_description="1 home salad",
+        )
+
+        self.assertEqual(updated["canonical_name"], "Tracy's Home Salad")
+        self.assertEqual(updated["serving_description"], "1 home salad")
+        self.assertEqual(updated["calories"], 500)
+
+    def test_rename_rejects_duplicate_identity(self):
+        first = self.create_food()
+        library.add_food_with_nutrition(
+            canonical_name="Second Bowl",
+            serving_description="1 serving",
+            serving_amount=1,
+            serving_unit="serving",
+            verification_status="verified",
+            verification_source="user_entered",
+            calories=400,
+            protein_g=30,
+            carbohydrates_g=40,
+            fat_g=12,
+            fiber_g=7,
+            sugar_g=4,
+            sodium_mg=700,
+        )
+
+        with self.assertRaisesRegex(ValueError, "already uses"):
+            library.update_user_saved_food_identity(
+                food_id=first["food"]["food_id"],
+                canonical_name="Second Bowl",
+            )
+
+    def test_archive_hides_saved_food_and_preserves_history(self):
+        created = self.create_food()
+        food_id = created["food"]["food_id"]
+        entry = ledger.add_food_entry(
+            entry_date=date(2026, 8, 16),
+            meal_category="dinner",
+            food_id=food_id,
+            quantity=1,
+            logging_source="manual",
+            user_confirmed=True,
+        )
+
+        archived = library.archive_user_saved_food(food_id)
+
+        self.assertEqual(archived["canonical_name"], "Test Bowl")
+        self.assertEqual(library.list_user_saved_foods(), [])
+        self.assertIsNotNone(library.get_food(food_id))
+        history = ledger.list_food_entries(entry_date=date(2026, 8, 16))
+        self.assertEqual(history[0]["food_entry_id"], entry["food_entry_id"])
+        self.assertEqual(history[0]["calories"], 500)
+
 
 if __name__ == "__main__":
     unittest.main()

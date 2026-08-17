@@ -12,6 +12,7 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Saves Pantry meal ideas as reusable recipes with ingredients,
   preparation, nutrition, and confirmed serving-based logging
 - Edits or deletes Saved Recipes without rewriting previously logged meals
+- Renames, updates, or removes Saved Foods while preserving food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the
   entire day after confirmation
 - Reads Lose It CSV summaries from Gmail

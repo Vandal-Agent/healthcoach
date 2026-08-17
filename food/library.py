@@ -9,6 +9,7 @@ from food.database import (
     current_timestamp,
     get_connection,
     initialize_database,
+    normalize_key_part,
     save_food_alias,
 )
 from food.usda_provider import barcode_match_key, normalize_barcode
@@ -492,6 +493,164 @@ def list_user_saved_foods() -> list[dict[str, Any]]:
         ).fetchall()
 
     return [dict(row) for row in rows]
+
+
+def update_user_saved_food_identity(
+    *,
+    food_id: int,
+    canonical_name: str | None = None,
+    serving_description: str | None = None,
+) -> dict[str, Any]:
+    """Rename a user Saved Food without rewriting ledger snapshots."""
+    initialize_database()
+    saved_food = next(
+        (
+            food
+            for food in list_user_saved_foods()
+            if int(food["food_id"]) == int(food_id)
+        ),
+        None,
+    )
+    if saved_food is None:
+        raise ValueError("Saved Food was not found.")
+
+    new_name = (
+        str(saved_food["canonical_name"])
+        if canonical_name is None
+        else str(canonical_name).strip()
+    )
+    new_serving = (
+        str(saved_food["serving_description"])
+        if serving_description is None
+        else str(serving_description).strip()
+    )
+    if len(new_name) < 2:
+        raise ValueError("Saved Food name must contain at least two characters.")
+    if not new_serving:
+        raise ValueError("Serving description is required.")
+
+    new_search_key = build_search_key(
+        canonical_name=new_name,
+        serving_description=new_serving,
+        brand=saved_food.get("brand"),
+        restaurant=saved_food.get("restaurant"),
+    )
+    timestamp = current_timestamp()
+
+    with get_connection(DATABASE_PATH) as connection:
+        conflict = connection.execute(
+            """
+            SELECT food_id
+            FROM foods
+            WHERE lower(search_key) = lower(?)
+              AND food_id != ?
+            LIMIT 1
+            """,
+            (new_search_key, int(food_id)),
+        ).fetchone()
+        if conflict is not None:
+            raise ValueError(
+                "Another saved food already uses that name and serving."
+            )
+
+        cursor = connection.execute(
+            """
+            UPDATE foods
+            SET canonical_name = ?,
+                serving_description = ?,
+                search_key = ?,
+                updated_at = ?
+            WHERE food_id = ?
+              AND verification_source IN (
+                    'user_package_label',
+                    'user_entered'
+              )
+            """,
+            (
+                new_name,
+                new_serving,
+                new_search_key,
+                timestamp,
+                int(food_id),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Saved Food was not found.")
+
+        normalized_alias = normalize_key_part(new_name)
+        connection.execute(
+            """
+            INSERT INTO food_aliases (
+                food_id,
+                alias_text,
+                normalized_alias,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(food_id, normalized_alias)
+            DO UPDATE SET
+                alias_text = excluded.alias_text,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(food_id),
+                new_name,
+                normalized_alias,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.commit()
+
+    updated = next(
+        (
+            food
+            for food in list_user_saved_foods()
+            if int(food["food_id"]) == int(food_id)
+        ),
+        None,
+    )
+    if updated is None:
+        raise RuntimeError("Saved Food update could not be verified.")
+    return updated
+
+
+def archive_user_saved_food(food_id: int) -> dict[str, Any]:
+    """Remove a Saved Food from the library but retain its history."""
+    initialize_database()
+    saved_food = next(
+        (
+            food
+            for food in list_user_saved_foods()
+            if int(food["food_id"]) == int(food_id)
+        ),
+        None,
+    )
+    if saved_food is None:
+        raise ValueError("Saved Food was not found.")
+
+    timestamp = current_timestamp()
+    with get_connection(DATABASE_PATH) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE foods
+            SET verification_status = 'unverified',
+                verification_source = 'archived_user_food',
+                updated_at = ?
+            WHERE food_id = ?
+              AND verification_source IN (
+                    'user_package_label',
+                    'user_entered'
+              )
+            """,
+            (timestamp, int(food_id)),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Saved Food was not found.")
+        connection.commit()
+
+    return saved_food
 
 
 def add_user_nutrition_version(

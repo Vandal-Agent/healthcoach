@@ -422,7 +422,11 @@ Supported actions:
 
 - Browse manually entered foods and view complete nutrition.
 - Add foods to the library without logging them as eaten.
+- Rename a Saved Food or change its serving description after confirmation.
 - Edit nutrition for an existing saved food.
+- Remove a Saved Food from the active library after confirmation without
+  deleting its Food record, nutrition versions, or historical Food Ledger
+  entries.
 - Scale saved drinks from their base fluid-ounce serving.
 
 Saved Food nutrition is versioned. Editing nutrition creates a new active
@@ -440,6 +444,9 @@ Saved Foods accept these nutrition fields:
 - Sodium
 
 Duplicate food names and serving descriptions are not created.
+Renames are rejected when another Food already uses the resulting name and
+serving identity. Removed foods are marked unverified so they no longer
+appear in Saved Foods or resolve as trusted Saved Foods.
 
 ## Morning Food Coaching
 
