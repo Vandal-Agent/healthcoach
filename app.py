@@ -17,8 +17,6 @@ from loseit_coaching import (
     build_food_ledger_coaching_data,
     build_weekly_health_report,
 )
-from loseit_email_reader import download_latest_loseit_csv
-from loseit_parser import parse_loseit_csv
 from food.database import (
     get_pending_unresolved_foods,
     get_portion_profile,
@@ -115,7 +113,6 @@ JSON_PATH = os.getenv("HEALTH_GOOGLE_JSON_PATH")
 STATE_FILE = "/home/vandal/bots/healthcoach/logs/state.json"
 LOG_FILE = "/home/vandal/bots/healthcoach/logs/healthcoach.log"
 GOALS_FILE = "/home/vandal/bots/healthcoach/goals.json"
-LOSEIT_HISTORY_FILE = "/home/vandal/bots/healthcoach/data/loseit_history.json"
 MEMORY_START_DATE = os.getenv("HEALTH_MEMORY_START_DATE", "")
 
 SCOPE = [
@@ -136,7 +133,7 @@ HEADERS = [
     "Protein",
 ]
 
-EARLY_PROTEIN_MEALS = {"Breakfast", "School Snacks", "Lunch"}
+EARLY_PROTEIN_MEALS = {"breakfast", "school snack", "lunch"}
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -208,93 +205,6 @@ def initialize_goals_if_needed(reference_date):
 
     if changed:
         save_goals(data)
-
-
-def load_loseit_history():
-    if not os.path.exists(LOSEIT_HISTORY_FILE):
-        return {"days": {}}
-    try:
-        with open(LOSEIT_HISTORY_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {"days": {}}
-
-
-def save_loseit_history(data):
-    os.makedirs(os.path.dirname(LOSEIT_HISTORY_FILE), exist_ok=True)
-    with open(LOSEIT_HISTORY_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-def _normalize_loseit_date(date_str):
-    if not date_str:
-        return None
-
-    candidates = [
-        "%m/%d/%Y",
-        "%Y-%m-%d",
-        "%m/%d/%y",
-    ]
-
-    for fmt in candidates:
-        try:
-            return datetime.strptime(date_str.strip(), fmt).strftime("%Y-%m-%d")
-        except Exception:
-            continue
-
-    return None
-
-
-def archive_latest_loseit_day():
-    parsed = parse_loseit_csv()
-    foods = parsed.get("foods", []) or []
-    totals = parsed.get("totals", {}) or {}
-    meal_totals = parsed.get("meal_totals", {}) or {}
-
-    if not foods:
-        logging.info("Lose It archive skipped: no foods found in latest CSV")
-        return False
-
-    raw_dates = {item.get("date", "").strip() for item in foods if item.get("date")}
-    normalized_dates = {_normalize_loseit_date(d) for d in raw_dates}
-    normalized_dates = {d for d in normalized_dates if d}
-
-    if len(normalized_dates) != 1:
-        logging.warning("Lose It archive skipped: expected one day, found dates=%s", list(normalized_dates))
-        return False
-
-    day_key = list(normalized_dates)[0]
-
-    meal_protein = {}
-    for meal_name, meal_data in meal_totals.items():
-        meal_protein[meal_name] = round(float(meal_data.get("protein", 0) or 0), 1)
-
-    early_protein = round(
-        sum(meal_protein.get(meal_name, 0) for meal_name in EARLY_PROTEIN_MEALS),
-        1,
-    )
-
-    history = load_loseit_history()
-    history.setdefault("days", {})
-
-    history["days"][day_key] = {
-        "date": day_key,
-        "totals": {
-            "calories": float(totals.get("calories", 0) or 0),
-            "protein": float(totals.get("protein", 0) or 0),
-            "carbs": float(totals.get("carbs", 0) or 0),
-            "fat": float(totals.get("fat", 0) or 0),
-            "fiber": float(totals.get("fiber", 0) or 0),
-            "sugar": float(totals.get("sugar", 0) or 0),
-            "sodium": float(totals.get("sodium", 0) or 0),
-        },
-        "meal_protein": meal_protein,
-        "early_protein": early_protein,
-    }
-
-    save_loseit_history(history)
-    logging.info("Archived Lose It day %s with early protein %.1f", day_key, early_protein)
-    return True
 
 
 def menu_reply_markup(message):
@@ -712,19 +622,6 @@ def send_telegram_msg(
     except Exception as e:
         logging.error("Telegram error: %s", e)
         return False
-
-
-def refresh_loseit():
-    try:
-        logging.info("Refreshing Lose It email")
-        path = download_latest_loseit_csv()
-        if path:
-            logging.info("Lose It CSV updated: %s", path)
-            archive_latest_loseit_day()
-        else:
-            logging.info("No new Lose It CSV found")
-    except Exception as e:
-        logging.error("Lose It refresh failed: %s", e)
 
 
 def get_gspread_client():
@@ -1669,19 +1566,27 @@ def build_last_week_rows(reference_date):
     return week
 
 
-def get_loseit_history_for_week(reference_date):
+def get_food_ledger_early_protein_for_week(reference_date):
     end_date = reference_date - timedelta(days=1)
     start_date = end_date - timedelta(days=6)
-
-    history = load_loseit_history()
-    days = history.get("days", {})
 
     results = {}
     current = start_date
     while current <= end_date:
-        key = current.strftime("%Y-%m-%d")
-        if key in days:
-            results[key] = days[key]
+        entries = list_food_entries(entry_date=current)
+        early_entries = [
+            entry
+            for entry in entries
+            if entry.get("meal_category") in EARLY_PROTEIN_MEALS
+        ]
+        if early_entries:
+            results[current.isoformat()] = round(
+                sum(
+                    float(entry.get("protein_g") or 0)
+                    for entry in early_entries
+                ),
+                1,
+            )
         current += timedelta(days=1)
 
     return results
@@ -1690,7 +1595,9 @@ def get_loseit_history_for_week(reference_date):
 def evaluate_goals_for_week(week_rows, reference_date):
     goals = get_active_goals()
     lines = []
-    loseit_week = get_loseit_history_for_week(reference_date)
+    early_protein_week = (
+        get_food_ledger_early_protein_for_week(reference_date)
+    )
 
     for goal in goals:
         goal_type = goal.get("type")
@@ -1714,21 +1621,23 @@ def evaluate_goals_for_week(week_rows, reference_date):
             valid_days = []
             hits = 0
 
-            for day_key, day_data in sorted(loseit_week.items()):
-                early_protein = day_data.get("early_protein")
-                if early_protein is None:
-                    continue
+            for day_key, early_protein in sorted(
+                early_protein_week.items()
+            ):
                 valid_days.append(day_key)
                 if float(early_protein) >= float(target):
                     hits += 1
 
             if valid_days:
                 lines.append(
-                    f"Protein goal ({target:.0f}g by 1 PM): hit {hits}/{len(valid_days)} Lose It days using Breakfast + School Snacks + Lunch."
+                    f"Protein goal ({target:.0f}g by 1 PM): hit "
+                    f"{hits}/{len(valid_days)} Food Ledger days using "
+                    "Breakfast + School Snack + Lunch."
                 )
             else:
                 lines.append(
-                    f"Protein goal ({target:.0f}g by 1 PM): no archived Lose It days available."
+                    f"Protein goal ({target:.0f}g by 1 PM): no "
+                    "Food Ledger days with early meals available."
                 )
 
         else:
@@ -12321,7 +12230,7 @@ def process_telegram_update(update):
                             "entry": entry,
                         }
                     )
-            except Exception:
+            except Exception as error:
                 logging.exception(
                     "Pending nutrition logging failed"
                 )
@@ -12336,9 +12245,25 @@ def process_telegram_update(update):
                             "Pending nutrition rollback failed"
                         )
 
+                cancel_conversation(chat_id)
+
+                if isinstance(error, ValueError):
+                    failure_message = (
+                        "I couldn't log that food: "
+                        f"{error}\n\n"
+                        "Nothing was logged. Send the food again "
+                        "to start a new entry."
+                    )
+                else:
+                    failure_message = (
+                        "The food could not be completely logged. "
+                        "Any partial ledger entries were removed.\n\n"
+                        "The failed entry was closed, so you can send "
+                        "the food again as a new message."
+                    )
+
                 send_telegram_msg(
-                    "The food could not be completely logged. "
-                    "Any partial ledger entries were removed.",
+                    failure_message,
                     chat_id=chat_id,
                 )
                 return

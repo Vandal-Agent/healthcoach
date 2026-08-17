@@ -153,16 +153,44 @@ class FoodWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(len(moved), 1)
 
-    def test_different_source_in_same_meal_is_rejected(self) -> None:
-        self.add_entry(source="telegram_ai")
+    def test_different_sources_can_share_one_meal(self) -> None:
+        sources = [
+            "telegram_ai",
+            "telegram_manual",
+            "barcode",
+            "recipe",
+            "manual",
+            "loseit",
+        ]
 
-        with self.assertRaisesRegex(ValueError, "already contains entries"):
-            self.add_entry(source="loseit")
+        for source in sources:
+            self.add_entry(source=source)
 
-        self.assertEqual(
-            len(ledger.list_food_entries(entry_date=self.ENTRY_DATE)),
-            1,
+        entries = ledger.list_food_entries(
+            entry_date=self.ENTRY_DATE,
+            meal_category="breakfast",
         )
+        self.assertEqual(len(entries), len(sources))
+        self.assertEqual(
+            {entry["logging_source"] for entry in entries},
+            set(sources),
+        )
+
+    def test_meal_edit_can_join_entries_from_other_sources(self) -> None:
+        moved = self.add_entry(meal="breakfast", source="recipe")
+        self.add_entry(meal="lunch", source="barcode")
+
+        updated = ledger.update_food_entry(
+            moved["food_entry_id"],
+            meal_category="lunch",
+        )
+
+        self.assertEqual(updated["meal_category"], "lunch")
+        lunch_entries = ledger.list_food_entries(
+            entry_date=self.ENTRY_DATE,
+            meal_category="lunch",
+        )
+        self.assertEqual(len(lunch_entries), 2)
 
     def test_delete_entry_recalculates_totals(self) -> None:
         entry = self.add_entry(quantity=2)

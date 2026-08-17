@@ -1,5 +1,6 @@
 .env
 venv/
+.test-deps/
 *.json
 *.log
 *.csv

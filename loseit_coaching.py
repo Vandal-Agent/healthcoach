@@ -1,6 +1,3 @@
-from loseit_parser import parse_loseit_csv
-
-
 def _safe_number(value, default=0):
     try:
         if value is None:
@@ -247,7 +244,13 @@ def build_food_coaching_data(
     food_data=None,
 ):
     data = (
-        parse_loseit_csv()
+        {
+            "totals": {},
+            "meal_totals": {},
+            "top_calorie_foods": [],
+            "food_entry_count": 0,
+            "food_data_complete": False,
+        }
         if food_data is None
         else dict(food_data)
     )

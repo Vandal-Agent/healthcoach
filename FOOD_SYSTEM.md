@@ -157,10 +157,13 @@ Never overwrite previous versions.
 
 - Telegram AI
 - Telegram Manual
-- Lose It
 - Barcode
 - Recipe
 - Manual
+
+Logging source is metadata only. Foods from different HealthCoach entry
+methods may coexist in the same meal. Historical Lose It rows remain
+readable, but HealthCoach no longer imports, refreshes, or depends on Lose It.
 
 ---
 

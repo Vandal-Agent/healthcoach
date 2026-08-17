@@ -15,11 +15,6 @@ from food.library import (
     increment_food_usage,
 )
 
-TELEGRAM_SOURCES = {
-    "telegram_ai",
-    "telegram_manual",
-}
-
 ALLOWED_SOURCES = {
     "telegram_ai",
     "telegram_manual",
@@ -68,74 +63,6 @@ def validate_logging_source(value: str) -> str:
         raise ValueError(f"Unsupported logging source: {value}")
 
     return cleaned
-
-
-def source_group(source: str) -> str:
-    """Return the meal-level source group used for conflict checking."""
-    if source in TELEGRAM_SOURCES:
-        return "telegram"
-
-    return source
-
-
-def get_meal_sources(
-    *,
-    entry_date: date | str,
-    meal_category: str,
-) -> list[str]:
-    """Return the distinct logging sources already used for one meal."""
-    initialize_database()
-
-    normalized_date = normalize_date(entry_date)
-    normalized_meal = normalize_meal_category(meal_category)
-
-    with get_connection(DATABASE_PATH) as connection:
-        rows = connection.execute(
-            """
-            SELECT DISTINCT logging_source
-            FROM food_entries
-            WHERE entry_date = ?
-              AND meal_category = ?
-            ORDER BY logging_source
-            """,
-            (
-                normalized_date,
-                normalized_meal,
-            ),
-        ).fetchall()
-
-    return [row["logging_source"] for row in rows]
-
-
-def meal_has_source_conflict(
-    *,
-    entry_date: date | str,
-    meal_category: str,
-    proposed_source: str,
-) -> dict[str, Any]:
-    """Check the one-source-per-meal rule."""
-    source = validate_logging_source(proposed_source)
-    existing_sources = get_meal_sources(
-        entry_date=entry_date,
-        meal_category=meal_category,
-    )
-
-    proposed_group = source_group(source)
-    existing_groups = {
-        source_group(existing)
-        for existing in existing_sources
-    }
-
-    conflict = bool(
-        existing_groups
-        and proposed_group not in existing_groups
-    )
-
-    return {
-        "conflict": conflict,
-        "existing_sources": existing_sources,
-        "proposed_source": source,
-    }
 
 
 def scale_value(
@@ -227,7 +154,7 @@ def add_food_entry(
     quantity_is_estimated: bool = False,
     user_confirmed: bool = True,
 ) -> dict[str, Any]:
-    """Add a confirmed Food entry while enforcing meal-source rules."""
+    """Add a confirmed Food entry and retain its origin as metadata."""
     initialize_database()
 
     normalized_date = normalize_date(entry_date)
@@ -248,21 +175,6 @@ def add_food_entry(
     if nutrition is None:
         raise ValueError(
             "This Food has no active Nutrition Version."
-        )
-
-    conflict = meal_has_source_conflict(
-        entry_date=normalized_date,
-        meal_category=normalized_meal,
-        proposed_source=source,
-    )
-
-    if conflict["conflict"]:
-        existing = ", ".join(conflict["existing_sources"])
-
-        raise ValueError(
-            f"{normalized_meal.title()} on {normalized_date} "
-            f"already contains entries from: {existing}. "
-            "One source per meal is allowed."
         )
 
     timestamp = current_timestamp()
@@ -740,33 +652,6 @@ def update_food_entry(
             if meal_category is None
             else normalize_meal_category(meal_category)
         )
-
-        if new_meal != existing["meal_category"]:
-            source_rows = connection.execute(
-                """
-                SELECT DISTINCT logging_source
-                FROM food_entries
-                WHERE entry_date = ?
-                  AND meal_category = ?
-                  AND food_entry_id != ?
-                """,
-                (
-                    existing["entry_date"],
-                    new_meal,
-                    int(food_entry_id),
-                ),
-            ).fetchall()
-            existing_groups = {
-                source_group(source_row["logging_source"])
-                for source_row in source_rows
-            }
-
-            entry_group = source_group(existing["logging_source"])
-            if existing_groups - {entry_group}:
-                raise ValueError(
-                    f"{new_meal.title()} already contains food "
-                    "from a different logging source."
-                )
 
         ratio = new_quantity / old_quantity
         nutrient_columns = (
