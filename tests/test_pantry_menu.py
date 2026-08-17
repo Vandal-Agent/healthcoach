@@ -15,12 +15,108 @@ class PantryMenuTests(unittest.TestCase):
     def test_food_menu_contains_separate_pantry_entry(self) -> None:
         message = app.healthcoach_food_menu_text()
 
-        self.assertIn("7. My Pantry", message)
-        self.assertIn("8. Photo tools", message)
-        self.assertIn("11. Back", message)
+        self.assertIn("7. Saved recipes", message)
+        self.assertIn("8. My Pantry", message)
+        self.assertIn("9. Photo tools", message)
+        self.assertIn("12. Back", message)
 
         keyboard = app.menu_reply_markup(message)
-        self.assertIn(["My Pantry"], keyboard["keyboard"])
+        self.assertIn(
+            ["Saved recipes", "My Pantry"],
+            keyboard["keyboard"],
+        )
+
+    def test_pantry_idea_can_start_save_recipe_confirmation(self) -> None:
+        idea = {
+            "name": "Chicken Pepper Bowl",
+            "summary": "Quick bowl",
+            "ingredients": [
+                {
+                    "name": "Chicken breast",
+                    "amount": "4 ounces",
+                    "source": "pantry",
+                }
+            ],
+            "preparation_steps": ["Cook and serve."],
+            "calories": 450,
+            "protein_g": 42,
+            "carbohydrates_g": 40,
+            "fat_g": 13,
+            "fiber_g": 8,
+            "sugar_g": 6,
+            "sodium_mg": 520,
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_meal_idea_details",
+            "known_data": {
+                "pantry_meal_type": "dinner",
+                "pantry_meal_ideas": [idea],
+                "pantry_meal_selected_index": 0,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Save Recipe",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_meal_save_confirmation",
+        )
+        self.assertIn("Save this recipe?", send.call_args.args[0])
+
+    def test_confirming_save_recipe_does_not_log_food(self) -> None:
+        idea = {
+            "name": "Chicken Pepper Bowl",
+            "ingredients": [],
+            "preparation_steps": [],
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_meal_save_confirmation",
+            "known_data": {
+                "pantry_meal_type": "dinner",
+                "pantry_meal_ideas": [idea],
+                "pantry_meal_selected_index": 0,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "save_pantry_meal_idea",
+                return_value={"created": True},
+            ) as save,
+            patch.object(app, "add_food_entry") as add_entry,
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Yes",
+                }
+            })
+
+        save.assert_called_once_with(idea, meal_type="dinner")
+        add_entry.assert_not_called()
+        self.assertIn("Saved this recipe", send.call_args.args[0])
 
     def test_pantry_menu_exposes_foundation_actions(self) -> None:
         message = app.healthcoach_pantry_menu_text()

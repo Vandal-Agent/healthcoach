@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 6
+SCHEMA_VERSION: Final[int] = 7
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -475,6 +475,26 @@ def create_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_pantry_items_display_name
             ON pantry_items (display_name);
 
+        CREATE TABLE IF NOT EXISTS saved_recipes (
+            saved_recipe_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_id INTEGER NOT NULL UNIQUE,
+            meal_type TEXT NOT NULL
+                CHECK (meal_type IN ('lunch', 'dinner')),
+            summary TEXT NOT NULL DEFAULT '',
+            ingredients_json TEXT NOT NULL,
+            preparation_steps_json TEXT NOT NULL,
+            estimate_notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_saved_recipes_meal_type
+            ON saved_recipes (meal_type);
+
         CREATE INDEX IF NOT EXISTS idx_food_entries_date
             ON food_entries (entry_date);
 
@@ -559,8 +579,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=6,
         description="Add persistent Pantry items",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add persistent Saved Recipes",
     )
 
 
@@ -740,6 +766,35 @@ def create_pantry_schema(
     )
 
 
+def create_saved_recipes_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create the persistent Saved Recipes library."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS saved_recipes (
+            saved_recipe_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_id INTEGER NOT NULL UNIQUE,
+            meal_type TEXT NOT NULL
+                CHECK (meal_type IN ('lunch', 'dinner')),
+            summary TEXT NOT NULL DEFAULT '',
+            ingredients_json TEXT NOT NULL,
+            preparation_steps_json TEXT NOT NULL,
+            estimate_notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_saved_recipes_meal_type
+            ON saved_recipes (meal_type);
+        """
+    )
+
+
 def migrate_version_1_to_2(
     connection: sqlite3.Connection,
 ) -> None:
@@ -906,6 +961,19 @@ def migrate_version_5_to_6(
     )
 
 
+def migrate_version_6_to_7(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add the persistent Saved Recipes library."""
+    create_saved_recipes_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=7,
+        description="Add persistent Saved Recipes",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -936,6 +1004,10 @@ def apply_migrations(
         migrate_version_5_to_6(connection)
         version = 6
 
+    if version < 7:
+        migrate_version_6_to_7(connection)
+        version = 7
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -948,6 +1020,7 @@ def apply_migrations(
     create_food_favorites_schema(connection)
     create_barcode_mapping_schema(connection)
     create_pantry_schema(connection)
+    create_saved_recipes_schema(connection)
 
 
 def validate_database(
@@ -984,6 +1057,7 @@ def validate_database(
         "food_favorites",
         "barcode_mappings",
         "pantry_items",
+        "saved_recipes",
     }
 
     actual_tables = {

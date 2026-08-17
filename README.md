@@ -9,6 +9,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Tracks steps, protein, sleep, weight, HRV, and calorie data
 - Shows 7-, 14-, and 30-day weight and sleep history in Telegram,
   including daily entries, missing days, averages, and weight change
+- Saves Pantry meal ideas as reusable recipes with ingredients,
+  preparation, nutrition, and confirmed serving-based logging
 - Reads Lose It CSV summaries from Gmail
 - Sends daily and weekly coaching through Telegram
 - Runs scheduled health checks and reminders

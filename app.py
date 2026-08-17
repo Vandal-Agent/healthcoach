@@ -64,6 +64,11 @@ from food.pantry_advisor import (
     generate_pantry_meal_ideas,
     scale_pantry_meal_nutrition,
 )
+from food.recipes import (
+    get_saved_recipe,
+    list_saved_recipes,
+    save_pantry_meal_idea,
+)
 from food.nutrition_provider import lookup_official_nutrition
 from food.menu_photo_advisor import (
     analyze_food_photo,
@@ -383,6 +388,7 @@ def menu_reply_markup(message):
             "Choose a favorite to remove:",
             "Choose a saved food to view:",
             "Choose a saved food to edit:",
+            "Choose a saved recipe to view:",
             "Choose a Pantry item to remove:",
         )
     ):
@@ -439,6 +445,7 @@ def menu_reply_markup(message):
             "Add these items to My Pantry?",
             "Remove this Pantry item?",
             "Clear My Pantry?",
+            "Save this recipe?",
         )
     ):
         rows = [["Yes", "No"]]
@@ -456,6 +463,28 @@ def menu_reply_markup(message):
             ["Edit saved food"],
             ["Back", "Cancel"],
         ]
+    elif "Saved Recipes Menu\n\n" in message:
+        rows = [
+            ["Browse saved recipes"],
+            ["Back", "Cancel"],
+        ]
+    elif "Saved Recipe Details\n\n" in message:
+        rows = [["Log Recipe"], ["Back", "Cancel"]]
+    elif "Which meal should this recipe be logged under?" in message:
+        rows = [
+            ["Before breakfast", "Breakfast"],
+            ["Morning snack", "Lunch"],
+            ["Afternoon snack", "Dinner"],
+            ["Dessert"],
+            ["Back", "Cancel"],
+        ]
+        one_time = True
+    elif "How many servings of this saved recipe?" in message:
+        rows = [["0.5", "1", "1.5", "2"], ["Back", "Cancel"]]
+        one_time = True
+    elif "Log this saved recipe?" in message:
+        rows = [["Log Recipe"], ["Back", "Cancel"]]
+        one_time = True
     elif "Restaurant Menu\n\n" in message:
         rows = [
             ["Find best choices online"],
@@ -535,7 +564,7 @@ def menu_reply_markup(message):
             ["Log food", "Show today"],
             ["Edit today", "Undo last"],
             ["Favorites", "Saved foods"],
-            ["My Pantry"],
+            ["Saved recipes", "My Pantry"],
             ["Photo tools", "Restaurant"],
             ["Update unknown foods"],
             ["Back", "Cancel"],
@@ -553,7 +582,8 @@ def menu_reply_markup(message):
         rows = [choices, ["More ideas"], ["Back", "Cancel"]]
     elif "Pantry Meal Idea\n\n" in message:
         rows = [
-            ["Log Meal", "More ideas"],
+            ["Log Meal", "Save Recipe"],
+            ["More ideas"],
             ["Back", "Cancel"],
         ]
     elif "What meal do you want Pantry ideas for?" in message:
@@ -2786,12 +2816,13 @@ def healthcoach_food_menu_text() -> str:
         "MY FOODS\n"
         "5. Favorites\n"
         "6. Saved foods\n"
-        "7. My Pantry\n\n"
+        "7. Saved recipes\n"
+        "8. My Pantry\n\n"
         "TOOLS\n"
-        "8. Photo tools\n"
-        "9. Restaurant\n"
-        "10. Update unknown foods\n"
-        "11. Back"
+        "9. Photo tools\n"
+        "10. Restaurant\n"
+        "11. Update unknown foods\n"
+        "12. Back"
     )
 
 
@@ -3088,6 +3119,75 @@ def healthcoach_saved_foods_menu_text() -> str:
     )
 
 
+def healthcoach_saved_recipes_menu_text() -> str:
+    return (
+        "Saved Recipes Menu\n\n"
+        "1. Browse saved recipes\n"
+        "2. Back\n\n"
+        "Recipes can be saved from Pantry meal ideas. Saving a "
+        "recipe does not log it as eaten."
+    )
+
+
+def format_saved_recipe_choices(recipes: list[dict]) -> str:
+    lines = ["Choose a saved recipe to view:", ""]
+    for index, recipe in enumerate(recipes, start=1):
+        lines.append(
+            f"{index}. {recipe.get('canonical_name') or 'Recipe'} — "
+            f"{str(recipe.get('meal_type') or 'meal').title()}, "
+            f"{format_display_number(float(recipe.get('calories') or 0), decimals=0)} cal"
+        )
+    lines.extend(["", "Reply Back to return or Cancel to close."])
+    return "\n".join(lines)
+
+
+def format_saved_recipe_details(recipe: dict) -> str:
+    lines = [
+        "Saved Recipe Details",
+        "",
+        str(recipe.get("canonical_name") or "Saved recipe"),
+        str(recipe.get("summary") or ""),
+        "",
+        "Estimated nutrition for 1 serving:",
+        "Calories: "
+        f"{format_display_number(float(recipe.get('calories') or 0), decimals=0)}",
+        "Protein: "
+        f"{format_display_number(float(recipe.get('protein_g') or 0))} g",
+        "Carbohydrates: "
+        f"{format_display_number(float(recipe.get('carbohydrates_g') or 0))} g",
+        "Fat: "
+        f"{format_display_number(float(recipe.get('fat_g') or 0))} g",
+        "Fiber: "
+        f"{format_display_number(float(recipe.get('fiber_g') or 0))} g",
+        "Sugar: "
+        f"{format_display_number(float(recipe.get('sugar_g') or 0))} g",
+        "Sodium: "
+        f"{format_display_number(float(recipe.get('sodium_mg') or 0), decimals=0)} mg",
+        "",
+        "Ingredients:",
+    ]
+    for ingredient in recipe.get("ingredients") or []:
+        lines.append(
+            f"- {ingredient.get('amount') or 'as needed'} "
+            f"{ingredient.get('name') or 'ingredient'}"
+        )
+    lines.extend(["", "Preparation:"])
+    for index, step in enumerate(
+        recipe.get("preparation_steps") or [],
+        start=1,
+    ):
+        lines.append(f"{index}. {step}")
+    if recipe.get("estimate_notes"):
+        lines.extend(["", f"Estimate note: {recipe['estimate_notes']}"])
+    lines.extend([
+        "",
+        "This recipe uses estimated nutrition. Nothing has been logged.",
+        "",
+        "Reply Log Recipe, Back, or Cancel.",
+    ])
+    return "\n".join(lines).strip()
+
+
 def healthcoach_pantry_menu_text() -> str:
     return (
         "My Pantry Menu\n\n"
@@ -3240,7 +3340,7 @@ def format_pantry_meal_idea_details(
             f"This is an estimated {meal_type.title()} recipe. "
             "Nothing has been logged.",
             "",
-            "Reply Log Meal, More ideas, Back, or Cancel.",
+            "Reply Log Meal, Save Recipe, More ideas, Back, or Cancel.",
         ]
     )
     return "\n".join(lines).strip()
@@ -4796,6 +4896,24 @@ def process_telegram_update(update):
 
             if lowered in {
                 "7",
+                "saved recipes",
+                "saved recipe",
+                "recipes",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipes",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_recipes_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "8",
                 "my pantry",
                 "pantry",
             }:
@@ -4812,7 +4930,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "photo",
                 "photo tools",
             }:
@@ -4829,7 +4947,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "9",
+                "10",
                 "restaurant",
                 "restaurant choices",
             }:
@@ -4846,7 +4964,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "10",
+                "11",
                 "unknown",
                 "update unknown foods",
             }:
@@ -4863,7 +4981,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"11", "back"}:
+            if lowered in {"12", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -5207,6 +5325,29 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
+                "save",
+                "save recipe",
+                "save this recipe",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_save_confirmation",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Save this recipe?\n\n"
+                    f"Recipe: {idea.get('name') or 'Pantry meal'}\n"
+                    f"Meal type: {meal_type.title()}\n"
+                    "Nutrition, ingredients, and preparation will be "
+                    "kept in Saved Recipes. Nothing will be logged.\n\n"
+                    "1. Yes\n"
+                    "2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
                 "log",
                 "log meal",
                 "log it",
@@ -5226,6 +5367,91 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 format_pantry_meal_idea_details(
+                    idea,
+                    meal_type=meal_type,
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_meal_save_confirmation":
+            ideas = list(
+                known_data.get("pantry_meal_ideas") or []
+            )
+            meal_type = str(
+                known_data.get("pantry_meal_type") or "dinner"
+            ).lower()
+            try:
+                selected_index = int(
+                    known_data.get("pantry_meal_selected_index")
+                )
+                idea = ideas[selected_index]
+            except (IndexError, TypeError, ValueError):
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "That meal idea expired. Nothing was saved.\n\n"
+                    + healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_idea_details",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Recipe not saved.\n\n"
+                    + format_pantry_meal_idea_details(
+                        idea,
+                        meal_type=meal_type,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "yes", "save", "save recipe"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                saved = save_pantry_meal_idea(
+                    idea,
+                    meal_type=meal_type,
+                )
+            except Exception:
+                logging.exception("Saving Pantry recipe failed")
+                send_telegram_msg(
+                    "I couldn't save that recipe safely. Nothing "
+                    "was added to Saved Recipes.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_meal_idea_details",
+                known_data={},
+                missing_fields=[],
+            )
+            outcome = (
+                "Saved this recipe to Saved Recipes."
+                if saved.get("created")
+                else "This recipe is already in Saved Recipes."
+            )
+            send_telegram_msg(
+                outcome + " Nothing was logged.\n\n"
+                + format_pantry_meal_idea_details(
                     idea,
                     meal_type=meal_type,
                 ),
@@ -6760,6 +6986,369 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 message + "\n\nReply Back or Cancel to leave.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipes":
+            if lowered in {"1", "browse", "browse saved recipes"}:
+                recipes = list_saved_recipes()
+                if not recipes:
+                    send_telegram_msg(
+                        "There are no Saved Recipes yet. Choose a "
+                        "Pantry meal idea and tap Save Recipe first.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_browse",
+                    known_data={
+                        "saved_recipe_ids": [
+                            int(recipe["saved_recipe_id"])
+                            for recipe in recipes
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_choices(recipes),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_saved_recipes_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_browse":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipes",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_recipes_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            recipe_ids = list(
+                known_data.get("saved_recipe_ids") or []
+            )
+            try:
+                selected_index = int(text.strip()) - 1
+                saved_recipe_id = int(recipe_ids[selected_index])
+                if selected_index < 0:
+                    raise IndexError
+                recipe = get_saved_recipe(saved_recipe_id)
+            except (IndexError, TypeError, ValueError):
+                recipe = None
+
+            if recipe is None:
+                recipes = list_saved_recipes()
+                send_telegram_msg(
+                    format_saved_recipe_choices(recipes),
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_details",
+                known_data={
+                    "saved_recipe_id": saved_recipe_id,
+                    "saved_recipe_servings": None,
+                    "saved_recipe_meal": None,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_saved_recipe_details(recipe),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_details":
+            saved_recipe_id = int(
+                known_data.get("saved_recipe_id") or 0
+            )
+            recipe = get_saved_recipe(saved_recipe_id)
+            if recipe is None:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipes",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "That Saved Recipe is no longer available.\n\n"
+                    + healthcoach_saved_recipes_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered == "back":
+                recipes = list_saved_recipes()
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_browse",
+                    known_data={
+                        "saved_recipe_ids": [
+                            int(item["saved_recipe_id"])
+                            for item in recipes
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_choices(recipes),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"log", "log recipe", "log it"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_log_meal",
+                    known_data={
+                        "saved_recipe_meal": None,
+                        "saved_recipe_servings": None,
+                    },
+                    missing_fields=["meal_category"],
+                )
+                send_telegram_msg(
+                    "Which meal should this recipe be logged under?",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                format_saved_recipe_details(recipe),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_log_meal":
+            if lowered == "back":
+                recipe = get_saved_recipe(
+                    int(known_data.get("saved_recipe_id") or 0)
+                )
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_details",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_recipe_details(recipe or {}),
+                    chat_id=chat_id,
+                )
+                return
+
+            meal_aliases = {
+                "before breakfast": "before breakfast",
+                "breakfast": "breakfast",
+                "morning snack": "school snack",
+                "school snack": "school snack",
+                "lunch": "lunch",
+                "afternoon snack": "afternoon snack",
+                "dinner": "dinner",
+                "dessert": "dessert",
+            }
+            meal_category = meal_aliases.get(lowered)
+            if meal_category is None:
+                send_telegram_msg(
+                    "Which meal should this recipe be logged under?",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_log_servings",
+                known_data={"saved_recipe_meal": meal_category},
+                missing_fields=["servings"],
+            )
+            send_telegram_msg(
+                "How many servings of this saved recipe?\n\n"
+                "Choose 0.5, 1, 1.5, or 2.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_log_servings":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_log_meal",
+                    known_data={"saved_recipe_meal": None},
+                    missing_fields=["meal_category"],
+                )
+                send_telegram_msg(
+                    "Which meal should this recipe be logged under?",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                servings = float(text.strip())
+            except (TypeError, ValueError):
+                servings = 0
+            if servings <= 0 or servings > 4:
+                send_telegram_msg(
+                    "Enter a serving amount greater than 0 and no "
+                    "more than 4.",
+                    chat_id=chat_id,
+                )
+                return
+
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                send_telegram_msg(
+                    "That Saved Recipe is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            calories = float(recipe.get("calories") or 0) * servings
+            protein = float(recipe.get("protein_g") or 0) * servings
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_log_confirmation",
+                known_data={"saved_recipe_servings": servings},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Log this saved recipe?\n\n"
+                f"Recipe: {recipe.get('canonical_name')}\n"
+                f"Meal: {str(known_data.get('saved_recipe_meal') or '').title()}\n"
+                f"Servings: {format_display_number(servings)}\n"
+                "Estimated calories: "
+                f"{format_display_number(calories, decimals=0)}\n"
+                "Estimated protein: "
+                f"{format_display_number(protein)} g\n\n"
+                "1. Log Recipe\n"
+                "2. Back\n"
+                "3. Cancel",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "saved_recipe_log_confirmation":
+            if lowered in {"2", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipe_log_servings",
+                    known_data={"saved_recipe_servings": None},
+                    missing_fields=["servings"],
+                )
+                send_telegram_msg(
+                    "How many servings of this saved recipe?\n\n"
+                    "Choose 0.5, 1, 1.5, or 2.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {"1", "log", "log recipe", "log it"}:
+                send_telegram_msg(
+                    "Reply Log Recipe, Back, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            meal_category = str(
+                known_data.get("saved_recipe_meal") or ""
+            )
+            servings = float(
+                known_data.get("saved_recipe_servings") or 0
+            )
+            if recipe is None or not meal_category or servings <= 0:
+                send_telegram_msg(
+                    "That recipe selection expired. Nothing was logged.",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                entry = add_food_entry(
+                    entry_date=today,
+                    meal_category=meal_category,
+                    food_id=int(recipe["food_id"]),
+                    quantity=servings,
+                    logging_source="recipe",
+                    original_text=(
+                        "Saved Recipe: "
+                        + str(recipe.get("canonical_name") or "Recipe")
+                    ),
+                    quantity_is_estimated=True,
+                    user_confirmed=True,
+                )
+            except Exception:
+                logging.exception("Saved Recipe logging failed")
+                send_telegram_msg(
+                    "I couldn't log that Saved Recipe safely. "
+                    "Nothing was added to today's food log.",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                sync_food_ledger_totals_to_sheet(today)
+            except Exception:
+                logging.exception(
+                    "Saved Recipe Google Sheet sync failed"
+                )
+                sync_note = (
+                    "\n\nThe recipe was logged, but the Google "
+                    "Sheet totals could not be updated."
+                )
+            else:
+                sync_note = ""
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipes",
+                known_data={
+                    "saved_recipe_id": None,
+                    "saved_recipe_meal": None,
+                    "saved_recipe_servings": None,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Saved Recipe logged.\n\n"
+                f"Recipe: {recipe.get('canonical_name')}\n"
+                f"Meal: {meal_category.title()}\n"
+                "Calories: "
+                f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
+                "Protein: "
+                f"{format_display_number(float(entry.get('protein_g') or 0))} g"
+                + sync_note
+                + "\n\n"
+                + healthcoach_saved_recipes_menu_text(),
                 chat_id=chat_id,
             )
             return

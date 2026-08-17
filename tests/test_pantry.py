@@ -80,13 +80,16 @@ class PantryTests(unittest.TestCase):
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE pantry_items")
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 6"
+                "DELETE FROM schema_version WHERE version IN (6, 7)"
             )
             connection.commit()
 
         result = database.initialize_database()
 
-        self.assertEqual(result["schema_version"]["version"], 6)
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
         self.assertIn("pantry_items", result["tables"])
 
     def test_parses_natural_item_list_and_removes_duplicates(self) -> None:

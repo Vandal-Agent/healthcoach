@@ -315,6 +315,8 @@ Supported workflow:
 - Use at least one Pantry item and require no more than two additional
   ingredients per idea, aside from salt, pepper, cooking spray, and water.
 - Show estimated nutrition, ingredient amounts, and preparation steps.
+- Allow a generated idea to be saved to the separate Saved Recipes
+  library without logging it as eaten.
 - Generate three different choices when the user selects More ideas.
 - Ask how many servings were eaten and require final confirmation before
   logging the meal.
@@ -325,17 +327,40 @@ Manual items may be fresh ingredients without nutrition records. Scanned
 items retain a link to their Saved Food and active verified nutrition so the
 meal-idea engine can use stronger nutrition data when it is available.
 
-Pantry meal ideas do not reduce inventory quantities and are not Saved
-Recipes. Saving a generated idea as a reusable recipe is a separate future
-stage.
+Pantry meal ideas do not reduce inventory quantities. They become Saved
+Recipes only after explicit confirmation.
 
 Duplicate names are matched case-insensitively and are not added twice.
+
+---
+
+# Saved Recipes
+
+Saved Recipes is a separate library under Food > My Foods.
+
+Supported workflow:
+
+- Save a Pantry meal idea only after explicit confirmation.
+- Store its name, intended lunch or dinner type, estimated nutrition,
+  ingredient amounts, preparation steps, and estimate notes.
+- Do not add anything to the Food Ledger when a recipe is saved.
+- Reject duplicate recipe identities rather than silently replacing the
+  original recipe.
+- Browse recipes alphabetically and view complete preparation details.
+- Choose a meal and serving amount when the recipe is actually eaten.
+- Show a final confirmation before logging.
+- Log from the recipe's existing Food and active nutrition version using
+  the `recipe` logging source.
+- Mark recipe nutrition as estimated and scale every nutrient by servings.
+- Preserve the nutrition snapshot on each Food Ledger entry so later
+  nutrition changes cannot rewrite historical logs.
+
+Saved Recipes v1 does not yet provide recipe editing or deletion.
 
 
 # Future Features
 
 - Voice logging
-- Saved Recipes
 - Same as yesterday
 - Restaurant history
 - Grocery suggestions
