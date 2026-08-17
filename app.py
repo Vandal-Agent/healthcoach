@@ -3270,9 +3270,16 @@ def format_pantry_meal_ideas(
             if item.get("source") == "additional"
         ]
 
+        heart_label = (
+            " — Heart-Healthy Pick"
+            if idea.get("heart_healthy_pick")
+            else ""
+        )
+
         lines.extend(
             [
-                f"{index}. {idea.get('name') or 'Meal idea'}",
+                f"{index}. {idea.get('name') or 'Meal idea'}"
+                f"{heart_label}",
                 (
                     "Estimated: "
                     f"{format_display_number(float(idea.get('calories') or 0), decimals=0)} "
@@ -3287,6 +3294,14 @@ def format_pantry_meal_ideas(
                     else "Needs: no additional ingredients"
                 ),
                 f"Why today: {idea.get('daily_fit') or ''}",
+                *(
+                    [
+                        "Heart-healthy note: "
+                        f"{idea.get('heart_healthy_reason') or ''}"
+                    ]
+                    if idea.get("heart_healthy_pick")
+                    else []
+                ),
                 "",
             ]
         )
@@ -3298,6 +3313,8 @@ def format_pantry_meal_ideas(
             "or Cancel.",
             "",
             "Nutrition is estimated. Nothing has been logged.",
+            "Heart-Healthy Pick is based on the meal's ingredients "
+            "and estimated nutrition. It is not a medical rating.",
         ]
     )
     return "\n".join(lines).strip()
@@ -3312,6 +3329,15 @@ def format_pantry_meal_idea_details(
         "Pantry Meal Idea",
         "",
         str(idea.get("name") or "Meal idea"),
+        *(
+            [
+                "Heart-Healthy Pick",
+                "Heart-healthy note: "
+                f"{idea.get('heart_healthy_reason') or ''}",
+            ]
+            if idea.get("heart_healthy_pick")
+            else []
+        ),
         str(idea.get("summary") or ""),
         "",
         "Estimated nutrition for 1 serving:",
@@ -3373,6 +3399,8 @@ def format_pantry_meal_idea_details(
             "",
             f"This is an estimated {meal_type.title()} recipe. "
             "Nothing has been logged.",
+            "Heart-Healthy Pick is a food-choice label, not a "
+            "medical rating.",
             "",
             "Reply Log Meal, Save Recipe, More ideas, Back, or Cancel.",
         ]

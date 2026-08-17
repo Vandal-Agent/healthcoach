@@ -50,6 +50,11 @@ class PantryMealIdeaSet(BaseModel):
         min_length=3,
         max_length=3,
     )
+    heart_healthy_pick: int = Field(ge=1, le=3)
+    heart_healthy_reason: str = Field(
+        min_length=1,
+        max_length=400,
+    )
 
 
 def normalize_pantry_name(value: str | None) -> str:
@@ -126,6 +131,22 @@ def validate_pantry_meal_ideas(
 
     calorie_limit = MEAL_CALORIE_LIMITS[normalized_meal]
     idea_names: set[str] = set()
+    heart_healthy_picks = [
+        idea
+        for idea in ideas
+        if bool(idea.get("heart_healthy_pick"))
+    ]
+
+    if len(heart_healthy_picks) != 1:
+        raise ValueError(
+            "Exactly one Pantry idea must be the Heart-Healthy Pick."
+        )
+    if not str(
+        heart_healthy_picks[0].get("heart_healthy_reason") or ""
+    ).strip():
+        raise ValueError(
+            "The Heart-Healthy Pick must explain why it was selected."
+        )
 
     for idea in ideas:
         idea_name = normalize_pantry_name(idea.get("name"))
@@ -220,7 +241,18 @@ Rules:
    protein and fiber when those appear weak and avoid worsening an
    already high calorie, sugar, fat, or sodium intake.
 10. Keep the three ideas meaningfully different.
-11. These are estimates. Never describe them as verified nutrition.
+11. Select exactly one of the three as heart_healthy_pick. Base that
+   selection on the overall meal pattern: favor vegetables, fruits,
+   whole grains, beans and legumes, nuts and seeds, fish, skinless
+   poultry or other lean unprocessed protein, and unsaturated plant
+   fats. Prefer higher fiber and lower sodium, added sugar, saturated
+   fat, and processed or fatty meat. Do not select it merely because it
+   has the fewest calories.
+12. Give a short heart_healthy_reason that names the specific strengths
+   and any relevant limitation. This is a food-choice label only; never
+   claim that the meal prevents disease or describe the user's personal
+   heart risk.
+13. These are estimates. Never describe them as verified nutrition.
 """
 
     client = get_client()
@@ -249,6 +281,13 @@ Rules:
         raise RuntimeError("Gemini returned no Pantry meal ideas.")
 
     ideas = [idea.model_dump() for idea in result.ideas]
+    selected_index = int(result.heart_healthy_pick) - 1
+    for index, idea in enumerate(ideas):
+        is_selected = index == selected_index
+        idea["heart_healthy_pick"] = is_selected
+        idea["heart_healthy_reason"] = (
+            result.heart_healthy_reason if is_selected else None
+        )
     return validate_pantry_meal_ideas(
         ideas,
         pantry_items=pantry_items,

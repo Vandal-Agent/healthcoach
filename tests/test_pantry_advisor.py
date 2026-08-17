@@ -24,6 +24,7 @@ def idea(
     *,
     calories: float = 450,
     additional: int = 1,
+    heart_healthy_pick: bool = False,
 ) -> dict:
     ingredients = [
         {
@@ -54,7 +55,21 @@ def idea(
         "sodium_mg": 500,
         "daily_fit": "Adds protein and fiber.",
         "estimate_notes": "Portions are estimated.",
+        "heart_healthy_pick": heart_healthy_pick,
+        "heart_healthy_reason": (
+            "Lean protein, vegetables, fiber, and moderate sodium."
+            if heart_healthy_pick
+            else None
+        ),
     }
+
+
+def valid_ideas() -> list[dict]:
+    return [
+        idea("Idea A", heart_healthy_pick=True),
+        idea("Idea B"),
+        idea("Idea C"),
+    ]
 
 
 class FakeModels:
@@ -78,7 +93,7 @@ class FakeClient:
 
 class PantryAdvisorTests(unittest.TestCase):
     def test_accepts_three_grounded_lunch_ideas(self) -> None:
-        ideas = [idea("Idea A"), idea("Idea B"), idea("Idea C")]
+        ideas = valid_ideas()
 
         result = validate_pantry_meal_ideas(
             ideas,
@@ -90,7 +105,7 @@ class PantryAdvisorTests(unittest.TestCase):
 
     def test_rejects_calories_over_meal_limit(self) -> None:
         ideas = [
-            idea("Idea A", calories=501),
+            idea("Idea A", calories=501, heart_healthy_pick=True),
             idea("Idea B"),
             idea("Idea C"),
         ]
@@ -104,7 +119,7 @@ class PantryAdvisorTests(unittest.TestCase):
 
     def test_rejects_more_than_two_additional_ingredients(self) -> None:
         ideas = [
-            idea("Idea A", additional=3),
+            idea("Idea A", additional=3, heart_healthy_pick=True),
             idea("Idea B"),
             idea("Idea C"),
         ]
@@ -117,7 +132,7 @@ class PantryAdvisorTests(unittest.TestCase):
             )
 
     def test_rejects_claimed_pantry_item_not_available(self) -> None:
-        ideas = [idea("Idea A"), idea("Idea B"), idea("Idea C")]
+        ideas = valid_ideas()
         ideas[0]["ingredients"][0]["name"] = "salmon"
 
         with self.assertRaisesRegex(ValueError, "unavailable"):
@@ -129,7 +144,11 @@ class PantryAdvisorTests(unittest.TestCase):
 
     def test_generator_includes_daily_totals_and_closes_client(self) -> None:
         parsed = {
-            "ideas": [idea("Idea A"), idea("Idea B"), idea("Idea C")]
+            "ideas": [idea("Idea A"), idea("Idea B"), idea("Idea C")],
+            "heart_healthy_pick": 2,
+            "heart_healthy_reason": (
+                "Uses lean protein, vegetables, and moderate sodium."
+            ),
         }
         client = FakeClient(parsed)
 
@@ -149,6 +168,35 @@ class PantryAdvisorTests(unittest.TestCase):
         self.assertIn('"calories": 700', prompt)
         self.assertIn('"protein_g": 35', prompt)
         self.assertIn("at or below\n   500 calories", prompt)
+        self.assertIn("Select exactly one", prompt)
+        self.assertFalse(result[0]["heart_healthy_pick"])
+        self.assertTrue(result[1]["heart_healthy_pick"])
+        self.assertIn("lean protein", result[1]["heart_healthy_reason"])
+        self.assertFalse(result[2]["heart_healthy_pick"])
+
+    def test_rejects_missing_heart_healthy_pick(self) -> None:
+        ideas = [idea("Idea A"), idea("Idea B"), idea("Idea C")]
+
+        with self.assertRaisesRegex(ValueError, "Exactly one"):
+            validate_pantry_meal_ideas(
+                ideas,
+                pantry_items=pantry_items(),
+                meal_type="lunch",
+            )
+
+    def test_rejects_multiple_heart_healthy_picks(self) -> None:
+        ideas = [
+            idea("Idea A", heart_healthy_pick=True),
+            idea("Idea B", heart_healthy_pick=True),
+            idea("Idea C"),
+        ]
+
+        with self.assertRaisesRegex(ValueError, "Exactly one"):
+            validate_pantry_meal_ideas(
+                ideas,
+                pantry_items=pantry_items(),
+                meal_type="dinner",
+            )
 
     def test_scales_all_nutrients_by_servings(self) -> None:
         result = scale_pantry_meal_nutrition(

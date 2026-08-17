@@ -12,6 +12,57 @@ app.CHAT_ID = None
 
 
 class PantryMenuTests(unittest.TestCase):
+    def test_pantry_ideas_label_exact_heart_healthy_pick(self) -> None:
+        base = {
+            "summary": "Quick bowl",
+            "ingredients": [
+                {
+                    "name": "Chicken breast",
+                    "amount": "4 ounces",
+                    "source": "pantry",
+                }
+            ],
+            "preparation_steps": ["Cook and serve."],
+            "calories": 450,
+            "protein_g": 42,
+            "carbohydrates_g": 40,
+            "fat_g": 13,
+            "fiber_g": 8,
+            "sugar_g": 6,
+            "sodium_mg": 520,
+            "daily_fit": "Adds protein and fiber.",
+            "estimate_notes": "Portions are estimated.",
+        }
+        ideas = [
+            {**base, "name": "Idea A"},
+            {
+                **base,
+                "name": "Idea B",
+                "heart_healthy_pick": True,
+                "heart_healthy_reason": (
+                    "Lean protein, vegetables, and useful fiber."
+                ),
+            },
+            {**base, "name": "Idea C"},
+        ]
+
+        message = app.format_pantry_meal_ideas(
+            ideas,
+            meal_type="dinner",
+        )
+
+        self.assertIn("2. Idea B — Heart-Healthy Pick", message)
+        self.assertNotIn("1. Idea A — Heart-Healthy Pick", message)
+        self.assertIn("Heart-healthy note: Lean protein", message)
+        self.assertIn("not a medical rating", message)
+
+        details = app.format_pantry_meal_idea_details(
+            ideas[1],
+            meal_type="dinner",
+        )
+        self.assertIn("Heart-Healthy Pick", details)
+        self.assertIn("not a medical rating", details)
+
     def test_food_menu_contains_separate_pantry_entry(self) -> None:
         message = app.healthcoach_food_menu_text()
 

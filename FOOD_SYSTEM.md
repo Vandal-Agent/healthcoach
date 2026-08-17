@@ -311,6 +311,15 @@ Supported workflow:
 - Keep Pantry items available until the user removes or clears them.
 - Avoid quantity and depletion tracking in this version.
 - Request exactly three lunch or dinner ideas at a time.
+- Label exactly one of those three as the Heart-Healthy Pick and explain
+  the specific food-pattern strengths behind the selection.
+- Base the label on general American Heart Association-aligned food-pattern
+  guidance: favor vegetables, fruits, whole grains, legumes, nuts, seeds,
+  fish, lean unprocessed protein, and unsaturated plant fats while limiting
+  sodium, added sugar, saturated fat, and processed or fatty meats.
+- Treat Heart-Healthy Pick only as a food-choice label based on ingredients
+  and estimated nutrition. It is never a diagnosis, disease-prevention claim,
+  certification, or personal cardiovascular-risk score.
 - Keep lunch ideas at or below 500 calories and dinner ideas at or below
   600 calories.
 - Consider nutrition already logged for the current day when explaining
