@@ -198,6 +198,69 @@ class FoodWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(ledger.list_food_favorites(), [])
 
+    def test_copy_food_entries_preserves_exact_snapshot(self) -> None:
+        source = self.add_entry(quantity=1.5, meal="breakfast")
+        library.add_user_nutrition_version(
+            food_id=self.food_id,
+            calories=250,
+            protein_g=25,
+            carbohydrates_g=26,
+            fat_g=9,
+            fiber_g=6,
+            sugar_g=5,
+            sodium_mg=170,
+        )
+
+        copied = ledger.copy_food_entries_to_date(
+            source_date=self.ENTRY_DATE,
+            target_date="2026-08-12",
+        )
+
+        self.assertEqual(len(copied), 1)
+        self.assertEqual(copied[0]["calories"], source["calories"])
+        self.assertEqual(copied[0]["protein_g"], source["protein_g"])
+        self.assertEqual(
+            copied[0]["nutrition_version_id"],
+            source["nutrition_version_id"],
+        )
+        self.assertEqual(copied[0]["logging_source"], "telegram_manual")
+
+    def test_copy_can_select_one_meal(self) -> None:
+        self.add_entry(meal="breakfast")
+        self.add_entry(meal="dinner")
+
+        copied = ledger.copy_food_entries_to_date(
+            source_date=self.ENTRY_DATE,
+            target_date="2026-08-12",
+            meal_category="dinner",
+        )
+
+        self.assertEqual(len(copied), 1)
+        self.assertEqual(copied[0]["meal_category"], "dinner")
+
+    def test_copy_rejects_occupied_target_meal_atomically(self) -> None:
+        self.add_entry(meal="breakfast")
+        self.add_entry(meal="dinner")
+        ledger.add_food_entry(
+            entry_date="2026-08-12",
+            meal_category="dinner",
+            food_id=self.food_id,
+            quantity=0.5,
+            logging_source="telegram_manual",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Nothing was copied"):
+            ledger.copy_food_entries_to_date(
+                source_date=self.ENTRY_DATE,
+                target_date="2026-08-12",
+            )
+
+        target_entries = ledger.list_food_entries(
+            entry_date="2026-08-12"
+        )
+        self.assertEqual(len(target_entries), 1)
+        self.assertEqual(target_entries[0]["meal_category"], "dinner")
+
 
 if __name__ == "__main__":
     unittest.main()

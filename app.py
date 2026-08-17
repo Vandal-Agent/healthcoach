@@ -42,6 +42,7 @@ from food.library import (
 )
 from food.ledger import (
     add_food_entry,
+    copy_food_entries_to_date,
     delete_food_favorite,
     delete_food_entry,
     find_recent_duplicate_entry,
@@ -390,6 +391,7 @@ def menu_reply_markup(message):
             "Choose a saved food to edit:",
             "Choose a saved recipe to view:",
             "Choose a Pantry item to remove:",
+            "Choose a meal from yesterday to copy:",
         )
     ):
         choices = re.findall(r"(?m)^(\d+)\. ", message)
@@ -446,6 +448,8 @@ def menu_reply_markup(message):
             "Remove this Pantry item?",
             "Clear My Pantry?",
             "Save this recipe?",
+            "Copy yesterday's food?",
+            "Copy this meal from yesterday?",
         )
     ):
         rows = [["Yes", "No"]]
@@ -563,10 +567,16 @@ def menu_reply_markup(message):
         rows = [
             ["Log food", "Show today"],
             ["Edit today", "Undo last"],
+            ["Same as yesterday"],
             ["Favorites", "Saved foods"],
             ["Saved recipes", "My Pantry"],
             ["Photo tools", "Restaurant"],
             ["Update unknown foods"],
+            ["Back", "Cancel"],
+        ]
+    elif "Yesterday's Food Review\n\n" in message:
+        rows = [
+            ["Copy one meal", "Copy entire day"],
             ["Back", "Cancel"],
         ]
     elif "My Pantry Menu\n\n" in message:
@@ -2812,17 +2822,18 @@ def healthcoach_food_menu_text() -> str:
         "1. Log food\n"
         "2. Show today's food\n"
         "3. Edit today's food\n"
-        "4. Undo last food\n\n"
+        "4. Undo last food\n"
+        "5. Same as yesterday\n\n"
         "MY FOODS\n"
-        "5. Favorites\n"
-        "6. Saved foods\n"
-        "7. Saved recipes\n"
-        "8. My Pantry\n\n"
+        "6. Favorites\n"
+        "7. Saved foods\n"
+        "8. Saved recipes\n"
+        "9. My Pantry\n\n"
         "TOOLS\n"
-        "9. Photo tools\n"
-        "10. Restaurant\n"
-        "11. Update unknown foods\n"
-        "12. Back"
+        "10. Photo tools\n"
+        "11. Restaurant\n"
+        "12. Update unknown foods\n"
+        "13. Back"
     )
 
 
@@ -3862,6 +3873,144 @@ def format_daily_food_log(entry_date) -> str:
     return "\n".join(lines)
 
 
+MEAL_DISPLAY_ORDER = (
+    "before breakfast",
+    "breakfast",
+    "school snack",
+    "lunch",
+    "afternoon snack",
+    "dinner",
+    "dessert",
+)
+
+
+def format_previous_food_entries(
+    entries: list[dict],
+) -> list[str]:
+    lines: list[str] = []
+    current_meal = None
+    meal_positions = {
+        meal: index
+        for index, meal in enumerate(MEAL_DISPLAY_ORDER)
+    }
+    ordered_entries = sorted(
+        entries,
+        key=lambda entry: (
+            meal_positions.get(
+                str(entry.get("meal_category") or ""),
+                len(meal_positions),
+            ),
+            int(entry.get("food_entry_id") or 0),
+        ),
+    )
+    for entry in ordered_entries:
+        meal = str(entry.get("meal_category") or "other")
+        if meal != current_meal:
+            lines.extend(["", meal.title()])
+            current_meal = meal
+        lines.append(
+            "- "
+            f"{format_display_number(float(entry.get('quantity') or 1))} × "
+            f"{entry.get('canonical_name') or 'Food'}: "
+            f"{format_display_number(float(entry.get('calories') or 0), decimals=0)} cal"
+        )
+    return lines
+
+
+def format_yesterday_food_review(
+    entries: list[dict],
+    *,
+    source_date,
+) -> str:
+    total_calories = sum(
+        float(entry.get("calories") or 0)
+        for entry in entries
+    )
+    total_protein = sum(
+        float(entry.get("protein_g") or 0)
+        for entry in entries
+    )
+    date_label = source_date.strftime("%a %b %d").replace(" 0", " ")
+    lines = [
+        "Yesterday's Food Review",
+        "",
+        date_label,
+        *format_previous_food_entries(entries),
+        "",
+        "Total: "
+        f"{format_display_number(total_calories, decimals=0)} calories, "
+        f"{format_display_number(total_protein)} g protein",
+        "",
+        "1. Copy one meal",
+        "2. Copy entire day",
+        "3. Back",
+        "",
+        "Nothing has been copied yet.",
+    ]
+    return "\n".join(lines)
+
+
+def format_yesterday_meal_choices(entries: list[dict]) -> str:
+    grouped = {
+        meal: [
+            entry
+            for entry in entries
+            if entry.get("meal_category") == meal
+        ]
+        for meal in MEAL_DISPLAY_ORDER
+    }
+    available = [meal for meal in MEAL_DISPLAY_ORDER if grouped[meal]]
+    lines = ["Choose a meal from yesterday to copy:", ""]
+    for index, meal in enumerate(available, start=1):
+        calories = sum(
+            float(entry.get("calories") or 0)
+            for entry in grouped[meal]
+        )
+        lines.append(
+            f"{index}. {meal.title()} — {len(grouped[meal])} item(s), "
+            f"{format_display_number(calories, decimals=0)} cal"
+        )
+    lines.extend(["", "Reply Back to return or Cancel to close."])
+    return "\n".join(lines)
+
+
+def format_yesterday_copy_confirmation(
+    entries: list[dict],
+    *,
+    meal_category: str | None,
+) -> str:
+    selected = [
+        entry
+        for entry in entries
+        if meal_category is None
+        or entry.get("meal_category") == meal_category
+    ]
+    title = (
+        "Copy this meal from yesterday?"
+        if meal_category is not None
+        else "Copy yesterday's food?"
+    )
+    calories = sum(
+        float(entry.get("calories") or 0)
+        for entry in selected
+    )
+    lines = [
+        title,
+        *format_previous_food_entries(selected),
+        "",
+        f"Items: {len(selected)}",
+        "Calories to add today: "
+        f"{format_display_number(calories, decimals=0)}",
+        "",
+        "Today's matching meal must be empty. This prevents an "
+        "accidental duplicate copy.",
+        "",
+        "1. Yes, copy it",
+        "2. No",
+    ]
+    return "\n".join(lines)
+
+
 def format_edit_food_choices(entries: list[dict]) -> str:
     lines = ["Choose a food to edit:", ""]
 
@@ -4864,7 +5013,42 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"5", "favorites", "favorite"}:
+            if lowered in {
+                "5",
+                "same as yesterday",
+                "yesterday",
+                "copy yesterday",
+            }:
+                source_date = today - timedelta(days=1)
+                entries = list_food_entries(entry_date=source_date)
+                if not entries:
+                    send_telegram_msg(
+                        "No foods were recorded yesterday, so there "
+                        "is nothing to copy.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="same_yesterday_review",
+                    known_data={
+                        "same_yesterday_source_date": (
+                            source_date.isoformat()
+                        ),
+                        "same_yesterday_meal": None,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_yesterday_food_review(
+                        entries,
+                        source_date=source_date,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"6", "favorites", "favorite"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="favorites",
@@ -4878,7 +5062,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "6",
+                "7",
                 "saved foods",
                 "saved food",
             }:
@@ -4895,7 +5079,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "7",
+                "8",
                 "saved recipes",
                 "saved recipe",
                 "recipes",
@@ -4913,7 +5097,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "my pantry",
                 "pantry",
             }:
@@ -4930,7 +5114,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "9",
+                "10",
                 "photo",
                 "photo tools",
             }:
@@ -4947,7 +5131,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "10",
+                "11",
                 "restaurant",
                 "restaurant choices",
             }:
@@ -4964,7 +5148,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "11",
+                "12",
                 "unknown",
                 "update unknown foods",
             }:
@@ -4981,7 +5165,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"12", "back"}:
+            if lowered in {"13", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -4996,6 +5180,284 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "same_yesterday_review":
+            source_value = str(
+                known_data.get("same_yesterday_source_date") or ""
+            )
+            try:
+                source_date = datetime.fromisoformat(
+                    source_value
+                ).date()
+            except ValueError:
+                source_date = today - timedelta(days=1)
+            entries = list_food_entries(entry_date=source_date)
+
+            if not entries:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Yesterday's food is no longer available to copy.\n\n"
+                    + healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_food_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"1", "copy one meal", "one meal"}:
+                available_meals = [
+                    meal
+                    for meal in MEAL_DISPLAY_ORDER
+                    if any(
+                        entry.get("meal_category") == meal
+                        for entry in entries
+                    )
+                ]
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="same_yesterday_meal_select",
+                    known_data={
+                        "same_yesterday_available_meals": (
+                            available_meals
+                        ),
+                        "same_yesterday_meal": None,
+                    },
+                    missing_fields=["meal_category"],
+                )
+                send_telegram_msg(
+                    format_yesterday_meal_choices(entries),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "2",
+                "copy entire day",
+                "entire day",
+                "copy all",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="same_yesterday_confirmation",
+                    known_data={"same_yesterday_meal": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_yesterday_copy_confirmation(
+                        entries,
+                        meal_category=None,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                format_yesterday_food_review(
+                    entries,
+                    source_date=source_date,
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "same_yesterday_meal_select":
+            source_value = str(
+                known_data.get("same_yesterday_source_date") or ""
+            )
+            try:
+                source_date = datetime.fromisoformat(
+                    source_value
+                ).date()
+            except ValueError:
+                source_date = today - timedelta(days=1)
+            entries = list_food_entries(entry_date=source_date)
+
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="same_yesterday_review",
+                    known_data={"same_yesterday_meal": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_yesterday_food_review(
+                        entries,
+                        source_date=source_date,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            available_meals = list(
+                known_data.get("same_yesterday_available_meals")
+                or []
+            )
+            try:
+                selected_index = int(text.strip()) - 1
+                if selected_index < 0:
+                    raise IndexError
+                meal_category = str(
+                    available_meals[selected_index]
+                )
+            except (IndexError, TypeError, ValueError):
+                send_telegram_msg(
+                    format_yesterday_meal_choices(entries),
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="same_yesterday_confirmation",
+                known_data={"same_yesterday_meal": meal_category},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_yesterday_copy_confirmation(
+                    entries,
+                    meal_category=meal_category,
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "same_yesterday_confirmation":
+            source_value = str(
+                known_data.get("same_yesterday_source_date") or ""
+            )
+            try:
+                source_date = datetime.fromisoformat(
+                    source_value
+                ).date()
+            except ValueError:
+                source_date = today - timedelta(days=1)
+            meal_category = known_data.get("same_yesterday_meal")
+            entries = list_food_entries(entry_date=source_date)
+
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="same_yesterday_review",
+                    known_data={"same_yesterday_meal": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Nothing was copied.\n\n"
+                    + format_yesterday_food_review(
+                        entries,
+                        source_date=source_date,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered not in {
+                "1",
+                "yes",
+                "yes copy it",
+                "copy it",
+                "copy",
+            }:
+                send_telegram_msg(
+                    format_yesterday_copy_confirmation(
+                        entries,
+                        meal_category=meal_category,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                copied = copy_food_entries_to_date(
+                    source_date=source_date,
+                    target_date=today,
+                    meal_category=meal_category,
+                )
+            except ValueError as error:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="same_yesterday_review",
+                    known_data={"same_yesterday_meal": None},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    str(error)
+                    + "\n\n"
+                    + format_yesterday_food_review(
+                        entries,
+                        source_date=source_date,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+            except Exception:
+                logging.exception("Same as yesterday copy failed")
+                send_telegram_msg(
+                    "I couldn't copy yesterday's food safely. "
+                    "Nothing was added.",
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                sync_food_ledger_totals_to_sheet(today)
+            except Exception:
+                logging.exception(
+                    "Same as yesterday Google Sheet sync failed"
+                )
+                sync_note = (
+                    "\n\nThe food was copied, but the Google Sheet "
+                    "totals could not be updated."
+                )
+            else:
+                sync_note = ""
+
+            copied_calories = sum(
+                float(entry.get("calories") or 0)
+                for entry in copied
+            )
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food",
+                known_data={
+                    "same_yesterday_source_date": None,
+                    "same_yesterday_meal": None,
+                },
+                missing_fields=[],
+            )
+            scope = (
+                str(meal_category).title()
+                if meal_category
+                else "Yesterday's recorded day"
+            )
+            send_telegram_msg(
+                "Copied food to today.\n\n"
+                f"Copied: {scope}\n"
+                f"Items: {len(copied)}\n"
+                "Calories added: "
+                f"{format_display_number(copied_calories, decimals=0)}"
+                + sync_note
+                + "\n\n"
+                + healthcoach_food_menu_text(),
                 chat_id=chat_id,
             )
             return

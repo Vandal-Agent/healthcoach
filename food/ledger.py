@@ -408,6 +408,160 @@ def list_food_entries(
     return [dict(row) for row in rows]
 
 
+def copy_food_entries_to_date(
+    *,
+    source_date: date | str,
+    target_date: date | str,
+    meal_category: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Copy exact Food Ledger snapshots to another date.
+
+    The operation is all-or-nothing. A selected target meal must be empty,
+    which prevents an accidental second copy or mixing a copied meal into
+    food already recorded for that meal.
+    """
+    initialize_database()
+    normalized_source = normalize_date(source_date)
+    normalized_target = normalize_date(target_date)
+
+    if normalized_source == normalized_target:
+        raise ValueError("source_date and target_date must be different.")
+
+    normalized_meal = (
+        normalize_meal_category(meal_category)
+        if meal_category is not None
+        else None
+    )
+    timestamp = current_timestamp()
+    copied_ids: list[int] = []
+    copied_food_ids: list[int] = []
+
+    with get_connection(DATABASE_PATH) as connection:
+        query = """
+            SELECT *
+            FROM food_entries
+            WHERE entry_date = ?
+        """
+        parameters: list[Any] = [normalized_source]
+        if normalized_meal is not None:
+            query += " AND meal_category = ?"
+            parameters.append(normalized_meal)
+        query += " ORDER BY food_entry_id"
+
+        source_rows = connection.execute(
+            query,
+            parameters,
+        ).fetchall()
+        if not source_rows:
+            raise ValueError("No source food entries were found.")
+
+        selected_meals = sorted({
+            str(row["meal_category"])
+            for row in source_rows
+        })
+        placeholders = ", ".join("?" for _ in selected_meals)
+        overlap = connection.execute(
+            f"""
+            SELECT DISTINCT meal_category
+            FROM food_entries
+            WHERE entry_date = ?
+              AND meal_category IN ({placeholders})
+            ORDER BY meal_category
+            """,
+            [normalized_target, *selected_meals],
+        ).fetchall()
+        if overlap:
+            occupied = ", ".join(
+                str(row["meal_category"]).title()
+                for row in overlap
+            )
+            raise ValueError(
+                "Food is already recorded for the selected target "
+                f"meal(s): {occupied}. Nothing was copied."
+            )
+
+        for row in source_rows:
+            original = str(row["original_text"] or "").strip()
+            copied_text = f"Copied from {normalized_source}"
+            if original:
+                copied_text += f": {original}"
+
+            cursor = connection.execute(
+                """
+                INSERT INTO food_entries (
+                    entry_date,
+                    meal_category,
+                    food_id,
+                    nutrition_version_id,
+                    quantity,
+                    original_text,
+                    logging_source,
+                    quantity_is_estimated,
+                    user_confirmed,
+                    calories,
+                    protein_g,
+                    carbohydrates_g,
+                    fat_g,
+                    fiber_g,
+                    sugar_g,
+                    sodium_mg,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, 'telegram_manual', ?, 1,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    normalized_target,
+                    row["meal_category"],
+                    row["food_id"],
+                    row["nutrition_version_id"],
+                    row["quantity"],
+                    copied_text,
+                    row["quantity_is_estimated"],
+                    row["calories"],
+                    row["protein_g"],
+                    row["carbohydrates_g"],
+                    row["fat_g"],
+                    row["fiber_g"],
+                    row["sugar_g"],
+                    row["sodium_mg"],
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            copied_ids.append(int(cursor.lastrowid))
+            copied_food_ids.append(int(row["food_id"]))
+
+        connection.commit()
+
+        id_placeholders = ", ".join("?" for _ in copied_ids)
+        copied_rows = connection.execute(
+            f"""
+            SELECT
+                food_entries.*,
+                foods.canonical_name,
+                foods.brand,
+                foods.restaurant,
+                foods.serving_description
+            FROM food_entries
+            JOIN foods
+              ON foods.food_id = food_entries.food_id
+            WHERE food_entries.food_entry_id IN ({id_placeholders})
+            ORDER BY food_entries.food_entry_id
+            """,
+            copied_ids,
+        ).fetchall()
+
+    for food_id in copied_food_ids:
+        increment_food_usage(food_id)
+
+    return [dict(row) for row in copied_rows]
+
+
 def save_food_favorite_from_entry(
     food_entry_id: int,
 ) -> dict[str, Any]:

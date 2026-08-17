@@ -15,10 +15,11 @@ class PantryMenuTests(unittest.TestCase):
     def test_food_menu_contains_separate_pantry_entry(self) -> None:
         message = app.healthcoach_food_menu_text()
 
-        self.assertIn("7. Saved recipes", message)
-        self.assertIn("8. My Pantry", message)
-        self.assertIn("9. Photo tools", message)
-        self.assertIn("12. Back", message)
+        self.assertIn("5. Same as yesterday", message)
+        self.assertIn("8. Saved recipes", message)
+        self.assertIn("9. My Pantry", message)
+        self.assertIn("10. Photo tools", message)
+        self.assertIn("13. Back", message)
 
         keyboard = app.menu_reply_markup(message)
         self.assertIn(

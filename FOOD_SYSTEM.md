@@ -357,11 +357,34 @@ Supported workflow:
 
 Saved Recipes v1 does not yet provide recipe editing or deletion.
 
+---
+
+# Same as Yesterday
+
+Same as Yesterday is available under Food > Daily Food.
+
+Supported workflow:
+
+- Read food only from the previous calendar day's Food Ledger.
+- Display the complete previous-day log before offering any copy action.
+- Allow the user to copy one meal or the entire day.
+- Show a second confirmation containing the foods, calories, protein, and
+  destination before creating entries.
+- Copy the exact stored nutrition snapshot and nutrition version from each
+  original entry rather than recalculating with newer food data.
+- Refuse the complete operation when any selected destination meal already
+  has food. Nothing is partially copied.
+- Synchronize today's Food Ledger totals after a successful copy.
+- Copy food only; weight, sleep, activity, and other health data are never
+  copied.
+
+The duplicate protection makes repeated taps safe. A copied meal must go
+into an empty meal section for the current day.
+
 
 # Future Features
 
 - Voice logging
-- Same as yesterday
 - Restaurant history
 - Grocery suggestions
 - AI meal planning
