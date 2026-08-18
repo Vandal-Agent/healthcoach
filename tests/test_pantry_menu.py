@@ -178,6 +178,7 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn("Add items manually", message)
         self.assertIn("Scan product into Pantry", message)
         self.assertIn("Get meal ideas", message)
+        self.assertIn("Smart Pantry swaps", message)
         self.assertIn("Remove pantry item", message)
         self.assertIn("Clear pantry", message)
         self.assertIn(
@@ -189,9 +190,60 @@ class PantryMenuTests(unittest.TestCase):
             keyboard["keyboard"],
         )
         self.assertIn(
-            ["Get meal ideas"],
+            ["Get meal ideas", "Smart Pantry swaps"],
             keyboard["keyboard"],
         )
+
+    def test_smart_pantry_swaps_are_advisory(self) -> None:
+        message = app.format_smart_pantry_swaps([
+            {
+                "pantry_item_name": "Regular mayonnaise",
+                "suggested_replacement": "Plain Greek yogurt",
+                "why_it_helps": "It can lower saturated-fat density.",
+                "shopping_tip": "Compare sodium and saturated fat.",
+                "heart_health_note": "Less saturated fat can fit a "
+                "heart-healthy pattern.",
+                "evidence_basis": "known_nutrition",
+            }
+        ])
+        keyboard = app.menu_reply_markup(message)
+
+        self.assertIn("Replace: Regular mayonnaise", message)
+        self.assertIn("Try: Plain Greek yogurt", message)
+        self.assertIn("saved package nutrition", message)
+        self.assertIn("Nothing in your Pantry has been changed", message)
+        self.assertIn("not a medical rating or diagnosis", message)
+        self.assertEqual(
+            keyboard["keyboard"],
+            [["Refresh swaps"], ["Back", "Cancel"]],
+        )
+
+    def test_pantry_routes_to_smart_swaps(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "show_smart_pantry_swaps",
+                return_value=True,
+            ) as show,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Smart Pantry swaps",
+                }
+            })
+
+        show.assert_called_once_with(chat_id=123)
 
     def test_pantry_meal_idea_action_asks_for_meal_type(self) -> None:
         conversation = {

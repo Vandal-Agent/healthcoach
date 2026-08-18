@@ -310,6 +310,18 @@ Supported workflow:
 - Clear the entire Pantry only after explicit confirmation.
 - Keep Pantry items available until the user removes or clears them.
 - Avoid quantity and depletion tracking in this version.
+- Request Smart Pantry Swaps to receive up to three optional, practical
+  replacement ideas ranked by likely value.
+- Ground swap reasoning in saved package nutrition when it is available.
+  For manual or fresh items without nutrition, use only transparent general
+  food-pattern guidance and never invent label values.
+- Provide a replacement, reason, package-shopping tip, heart-health context,
+  and evidence basis for every suggested swap.
+- Return fewer than three swaps, or no swaps, when the Pantry does not contain
+  enough meaningful replacement opportunities. Never criticize a sound food
+  merely to fill the list.
+- Keep Smart Pantry Swaps advisory. Generating or refreshing suggestions never
+  removes, replaces, saves, purchases, or logs any food.
 - Request exactly three lunch or dinner ideas at a time.
 - Label exactly one of those three as the Heart-Healthy Pick and explain
   the specific food-pattern strengths behind the selection.

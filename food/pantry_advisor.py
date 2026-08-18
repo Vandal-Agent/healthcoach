@@ -57,6 +57,22 @@ class PantryMealIdeaSet(BaseModel):
     )
 
 
+class PantrySwapSuggestion(BaseModel):
+    pantry_item_name: str = Field(min_length=1, max_length=120)
+    suggested_replacement: str = Field(min_length=1, max_length=160)
+    why_it_helps: str = Field(min_length=1, max_length=500)
+    shopping_tip: str = Field(min_length=1, max_length=300)
+    heart_health_note: str = Field(min_length=1, max_length=400)
+    evidence_basis: Literal["known_nutrition", "food_pattern"]
+
+
+class PantrySwapSet(BaseModel):
+    swaps: list[PantrySwapSuggestion] = Field(
+        default_factory=list,
+        max_length=3,
+    )
+
+
 def normalize_pantry_name(value: str | None) -> str:
     return re.sub(
         r"[^a-z0-9]+",
@@ -292,6 +308,159 @@ Rules:
         ideas,
         pantry_items=pantry_items,
         meal_type=normalized_meal,
+    )
+
+
+def validate_pantry_swaps(
+    swaps: list[dict[str, Any]],
+    *,
+    pantry_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if len(swaps) > 3:
+        raise ValueError("No more than three Pantry swaps are allowed.")
+
+    pantry_by_name = {
+        normalize_pantry_name(
+            item.get("display_name")
+            or item.get("canonical_name")
+        ): item
+        for item in pantry_items
+    }
+    pantry_by_name.pop("", None)
+    seen_items: set[str] = set()
+
+    for swap in swaps:
+        item_name = normalize_pantry_name(
+            swap.get("pantry_item_name")
+        )
+        replacement = normalize_pantry_name(
+            swap.get("suggested_replacement")
+        )
+
+        if item_name not in pantry_by_name:
+            raise ValueError(
+                "A Pantry swap referenced an unavailable item."
+            )
+        if item_name in seen_items:
+            raise ValueError(
+                "Pantry swaps must target different items."
+            )
+        if not replacement or replacement == item_name:
+            raise ValueError(
+                "A Pantry swap must recommend a different item."
+            )
+
+        evidence_basis = str(
+            swap.get("evidence_basis") or ""
+        ).strip()
+        if evidence_basis not in {
+            "known_nutrition",
+            "food_pattern",
+        }:
+            raise ValueError("A Pantry swap has an invalid evidence basis.")
+
+        original = pantry_by_name[item_name]
+        known_nutrition = any(
+            original.get(field) is not None
+            for field in (
+                "calories",
+                "protein_g",
+                "carbohydrates_g",
+                "fat_g",
+                "fiber_g",
+                "sugar_g",
+                "sodium_mg",
+            )
+        )
+        if evidence_basis == "known_nutrition" and not known_nutrition:
+            raise ValueError(
+                "A Pantry swap claimed nutrition data that is unavailable."
+            )
+
+        for required_field in (
+            "why_it_helps",
+            "shopping_tip",
+            "heart_health_note",
+        ):
+            if not str(swap.get(required_field) or "").strip():
+                raise ValueError(
+                    "Every Pantry swap must include complete guidance."
+                )
+
+        seen_items.add(item_name)
+
+    return swaps
+
+
+def generate_smart_pantry_swaps(
+    *,
+    pantry_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    pantry_data = pantry_item_prompt_data(pantry_items)
+    if not pantry_data:
+        raise ValueError("At least one Pantry item is required.")
+
+    prompt = f"""
+Review this HealthCoach Pantry and suggest zero to three meaningful,
+realistic healthier replacements.
+
+Available Pantry items:
+{json.dumps(pantry_data, indent=2, sort_keys=True)}
+
+Rules:
+1. Rank only the highest-value swaps. Return fewer than three, or none,
+   when forcing additional swaps would not be useful.
+2. pantry_item_name must exactly copy one supplied Pantry item name.
+3. Do not criticize or replace an item that is already a strong everyday
+   choice merely to fill the list.
+4. Prefer swaps that can improve the overall eating pattern: vegetables,
+   fruits, whole grains, beans and legumes, nuts and seeds, fish, lean
+   unprocessed protein, and unsaturated plant fats. Favor useful fiber and
+   lower sodium, added sugar, saturated fat, and processed or fatty meat.
+5. A replacement may be a general product type. Do not invent a brand,
+   package claim, certification, or exact nutrition for a product that was
+   not supplied.
+6. Set evidence_basis to known_nutrition only when the supplied Pantry
+   record includes nutrition that directly supports the reason. Otherwise
+   use food_pattern and make clear that the suggestion is category-based.
+7. shopping_tip should tell the user what to compare on a package label or
+   what type of fresh item to look for. Avoid guarantees.
+8. heart_health_note must briefly explain the heart-health relevance using
+   general food-pattern guidance. Do not diagnose, calculate personal risk,
+   or claim that a food prevents or treats disease.
+9. Keep the tone practical and nonjudgmental. The current food can still fit
+   occasionally; this is an optional Pantry improvement.
+"""
+
+    client = get_client()
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json",
+                response_schema=PantrySwapSet,
+            ),
+        )
+    finally:
+        client.close()
+
+    if response.parsed is not None:
+        result = (
+            response.parsed
+            if isinstance(response.parsed, PantrySwapSet)
+            else PantrySwapSet.model_validate(response.parsed)
+        )
+    elif response.text:
+        result = PantrySwapSet.model_validate_json(response.text)
+    else:
+        raise RuntimeError("Gemini returned no Pantry swap review.")
+
+    swaps = [swap.model_dump() for swap in result.swaps]
+    return validate_pantry_swaps(
+        swaps,
+        pantry_items=pantry_items,
     )
 
 

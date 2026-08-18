@@ -63,6 +63,7 @@ from food.pantry import (
 from food.pantry_advisor import (
     MEAL_CALORIE_LIMITS,
     generate_pantry_meal_ideas,
+    generate_smart_pantry_swaps,
     scale_pantry_meal_nutrition,
 )
 from food.recipes import (
@@ -531,10 +532,12 @@ def menu_reply_markup(message):
         rows = [
             ["View pantry", "Add items manually"],
             ["Scan product into Pantry"],
-            ["Get meal ideas"],
+            ["Get meal ideas", "Smart Pantry swaps"],
             ["Remove pantry item", "Clear pantry"],
             ["Back", "Cancel"],
         ]
+    elif "Smart Pantry Swaps\n\n" in message:
+        rows = [["Refresh swaps"], ["Back", "Cancel"]]
     elif "Pantry Meal Ideas —" in message:
         choices = re.findall(r"(?m)^(\d+)\. ", message)
         rows = [choices, ["More ideas"], ["Back", "Cancel"]]
@@ -3229,9 +3232,10 @@ def healthcoach_pantry_menu_text() -> str:
         "2. Add items manually\n"
         "3. Scan product into Pantry\n"
         "4. Get meal ideas\n"
-        "5. Remove pantry item\n"
-        "6. Clear pantry\n"
-        "7. Back\n\n"
+        "5. Smart Pantry swaps\n"
+        "6. Remove pantry item\n"
+        "7. Clear pantry\n"
+        "8. Back\n\n"
         "Pantry items stay available until you remove or clear "
         "them. Quantities are not tracked."
     )
@@ -3467,6 +3471,96 @@ def show_pantry_meal_ideas(
             ideas,
             meal_type=normalized_meal,
         ),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def format_smart_pantry_swaps(swaps: list[dict]) -> str:
+    lines = ["Smart Pantry Swaps", ""]
+
+    if not swaps:
+        lines.extend(
+            [
+                "I didn't find a high-value replacement worth pushing "
+                "right now. Your current Pantry choices already look "
+                "reasonable based on the information available.",
+                "",
+            ]
+        )
+    else:
+        for index, swap in enumerate(swaps, start=1):
+            basis = (
+                "saved package nutrition"
+                if swap.get("evidence_basis") == "known_nutrition"
+                else "general food-pattern guidance"
+            )
+            lines.extend(
+                [
+                    f"{index}. Replace: "
+                    f"{swap.get('pantry_item_name') or 'Pantry item'}",
+                    "Try: "
+                    f"{swap.get('suggested_replacement') or 'alternative'}",
+                    f"Why: {swap.get('why_it_helps') or ''}",
+                    f"Shopping tip: {swap.get('shopping_tip') or ''}",
+                    "Heart-health note: "
+                    f"{swap.get('heart_health_note') or ''}",
+                    f"Basis: {basis}",
+                    "",
+                ]
+            )
+
+    lines.extend(
+        [
+            "These are optional shopping suggestions. Nothing in your "
+            "Pantry has been changed.",
+            "Heart-health notes are general food guidance, not a medical "
+            "rating or diagnosis.",
+            "",
+            "Reply Refresh swaps, Back, or Cancel.",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def show_smart_pantry_swaps(*, chat_id) -> bool:
+    pantry_items = list_pantry_items()
+    if not pantry_items:
+        send_telegram_msg(
+            "Your Pantry is empty. Add a few available foods or scan "
+            "products before requesting swaps.",
+            chat_id=chat_id,
+        )
+        return False
+
+    send_telegram_msg(
+        "I'm reviewing your Pantry for a few practical, higher-value "
+        "replacements. This may take a moment.",
+        chat_id=chat_id,
+        remove_keyboard=True,
+    )
+
+    try:
+        swaps = generate_smart_pantry_swaps(
+            pantry_items=pantry_items,
+        )
+    except Exception:
+        logging.exception("Smart Pantry swap generation failed")
+        send_telegram_msg(
+            "I couldn't review Pantry swaps right now. Your Pantry was "
+            "not changed. Please try again in a moment.",
+            chat_id=chat_id,
+        )
+        return False
+
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_swaps",
+        known_data={"pantry_swaps": swaps},
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_smart_pantry_swaps(swaps),
         chat_id=chat_id,
     )
     return True
@@ -5639,6 +5733,16 @@ def process_telegram_update(update):
 
             if lowered in {
                 "5",
+                "smart pantry swaps",
+                "smart pantry swap",
+                "pantry swaps",
+                "healthier swaps",
+            }:
+                show_smart_pantry_swaps(chat_id=chat_id)
+                return
+
+            if lowered in {
+                "6",
                 "remove",
                 "remove pantry item",
             }:
@@ -5668,7 +5772,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "6",
+                "7",
                 "clear",
                 "clear pantry",
             }:
@@ -5698,7 +5802,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"7", "back"}:
+            if lowered in {"8", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -5713,6 +5817,37 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_pantry_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_swaps":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "refresh",
+                "refresh swaps",
+                "more",
+                "more swaps",
+            }:
+                show_smart_pantry_swaps(chat_id=chat_id)
+                return
+
+            send_telegram_msg(
+                format_smart_pantry_swaps(
+                    list(known_data.get("pantry_swaps") or [])
+                ),
                 chat_id=chat_id,
             )
             return
