@@ -66,6 +66,16 @@ from food.pantry_advisor import (
     generate_smart_pantry_swaps,
     scale_pantry_meal_nutrition,
 )
+from food.shopping import (
+    add_shopping_item,
+    add_shopping_items,
+    clear_shopping_list,
+    get_shopping_item,
+    list_shopping_items,
+    mark_shopping_item_purchased,
+    parse_shopping_item_list,
+    remove_shopping_item,
+)
 from food.recipes import (
     delete_saved_recipe,
     get_saved_recipe,
@@ -368,6 +378,10 @@ def menu_reply_markup(message):
             "Add these items to My Pantry?",
             "Remove this Pantry item?",
             "Clear My Pantry?",
+            "Add these items to the Shopping List?",
+            "Mark this Shopping List item purchased?",
+            "Remove this Shopping List item?",
+            "Clear the Shopping List?",
             "Save this recipe?",
             "Save this recipe change?",
             "Save these recipe nutrition changes?",
@@ -533,11 +547,37 @@ def menu_reply_markup(message):
             ["View pantry", "Add items manually"],
             ["Scan product into Pantry"],
             ["Get meal ideas", "Smart Pantry swaps"],
+            ["Shopping list"],
             ["Remove pantry item", "Clear pantry"],
             ["Back", "Cancel"],
         ]
     elif "Smart Pantry Swaps\n\n" in message:
-        rows = [["Refresh swaps"], ["Back", "Cancel"]]
+        choices = re.findall(r"(?m)^(\d+)\. Replace:", message)
+        add_choices = [f"Add {choice}" for choice in choices]
+        rows = []
+        if add_choices:
+            rows.append(add_choices)
+        rows.extend(
+            [
+                ["Shopping list", "Refresh swaps"],
+                ["Back", "Cancel"],
+            ]
+        )
+    elif "Shopping List Menu\n\n" in message:
+        rows = [
+            ["View list", "Add items manually"],
+            ["Mark purchased", "Remove item"],
+            ["Clear list"],
+            ["Back", "Cancel"],
+        ]
+    elif (
+        "Choose a Shopping List item to mark purchased:" in message
+        or "Choose a Shopping List item to remove:" in message
+    ):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [choices, ["Back", "Cancel"]]
+    elif "Shopping List\n\n" in message:
+        rows = [["Back", "Cancel"]]
     elif "Pantry Meal Ideas —" in message:
         choices = re.findall(r"(?m)^(\d+)\. ", message)
         rows = [choices, ["More ideas"], ["Back", "Cancel"]]
@@ -3233,11 +3273,26 @@ def healthcoach_pantry_menu_text() -> str:
         "3. Scan product into Pantry\n"
         "4. Get meal ideas\n"
         "5. Smart Pantry swaps\n"
-        "6. Remove pantry item\n"
-        "7. Clear pantry\n"
-        "8. Back\n\n"
+        "6. Shopping list\n"
+        "7. Remove pantry item\n"
+        "8. Clear pantry\n"
+        "9. Back\n\n"
         "Pantry items stay available until you remove or clear "
         "them. Quantities are not tracked."
+    )
+
+
+def healthcoach_shopping_list_menu_text() -> str:
+    return (
+        "Shopping List Menu\n\n"
+        "1. View list\n"
+        "2. Add items manually\n"
+        "3. Mark purchased\n"
+        "4. Remove item\n"
+        "5. Clear list\n"
+        "6. Back\n\n"
+        "Shopping List items stay saved until you remove, clear, or "
+        "mark them purchased. Purchased items move to My Pantry."
     )
 
 
@@ -3506,6 +3561,17 @@ def format_smart_pantry_swaps(swaps: list[dict]) -> str:
                     "Heart-health note: "
                     f"{swap.get('heart_health_note') or ''}",
                     f"Basis: {basis}",
+                    *(
+                        [
+                            "Already in Pantry: "
+                            f"{swap.get('available_pantry_item_name')}"
+                        ]
+                        if swap.get("available_pantry_item_name")
+                        else [
+                            f"Shopping List: reply Add {index} to save "
+                            "this replacement"
+                        ]
+                    ),
                     "",
                 ]
             )
@@ -3517,7 +3583,9 @@ def format_smart_pantry_swaps(swaps: list[dict]) -> str:
             "Heart-health notes are general food guidance, not a medical "
             "rating or diagnosis.",
             "",
-            "Reply Refresh swaps, Back, or Cancel.",
+            "Reply Add 1, Add 2, or Add 3 to save a replacement; "
+            "Shopping list to view saved items; Refresh swaps; Back; "
+            "or Cancel.",
         ]
     )
     return "\n".join(lines).strip()
@@ -3564,6 +3632,41 @@ def show_smart_pantry_swaps(*, chat_id) -> bool:
         chat_id=chat_id,
     )
     return True
+
+
+def format_shopping_list(items: list[dict]) -> str:
+    lines = ["Shopping List", ""]
+    if not items:
+        lines.append("Your Shopping List is empty.")
+    else:
+        for index, item in enumerate(items, start=1):
+            line = f"{index}. {item['display_name']}"
+            if item.get("source_note"):
+                line += f" — {item['source_note']}"
+            lines.append(line)
+
+    lines.extend(
+        [
+            "",
+            "Items stay saved until removed, cleared, or marked "
+            "purchased.",
+            "Reply Back to return or Cancel to close.",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def format_shopping_item_choices(
+    items: list[dict],
+    *,
+    action: str,
+) -> str:
+    verb = "mark purchased" if action == "purchase" else "remove"
+    lines = [f"Choose a Shopping List item to {verb}:", ""]
+    for index, item in enumerate(items, start=1):
+        lines.append(f"{index}. {item['display_name']}")
+    lines.extend(["", "Reply Back to return or Cancel to close."])
+    return "\n".join(lines)
 
 
 def format_pantry_items(items: list[dict]) -> str:
@@ -5743,6 +5846,23 @@ def process_telegram_update(update):
 
             if lowered in {
                 "6",
+                "shopping list",
+                "my shopping list",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "7",
                 "remove",
                 "remove pantry item",
             }:
@@ -5772,7 +5892,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "7",
+                "8",
                 "clear",
                 "clear pantry",
             }:
@@ -5802,7 +5922,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"8", "back"}:
+            if lowered in {"9", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -5842,6 +5962,78 @@ def process_telegram_update(update):
                 "more swaps",
             }:
                 show_smart_pantry_swaps(chat_id=chat_id)
+                return
+
+            if lowered in {"shopping list", "my shopping list"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            match = re.fullmatch(r"add\s+([1-9][0-9]*)", lowered)
+            if match:
+                swaps = list(known_data.get("pantry_swaps") or [])
+                selection = int(match.group(1))
+                if selection > len(swaps):
+                    send_telegram_msg(
+                        "Choose one of the displayed swap numbers.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                swap = swaps[selection - 1]
+                available_name = str(
+                    swap.get("available_pantry_item_name") or ""
+                ).strip()
+                if available_name:
+                    send_telegram_msg(
+                        f"{available_name} is already in My Pantry, so "
+                        "it was not added to the Shopping List.\n\n"
+                        + format_smart_pantry_swaps(swaps),
+                        chat_id=chat_id,
+                    )
+                    return
+
+                replacement = str(
+                    swap.get("suggested_replacement") or ""
+                ).strip()
+                try:
+                    item = add_shopping_item(
+                        display_name=replacement,
+                        source="pantry_swap",
+                        source_note=(
+                            "Swap for "
+                            + str(swap.get("pantry_item_name") or "item")
+                        ),
+                    )
+                except Exception:
+                    logging.exception(
+                        "Could not add Smart Pantry Swap to Shopping List"
+                    )
+                    send_telegram_msg(
+                        "I couldn't add that swap to the Shopping List. "
+                        "Nothing was changed.",
+                        chat_id=chat_id,
+                    )
+                    return
+
+                status = (
+                    f"Added {item['display_name']} to the Shopping List."
+                    if item.get("created")
+                    else f"{item['display_name']} is already on the "
+                    "Shopping List."
+                )
+                send_telegram_msg(
+                    status + "\n\n" + format_smart_pantry_swaps(swaps),
+                    chat_id=chat_id,
+                )
                 return
 
             send_telegram_msg(
@@ -6381,6 +6573,392 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 format_pantry_items(list_pantry_items()),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "shopping_list":
+            if lowered in {"1", "view", "view list", "view shopping list"}:
+                items = list_shopping_items()
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list_view",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_shopping_list(items),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "2",
+                "add",
+                "add manually",
+                "add shopping items",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_add_items",
+                    known_data={"shopping_pending_names": []},
+                    missing_fields=["shopping_items"],
+                )
+                send_telegram_msg(
+                    "Send Shopping List items separated by commas.\n\n"
+                    "Example: low-sodium broth, olive oil, lemons",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {
+                "3",
+                "mark purchased",
+                "purchased",
+            }:
+                items = list_shopping_items()
+                if not items:
+                    send_telegram_msg(
+                        "Your Shopping List is empty.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_purchase_select",
+                    known_data={
+                        "shopping_item_ids": [
+                            int(item["shopping_list_item_id"])
+                            for item in items
+                        ]
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_shopping_item_choices(items, action="purchase"),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "remove", "remove item"}:
+                items = list_shopping_items()
+                if not items:
+                    send_telegram_msg(
+                        "Your Shopping List is empty.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_remove_select",
+                    known_data={
+                        "shopping_item_ids": [
+                            int(item["shopping_list_item_id"])
+                            for item in items
+                        ]
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_shopping_item_choices(items, action="remove"),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"5", "clear", "clear list"}:
+                items = list_shopping_items()
+                if not items:
+                    send_telegram_msg(
+                        "Your Shopping List is already empty.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_clear_confirmation",
+                    known_data={"shopping_clear_count": len(items)},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Clear the Shopping List?\n\n"
+                    f"This will remove all {len(items)} item(s). "
+                    "My Pantry will not change.\n\n"
+                    "1. Yes\n"
+                    "2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"6", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_shopping_list_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "shopping_list_view":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                format_shopping_list(list_shopping_items()),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "shopping_add_items":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                names = parse_shopping_item_list(text)
+            except ValueError as error:
+                send_telegram_msg(str(error), chat_id=chat_id)
+                return
+            if not names:
+                send_telegram_msg(
+                    "Send at least one item, separated by commas or lines.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="shopping_add_confirmation",
+                known_data={"shopping_pending_names": names},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Add these items to the Shopping List?\n\n"
+                + "\n".join(f"- {name}" for name in names)
+                + "\n\n1. Yes\n2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "shopping_add_confirmation":
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "No Shopping List items were added.\n\n"
+                    + healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "add"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            try:
+                result = add_shopping_items(
+                    list(known_data.get("shopping_pending_names") or [])
+                )
+            except Exception:
+                logging.exception("Could not add Shopping List items")
+                send_telegram_msg(
+                    "I couldn't add those items. Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            created_count = len(result["created"])
+            existing_count = len(result["existing"])
+            summary = f"Added {created_count} item(s) to the Shopping List."
+            if existing_count:
+                summary += f" {existing_count} item(s) were already there."
+            update_conversation(
+                chat_id=chat_id,
+                current_step="shopping_list",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                summary + "\n\n" + healthcoach_shopping_list_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {
+            "shopping_purchase_select",
+            "shopping_remove_select",
+        }:
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            shopping_ids = list(known_data.get("shopping_item_ids") or [])
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(shopping_ids):
+                send_telegram_msg(
+                    "Choose one of the numbered Shopping List items, or "
+                    "reply Back.",
+                    chat_id=chat_id,
+                )
+                return
+            item = get_shopping_item(int(shopping_ids[selection - 1]))
+            if item is None:
+                send_telegram_msg(
+                    "That Shopping List item is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            purchasing = current_step == "shopping_purchase_select"
+            next_step = (
+                "shopping_purchase_confirmation"
+                if purchasing
+                else "shopping_remove_confirmation"
+            )
+            update_conversation(
+                chat_id=chat_id,
+                current_step=next_step,
+                known_data={
+                    "shopping_selected_id": int(
+                        item["shopping_list_item_id"]
+                    ),
+                    "shopping_selected_name": item["display_name"],
+                },
+                missing_fields=[],
+            )
+            prompt = (
+                "Mark this Shopping List item purchased?\n\n"
+                f"{item['display_name']}\n\n"
+                "It will move to My Pantry.\n\n1. Yes\n2. No"
+                if purchasing
+                else "Remove this Shopping List item?\n\n"
+                f"{item['display_name']}\n\n1. Yes\n2. No"
+            )
+            send_telegram_msg(prompt, chat_id=chat_id)
+            return
+
+        if current_step in {
+            "shopping_purchase_confirmation",
+            "shopping_remove_confirmation",
+        }:
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Nothing was changed.\n\n"
+                    + healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "remove", "purchased"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            item_id = int(known_data.get("shopping_selected_id") or 0)
+            name = str(
+                known_data.get("shopping_selected_name") or "Shopping item"
+            )
+            purchasing = current_step == "shopping_purchase_confirmation"
+            try:
+                if purchasing:
+                    mark_shopping_item_purchased(item_id)
+                    message = (
+                        f"Moved {name} from the Shopping List to My Pantry."
+                    )
+                else:
+                    removed = remove_shopping_item(item_id)
+                    message = (
+                        f"Removed {name} from the Shopping List."
+                        if removed
+                        else "That Shopping List item was already removed."
+                    )
+            except Exception:
+                logging.exception("Could not update Shopping List item")
+                send_telegram_msg(
+                    "I couldn't update that item. Nothing was removed from "
+                    "the Shopping List.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="shopping_list",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                message + "\n\n" + healthcoach_shopping_list_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "shopping_clear_confirmation":
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="shopping_list",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "The Shopping List was not cleared.\n\n"
+                    + healthcoach_shopping_list_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "clear"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            removed_count = clear_shopping_list()
+            update_conversation(
+                chat_id=chat_id,
+                current_step="shopping_list",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                f"Cleared {removed_count} item(s) from the Shopping List.\n\n"
+                + healthcoach_shopping_list_menu_text(),
                 chat_id=chat_id,
             )
             return

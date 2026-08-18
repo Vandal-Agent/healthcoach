@@ -100,13 +100,16 @@ class SavedRecipeTests(unittest.TestCase):
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE saved_recipes")
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 7"
+                "DELETE FROM schema_version WHERE version IN (7, 8)"
             )
             connection.commit()
 
         result = database.initialize_database()
 
-        self.assertEqual(result["schema_version"]["version"], 7)
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
         self.assertIn("saved_recipes", result["tables"])
 
     def test_saves_lists_and_reads_complete_recipe(self) -> None:

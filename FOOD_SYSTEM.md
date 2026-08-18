@@ -322,6 +322,10 @@ Supported workflow:
   merely to fill the list.
 - Keep Smart Pantry Swaps advisory. Generating or refreshing suggestions never
   removes, replaces, saves, purchases, or logs any food.
+- Allow the user to explicitly add any displayed replacement to the persistent
+  Shopping List using its numbered Add action.
+- Detect when a suitable suggested replacement is already in My Pantry and
+  identify it instead of adding an unnecessary Shopping List item.
 - Request exactly three lunch or dinner ideas at a time.
 - Label exactly one of those three as the Heart-Healthy Pick and explain
   the specific food-pattern strengths behind the selection.
@@ -355,6 +359,26 @@ Pantry meal ideas do not reduce inventory quantities. They become Saved
 Recipes only after explicit confirmation.
 
 Duplicate names are matched case-insensitively and are not added twice.
+
+# Shopping List
+
+The Shopping List is a persistent list available from My Pantry and from the
+Smart Pantry Swaps results. It survives service restarts and remains separate
+from My Pantry until the user marks an item purchased.
+
+Supported workflow:
+
+- View the current Shopping List.
+- Add one or several items manually using a comma-separated or line-separated
+  list and explicit confirmation.
+- Add an individual Smart Pantry Swap replacement using Add 1, Add 2, or Add 3.
+- Preserve the original Pantry item as context for swap-generated additions.
+- Avoid duplicate Shopping List names using case-insensitive matching.
+- Mark one item purchased only after confirmation. This moves the item into My
+  Pantry and removes it from the Shopping List.
+- Remove one item or clear the entire Shopping List only after confirmation.
+- Never remove or replace the original Pantry item automatically.
+- Never log a Shopping List item as eaten.
 
 ---
 

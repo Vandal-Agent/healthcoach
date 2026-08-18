@@ -179,6 +179,7 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn("Scan product into Pantry", message)
         self.assertIn("Get meal ideas", message)
         self.assertIn("Smart Pantry swaps", message)
+        self.assertIn("Shopping list", message)
         self.assertIn("Remove pantry item", message)
         self.assertIn("Clear pantry", message)
         self.assertIn(
@@ -215,7 +216,11 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn("not a medical rating or diagnosis", message)
         self.assertEqual(
             keyboard["keyboard"],
-            [["Refresh swaps"], ["Back", "Cancel"]],
+            [
+                ["Add 1"],
+                ["Shopping list", "Refresh swaps"],
+                ["Back", "Cancel"],
+            ],
         )
 
     def test_pantry_routes_to_smart_swaps(self) -> None:

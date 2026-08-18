@@ -64,6 +64,10 @@ class PantrySwapSuggestion(BaseModel):
     shopping_tip: str = Field(min_length=1, max_length=300)
     heart_health_note: str = Field(min_length=1, max_length=400)
     evidence_basis: Literal["known_nutrition", "food_pattern"]
+    available_pantry_item_name: str | None = Field(
+        default=None,
+        max_length=120,
+    )
 
 
 class PantrySwapSet(BaseModel):
@@ -360,6 +364,19 @@ def validate_pantry_swaps(
             raise ValueError("A Pantry swap has an invalid evidence basis.")
 
         original = pantry_by_name[item_name]
+        available_name = normalize_pantry_name(
+            swap.get("available_pantry_item_name")
+        )
+        if available_name:
+            if available_name not in pantry_by_name:
+                raise ValueError(
+                    "A Pantry swap claimed an unavailable replacement."
+                )
+            if available_name == item_name:
+                raise ValueError(
+                    "A Pantry swap cannot replace an item with itself."
+                )
+
         known_nutrition = any(
             original.get(field) is not None
             for field in (
@@ -423,12 +440,16 @@ Rules:
 6. Set evidence_basis to known_nutrition only when the supplied Pantry
    record includes nutrition that directly supports the reason. Otherwise
    use food_pattern and make clear that the suggestion is category-based.
-7. shopping_tip should tell the user what to compare on a package label or
+7. Prefer a healthier replacement that is already in the Pantry when one is
+   suitable. In that case set available_pantry_item_name to its exact supplied
+   Pantry name. Otherwise set it to null. Never claim an item is available
+   unless it appears in the supplied Pantry.
+8. shopping_tip should tell the user what to compare on a package label or
    what type of fresh item to look for. Avoid guarantees.
-8. heart_health_note must briefly explain the heart-health relevance using
+9. heart_health_note must briefly explain the heart-health relevance using
    general food-pattern guidance. Do not diagnose, calculate personal risk,
    or claim that a food prevents or treats disease.
-9. Keep the tone practical and nonjudgmental. The current food can still fit
+10. Keep the tone practical and nonjudgmental. The current food can still fit
    occasionally; this is an optional Pantry improvement.
 """
 

@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 7
+SCHEMA_VERSION: Final[int] = 8
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -475,6 +475,20 @@ def create_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_pantry_items_display_name
             ON pantry_items (display_name);
 
+        CREATE TABLE IF NOT EXISTS shopping_list_items (
+            shopping_list_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL
+                CHECK (source IN ('manual', 'pantry_swap')),
+            source_note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_shopping_list_items_display_name
+            ON shopping_list_items (display_name);
+
         CREATE TABLE IF NOT EXISTS saved_recipes (
             saved_recipe_id INTEGER PRIMARY KEY AUTOINCREMENT,
             food_id INTEGER NOT NULL UNIQUE,
@@ -585,8 +599,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=7,
         description="Add persistent Saved Recipes",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add persistent Shopping List",
     )
 
 
@@ -795,6 +815,29 @@ def create_saved_recipes_schema(
     )
 
 
+def create_shopping_list_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create the persistent Shopping List."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS shopping_list_items (
+            shopping_list_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL
+                CHECK (source IN ('manual', 'pantry_swap')),
+            source_note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_shopping_list_items_display_name
+            ON shopping_list_items (display_name);
+        """
+    )
+
+
 def migrate_version_1_to_2(
     connection: sqlite3.Connection,
 ) -> None:
@@ -974,6 +1017,19 @@ def migrate_version_6_to_7(
     )
 
 
+def migrate_version_7_to_8(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add the persistent Shopping List."""
+    create_shopping_list_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=8,
+        description="Add persistent Shopping List",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1008,6 +1064,10 @@ def apply_migrations(
         migrate_version_6_to_7(connection)
         version = 7
 
+    if version < 8:
+        migrate_version_7_to_8(connection)
+        version = 8
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -1021,6 +1081,7 @@ def apply_migrations(
     create_barcode_mapping_schema(connection)
     create_pantry_schema(connection)
     create_saved_recipes_schema(connection)
+    create_shopping_list_schema(connection)
 
 
 def validate_database(

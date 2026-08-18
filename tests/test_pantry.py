@@ -80,7 +80,7 @@ class PantryTests(unittest.TestCase):
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE pantry_items")
             connection.execute(
-                "DELETE FROM schema_version WHERE version IN (6, 7)"
+                "DELETE FROM schema_version WHERE version IN (6, 7, 8)"
             )
             connection.commit()
 
