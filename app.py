@@ -4,7 +4,7 @@ import time
 import threading
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import gspread
 import pytz
@@ -51,6 +51,16 @@ from food.ledger import (
     list_food_entries,
     save_food_favorite_from_entry,
     update_food_entry,
+)
+from food.goals import (
+    archive_active_weight_goal,
+    calculate_weight_goal,
+    create_weight_goal,
+    get_active_weight_goal,
+    get_latest_weight_goal_calculation,
+    list_weight_goals,
+    save_weight_goal_calculation,
+    update_active_weight_goal,
 )
 from food.pantry import (
     add_pantry_item,
@@ -612,8 +622,25 @@ def menu_reply_markup(message):
     elif "Reports Menu\n\n" in message:
         rows = [
             ["Today", "Weekly report"],
+            ["Goals"],
             ["Back", "Cancel"],
         ]
+    elif "Goals Menu\n\n" in message:
+        rows = [
+            ["View active goal", "Add weight goal"],
+            ["Update goal", "Edit goal"],
+            ["Remove goal", "Goal history"],
+            ["Back", "Cancel"],
+        ]
+    elif "Save this weight goal?" in message:
+        rows = [["Yes", "No"]]
+        one_time = True
+    elif "Save these goal changes?" in message:
+        rows = [["Yes", "No"]]
+        one_time = True
+    elif "Remove this active weight goal?" in message:
+        rows = [["Yes", "No"]]
+        one_time = True
     elif "HealthCoach Menu\n\n" in message:
         rows = [
             ["Food", "Health"],
@@ -4099,8 +4126,330 @@ def healthcoach_reports_menu_text() -> str:
         "Reports Menu\n\n"
         "1. Today's summary\n"
         "2. Weekly report\n"
-        "3. Back"
+        "3. Goals\n"
+        "4. Back"
     )
+
+
+def healthcoach_goals_menu_text() -> str:
+    return (
+        "Goals Menu\n\n"
+        "1. View active goal\n"
+        "2. Add weight goal\n"
+        "3. Update goal\n"
+        "4. Edit goal\n"
+        "5. Remove goal\n"
+        "6. Goal history\n"
+        "7. Back\n\n"
+        "Weight goals update only when you choose Update goal."
+    )
+
+
+def parse_weight_goal_date(value: str, *, reference_date: date) -> date | None:
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+    if not cleaned:
+        return None
+
+    formats = [
+        "%m/%d/%Y",
+        "%m-%d-%Y",
+        "%Y-%m-%d",
+        "%B %d, %Y",
+        "%B %d %Y",
+        "%b %d, %Y",
+        "%b %d %Y",
+    ]
+    for date_format in formats:
+        try:
+            return datetime.strptime(cleaned, date_format).date()
+        except ValueError:
+            pass
+
+    for date_format in ("%B %d", "%b %d", "%m/%d"):
+        try:
+            parsed = datetime.strptime(cleaned, date_format).date()
+        except ValueError:
+            continue
+        candidate = parsed.replace(year=reference_date.year)
+        if candidate <= reference_date:
+            candidate = candidate.replace(year=reference_date.year + 1)
+        return candidate
+
+    return None
+
+
+def parse_weight_goal_weight(value: str) -> float | None:
+    match = re.search(r"(?<!\d)(\d{2,3}(?:\.\d+)?)", str(value or ""))
+    if not match:
+        return None
+    weight = float(match.group(1))
+    if not 75 <= weight <= 700:
+        return None
+    return weight
+
+
+def get_weight_goal_health_inputs(*, reference_date) -> dict:
+    """Read goal inputs without changing Health Tracker facts."""
+    weight_rows = get_recent_rows(
+        reference_date=reference_date,
+        days_back=30,
+    )
+    latest_weight = None
+    latest_weight_date = None
+    for row in reversed(weight_rows):
+        metrics = row_to_metrics(row) or {}
+        if metrics.get("weight") is None:
+            continue
+        latest_weight = float(metrics["weight"])
+        latest_weight_date = parse_row_date(row)
+        break
+
+    completed_reference = reference_date - timedelta(days=1)
+    burn_rows = get_recent_rows(
+        reference_date=completed_reference,
+        days_back=30,
+    )
+    burn_values = collect_recent_numeric_values(
+        burn_rows,
+        2,
+        limit=7,
+        minimum_valid=0,
+    )
+
+    return {
+        "current_weight": latest_weight,
+        "weight_date": latest_weight_date,
+        "average_daily_burn": (
+            sum(burn_values) / len(burn_values)
+            if burn_values
+            else None
+        ),
+        "burn_days": len(burn_values),
+    }
+
+
+def format_weight_goal(goal: dict | None) -> str:
+    if goal is None:
+        return (
+            "Active Weight Goal\n\n"
+            "No active weight goal is saved.\n\n"
+            "Choose Add weight goal to create one."
+        )
+
+    target_date = datetime.strptime(
+        str(goal["target_date"]),
+        "%Y-%m-%d",
+    ).date()
+    calculation = get_latest_weight_goal_calculation(
+        int(goal["weight_goal_id"])
+    )
+    lines = [
+        "Active Weight Goal",
+        "",
+        f"Starting weight: {format_display_number(goal['start_weight'])} lb",
+        f"Goal weight: {format_display_number(goal['target_weight'])} lb",
+        f"Goal date: {target_date.strftime('%b')} {target_date.day}, "
+        f"{target_date.year}",
+    ]
+
+    if calculation is None:
+        lines.extend(
+            [
+                "",
+                "No calorie target has been calculated yet.",
+                "Choose Update goal when you want a new calculation.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "Saved calorie target: "
+                f"{format_display_number(calculation['calorie_target_low'], decimals=0)}-"
+                f"{format_display_number(calculation['calorie_target_high'], decimals=0)} "
+                "calories/day",
+                "Last updated: "
+                f"{calculation['calculation_date']}",
+                "7-day burn basis: "
+                f"{format_display_number(calculation['average_daily_burn'], decimals=0)} "
+                f"calories ({calculation['burn_days']} days)",
+            ]
+        )
+
+    lines.extend(["", "Reply Back to return or Cancel to close."])
+    return "\n".join(lines)
+
+
+def update_and_format_weight_goal(*, reference_date) -> str:
+    goal = get_active_weight_goal()
+    if goal is None:
+        raise ValueError(
+            "No active weight goal exists. Add a weight goal first."
+        )
+
+    inputs = get_weight_goal_health_inputs(reference_date=reference_date)
+    if inputs["current_weight"] is None:
+        raise ValueError(
+            "No recent official weight is available. Record your morning "
+            "weight, then try Update goal again."
+        )
+    if int(inputs["burn_days"]) < 3:
+        raise ValueError(
+            "At least 3 completed days of total-burn data are needed. "
+            "Nothing was recalculated."
+        )
+
+    target_date = datetime.strptime(
+        str(goal["target_date"]),
+        "%Y-%m-%d",
+    ).date()
+    result = calculate_weight_goal(
+        current_date=reference_date,
+        current_weight=float(inputs["current_weight"]),
+        target_weight=float(goal["target_weight"]),
+        target_date=target_date,
+        average_daily_burn=float(inputs["average_daily_burn"]),
+        burn_days=int(inputs["burn_days"]),
+    )
+    saved = save_weight_goal_calculation(
+        int(goal["weight_goal_id"]),
+        result,
+    )
+
+    lines = [
+        "Weight Goal Updated",
+        "",
+        f"Current official weight: {format_display_number(saved['current_weight'])} lb",
+        f"Goal: {format_display_number(goal['target_weight'])} lb by "
+        f"{target_date.strftime('%b')} {target_date.day}, {target_date.year}",
+        "7-day average burn: "
+        f"{format_display_number(saved['average_daily_burn'], decimals=0)} "
+        f"calories ({saved['burn_days']} completed days)",
+        "Saved calorie target: "
+        f"{format_display_number(saved['calorie_target_low'], decimals=0)}-"
+        f"{format_display_number(saved['calorie_target_high'], decimals=0)} "
+        "calories/day",
+    ]
+
+    if bool(saved["safely_reachable"]):
+        required_weekly = float(saved["required_weekly_loss"])
+        lines.extend(
+            [
+                "",
+                "This goal is within the safety limits at about "
+                f"{required_weekly:.2f} lb per week.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "The original goal is not safely reachable by that date "
+                "under the current limits.",
+                "Projected weight at the saved calorie target: "
+                f"{float(saved['projected_weight']):.1f} lb",
+                "Safety limit reached: "
+                f"{saved.get('limiting_reason') or 'calorie safety limits'}.",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "This is planning guidance, not a medical diagnosis. The target "
+            "will not change again until you choose Update goal.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_weight_goal_history() -> str:
+    goals = list_weight_goals()
+    if not goals:
+        return "Weight Goal History\n\nNo weight goals have been saved."
+
+    lines = ["Weight Goal History", ""]
+    for goal in goals:
+        target_date = datetime.strptime(
+            str(goal["target_date"]),
+            "%Y-%m-%d",
+        ).date()
+        lines.append(
+            f"- {format_display_number(goal['target_weight'])} lb by "
+            f"{target_date.strftime('%b')} {target_date.day}, "
+            f"{target_date.year} — {str(goal['status']).title()}"
+        )
+    lines.extend(["", "Reply Back to return or Cancel to close."])
+    return "\n".join(lines)
+
+
+def _format_goal_calorie_progress(entry_date) -> str:
+    """Use the saved goal snapshot; never recalculate during logging."""
+    today = datetime.now(PACIFIC_TZ).date()
+    if entry_date != today:
+        return ""
+
+    calculation = get_latest_weight_goal_calculation()
+    if calculation is None:
+        return ""
+
+    entries = list_food_entries(entry_date=entry_date)
+    consumed = sum(
+        float(entry["calories"])
+        for entry in entries
+        if entry.get("calories") is not None
+    )
+    missing_calories = sum(
+        1 for entry in entries if entry.get("calories") is None
+    )
+    low = float(calculation["calorie_target_low"])
+    high = float(calculation["calorie_target_high"])
+
+    lines = [
+        "Goal calories today",
+        f"Eaten: {format_display_number(consumed, decimals=0)}",
+        "Saved target: "
+        f"{format_display_number(low, decimals=0)}-"
+        f"{format_display_number(high, decimals=0)}",
+    ]
+    if consumed < low:
+        lines.append(
+            "Remaining: "
+            f"{format_display_number(low - consumed, decimals=0)}-"
+            f"{format_display_number(high - consumed, decimals=0)} calories"
+        )
+    elif consumed <= high:
+        lines.append(
+            "You are within the saved range; "
+            f"{format_display_number(high - consumed, decimals=0)} calories "
+            "remain to its upper end."
+        )
+    else:
+        lines.append(
+            f"Today is {format_display_number(consumed - high, decimals=0)} "
+            "calories above the saved range. Tomorrow starts fresh."
+        )
+
+    if missing_calories:
+        lines.append(
+            f"Note: {missing_calories} logged item(s) have no calorie value, "
+            "so this total may be incomplete."
+        )
+    return "\n".join(lines)
+
+
+def format_goal_calorie_progress(entry_date) -> str:
+    """Keep an optional goal message from ever breaking Food logging."""
+    try:
+        return _format_goal_calorie_progress(entry_date)
+    except Exception:
+        logging.exception("Saved goal calorie progress lookup failed")
+        return ""
+
+
+def append_goal_calorie_progress(message: str, entry_date) -> str:
+    progress = format_goal_calorie_progress(entry_date)
+    return message + ("\n\n" + progress if progress else "")
 
 
 def format_daily_food_log(entry_date) -> str:
@@ -4672,14 +5021,17 @@ def handle_food_photo_conversation(
         complete_conversation(chat_id)
 
         send_telegram_msg(
-            "Estimated meal logged.\n\n"
-            f"Food: {dish_name}\n"
-            f"Meal: {meal_category.title()}\n"
-            f"Calories: "
-            f"{format_display_number(float(entry['calories'] or 0), decimals=0)}\n"
-            f"Protein: "
-            f"{format_display_number(float(entry['protein_g'] or 0))} g\n\n"
-            "This entry is marked as a visual estimate.",
+            append_goal_calorie_progress(
+                "Estimated meal logged.\n\n"
+                f"Food: {dish_name}\n"
+                f"Meal: {meal_category.title()}\n"
+                f"Calories: "
+                f"{format_display_number(float(entry['calories'] or 0), decimals=0)}\n"
+                f"Protein: "
+                f"{format_display_number(float(entry['protein_g'] or 0))} g\n\n"
+                "This entry is marked as a visual estimate.",
+                datetime.now(PACIFIC_TZ).date(),
+            ),
             chat_id=chat_id,
             remove_keyboard=True,
         )
@@ -5733,8 +6085,11 @@ def process_telegram_update(update):
                 f"Copied: {scope}\n"
                 f"Items: {len(copied)}\n"
                 "Calories added: "
-                f"{format_display_number(copied_calories, decimals=0)}"
-                + sync_note
+                + append_goal_calorie_progress(
+                    f"{format_display_number(copied_calories, decimals=0)}"
+                    + sync_note,
+                    today,
+                )
                 + "\n\n"
                 + healthcoach_food_menu_text(),
                 chat_id=chat_id,
@@ -6542,15 +6897,18 @@ def process_telegram_update(update):
                 missing_fields=[],
             )
             send_telegram_msg(
-                "Estimated Pantry meal logged.\n\n"
-                f"Food: {idea.get('name') or 'Pantry meal'}\n"
-                f"Meal: {meal_type.title()}\n"
-                "Calories: "
-                f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
-                "Protein: "
-                f"{format_display_number(float(entry.get('protein_g') or 0))} g\n\n"
-                "This food-log entry is marked as estimated."
-                + sync_note
+                append_goal_calorie_progress(
+                    "Estimated Pantry meal logged.\n\n"
+                    f"Food: {idea.get('name') or 'Pantry meal'}\n"
+                    f"Meal: {meal_type.title()}\n"
+                    "Calories: "
+                    f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
+                    "Protein: "
+                    f"{format_display_number(float(entry.get('protein_g') or 0))} g\n\n"
+                    "This food-log entry is marked as estimated."
+                    + sync_note,
+                    today,
+                )
                 + "\n\n"
                 + healthcoach_pantry_menu_text(),
                 chat_id=chat_id,
@@ -8088,17 +8446,20 @@ def process_telegram_update(update):
             )
 
             send_telegram_msg(
-                "Barcode product logged.\n\n"
-                f"Food: "
-                f"{product.get('canonical_name') or 'Scanned product'}\n"
-                f"Meal: {meal_category.title()}\n"
-                f"Quantity: "
-                f"{format_display_number(quantity)} serving(s)\n"
-                f"Calories: "
-                f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
-                f"Protein: "
-                f"{format_display_number(float(entry.get('protein_g') or 0))} g"
-                f"{sync_note}",
+                append_goal_calorie_progress(
+                    "Barcode product logged.\n\n"
+                    f"Food: "
+                    f"{product.get('canonical_name') or 'Scanned product'}\n"
+                    f"Meal: {meal_category.title()}\n"
+                    f"Quantity: "
+                    f"{format_display_number(quantity)} serving(s)\n"
+                    f"Calories: "
+                    f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
+                    f"Protein: "
+                    f"{format_display_number(float(entry.get('protein_g') or 0))} g"
+                    f"{sync_note}",
+                    today,
+                ),
                 chat_id=chat_id,
             )
             send_telegram_msg(
@@ -9256,14 +9617,17 @@ def process_telegram_update(update):
                 missing_fields=[],
             )
             send_telegram_msg(
-                "Saved Recipe logged.\n\n"
-                f"Recipe: {recipe.get('canonical_name')}\n"
-                f"Meal: {meal_category.title()}\n"
-                "Calories: "
-                f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
-                "Protein: "
-                f"{format_display_number(float(entry.get('protein_g') or 0))} g"
-                + sync_note
+                append_goal_calorie_progress(
+                    "Saved Recipe logged.\n\n"
+                    f"Recipe: {recipe.get('canonical_name')}\n"
+                    f"Meal: {meal_category.title()}\n"
+                    "Calories: "
+                    f"{format_display_number(float(entry.get('calories') or 0), decimals=0)}\n"
+                    "Protein: "
+                    f"{format_display_number(float(entry.get('protein_g') or 0))} g"
+                    + sync_note,
+                    today,
+                )
                 + "\n\n"
                 + healthcoach_saved_recipes_menu_text(),
                 chat_id=chat_id,
@@ -10994,7 +11358,8 @@ def process_telegram_update(update):
                 missing_fields=[],
             )
             send_telegram_msg(
-                result_message + "\n\n"
+                append_goal_calorie_progress(result_message, today)
+                + "\n\n"
                 + healthcoach_favorites_menu_text(),
                 chat_id=chat_id,
             )
@@ -11621,6 +11986,352 @@ def process_telegram_update(update):
             )
             return
 
+        if current_step == "goals":
+            if lowered in {"1", "view", "view active goal"}:
+                send_telegram_msg(
+                    format_weight_goal(get_active_weight_goal()),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"2", "add", "add weight goal"}:
+                if get_active_weight_goal() is not None:
+                    send_telegram_msg(
+                        "An active weight goal already exists. Edit or "
+                        "remove it before adding another.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goal_add_weight",
+                    known_data={},
+                    missing_fields=["target_weight"],
+                )
+                send_telegram_msg(
+                    "What is your goal weight in pounds?",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {"3", "update", "update goal"}:
+                try:
+                    message = update_and_format_weight_goal(
+                        reference_date=today
+                    )
+                except (ValueError, RuntimeError) as error:
+                    send_telegram_msg(str(error), chat_id=chat_id)
+                    return
+                except Exception:
+                    logging.exception("Weight Goal update failed")
+                    send_telegram_msg(
+                        "I couldn't update the weight goal right now. "
+                        "The previous calorie target was kept.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(message, chat_id=chat_id)
+                return
+
+            if lowered in {"4", "edit", "edit goal"}:
+                goal = get_active_weight_goal()
+                if goal is None:
+                    send_telegram_msg(
+                        "No active weight goal exists. Add one first.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goal_edit_weight",
+                    known_data={},
+                    missing_fields=["target_weight"],
+                )
+                send_telegram_msg(
+                    "What should the new goal weight be?\n\n"
+                    f"Current goal: {format_display_number(goal['target_weight'])} lb",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {"5", "remove", "remove goal"}:
+                goal = get_active_weight_goal()
+                if goal is None:
+                    send_telegram_msg(
+                        "No active weight goal exists.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goal_remove_confirmation",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Remove this active weight goal?\n\n"
+                    f"Goal: {format_display_number(goal['target_weight'])} lb\n\n"
+                    "Its history will be retained.\n\n"
+                    "1. Yes\n"
+                    "2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"6", "history", "goal history"}:
+                send_telegram_msg(
+                    format_weight_goal_history(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"7", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="reports",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_reports_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(
+                healthcoach_goals_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {"goal_add_weight", "goal_edit_weight"}:
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goals",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_goals_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            target_weight = parse_weight_goal_weight(text)
+            if target_weight is None:
+                send_telegram_msg(
+                    "Enter a goal weight in pounds, such as 215.",
+                    chat_id=chat_id,
+                )
+                return
+            next_step = (
+                "goal_add_date"
+                if current_step == "goal_add_weight"
+                else "goal_edit_date"
+            )
+            update_conversation(
+                chat_id=chat_id,
+                current_step=next_step,
+                known_data={"goal_target_weight": target_weight},
+                missing_fields=["target_date"],
+            )
+            send_telegram_msg(
+                "What is the goal date?\n\n"
+                "Example: 10/17/2026 or October 17, 2026",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {"goal_add_date", "goal_edit_date"}:
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goals",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_goals_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            target_date = parse_weight_goal_date(
+                text,
+                reference_date=today,
+            )
+            if target_date is None or target_date <= today:
+                send_telegram_msg(
+                    "Enter a future goal date, such as 10/17/2026.",
+                    chat_id=chat_id,
+                )
+                return
+            target_weight = float(known_data["goal_target_weight"])
+
+            if current_step == "goal_add_date":
+                try:
+                    inputs = get_weight_goal_health_inputs(
+                        reference_date=today
+                    )
+                except Exception:
+                    logging.exception("Goal starting weight lookup failed")
+                    send_telegram_msg(
+                        "I couldn't read your official weight right now. "
+                        "Nothing was saved.",
+                        chat_id=chat_id,
+                    )
+                    return
+                if inputs["current_weight"] is None:
+                    send_telegram_msg(
+                        "Record an official morning weight before adding "
+                        "a weight goal.",
+                        chat_id=chat_id,
+                    )
+                    return
+                start_weight = float(inputs["current_weight"])
+                start_date = inputs["weight_date"] or today
+                if target_weight >= start_weight:
+                    send_telegram_msg(
+                        "For this weight-loss goal, the goal weight must be "
+                        "below your current official weight.",
+                        chat_id=chat_id,
+                    )
+                    return
+                next_step = "goal_add_confirmation"
+                prompt = (
+                    "Save this weight goal?\n\n"
+                    f"Starting weight: {format_display_number(start_weight)} lb\n"
+                    f"Goal weight: {format_display_number(target_weight)} lb\n"
+                    f"Goal date: {target_date.strftime('%b')} {target_date.day}, "
+                    f"{target_date.year}\n\n"
+                    "No calorie target will be calculated until you choose "
+                    "Update goal.\n\n1. Yes\n2. No"
+                )
+                extra = {
+                    "goal_start_weight": start_weight,
+                    "goal_start_date": start_date.isoformat(),
+                }
+            else:
+                next_step = "goal_edit_confirmation"
+                prompt = (
+                    "Save these goal changes?\n\n"
+                    f"New goal weight: {format_display_number(target_weight)} lb\n"
+                    f"New goal date: {target_date.strftime('%b')} "
+                    f"{target_date.day}, {target_date.year}\n\n"
+                    "The saved calorie target will remain unchanged until "
+                    "you choose Update goal.\n\n1. Yes\n2. No"
+                )
+                extra = {}
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step=next_step,
+                known_data={
+                    "goal_target_date": target_date.isoformat(),
+                    **extra,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(prompt, chat_id=chat_id)
+            return
+
+        if current_step == "goal_add_confirmation":
+            if lowered in {"1", "yes", "save"}:
+                try:
+                    create_weight_goal(
+                        start_date=known_data["goal_start_date"],
+                        start_weight=float(known_data["goal_start_weight"]),
+                        target_weight=float(known_data["goal_target_weight"]),
+                        target_date=known_data["goal_target_date"],
+                    )
+                except ValueError as error:
+                    send_telegram_msg(str(error), chat_id=chat_id)
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goals",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Weight goal saved. Choose Update goal when you want "
+                    "the calorie target calculated.\n\n"
+                    + healthcoach_goals_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goals",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "No goal was added.\n\n" + healthcoach_goals_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg("Please reply Yes or No.", chat_id=chat_id)
+            return
+
+        if current_step == "goal_edit_confirmation":
+            if lowered in {"1", "yes", "save"}:
+                try:
+                    update_active_weight_goal(
+                        target_weight=float(known_data["goal_target_weight"]),
+                        target_date=known_data["goal_target_date"],
+                    )
+                except ValueError as error:
+                    send_telegram_msg(str(error), chat_id=chat_id)
+                    return
+                result = (
+                    "Weight goal changed. Its saved calorie target was not "
+                    "recalculated. Choose Update goal when ready."
+                )
+            elif lowered in {"2", "no", "back"}:
+                result = "The weight goal was not changed."
+            else:
+                send_telegram_msg("Please reply Yes or No.", chat_id=chat_id)
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="goals",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                result + "\n\n" + healthcoach_goals_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "goal_remove_confirmation":
+            if lowered in {"1", "yes", "remove"}:
+                try:
+                    archive_active_weight_goal()
+                except ValueError as error:
+                    send_telegram_msg(str(error), chat_id=chat_id)
+                    return
+                result = "The active weight goal was removed. Its history was kept."
+            elif lowered in {"2", "no", "back"}:
+                result = "The active weight goal was kept."
+            else:
+                send_telegram_msg("Please reply Yes or No.", chat_id=chat_id)
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="goals",
+                known_data={},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                result + "\n\n" + healthcoach_goals_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
         if current_step == "reports":
             if lowered in {"1", "today", "today's summary"}:
                 metrics = get_today_metrics()
@@ -11641,7 +12352,20 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"3", "back"}:
+            if lowered in {"3", "goals", "goal"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goals",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_goals_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -13035,9 +13759,12 @@ def process_telegram_update(update):
                 complete_conversation(chat_id)
 
                 send_telegram_msg(
-                    "Food logged for "
-                    f"{target_entry_date.isoformat()} "
-                    f"({meal_category.title()}).",
+                    append_goal_calorie_progress(
+                        "Food logged for "
+                        f"{target_entry_date.isoformat()} "
+                        f"({meal_category.title()}).",
+                        target_entry_date,
+                    ),
                     chat_id=chat_id,
                 )
 
@@ -13115,6 +13842,12 @@ def process_telegram_update(update):
                     )
 
                 lines.append(line)
+
+            goal_progress = format_goal_calorie_progress(
+                target_entry_date
+            )
+            if goal_progress:
+                lines.extend(["", goal_progress])
 
             lines.extend(
                 [

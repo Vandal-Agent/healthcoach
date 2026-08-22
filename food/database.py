@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 8
+SCHEMA_VERSION: Final[int] = 9
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -556,6 +556,7 @@ def create_initial_database(
 ) -> None:
     """Create a new database directly at the current schema."""
     create_schema(connection)
+    create_weight_goals_schema(connection)
 
     record_schema_version(
         connection,
@@ -605,8 +606,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=8,
         description="Add persistent Shopping List",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add persistent Weight Goals",
     )
 
 
@@ -838,6 +845,68 @@ def create_shopping_list_schema(
     )
 
 
+def create_weight_goals_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create Weight Goals and saved calculation snapshots."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS weight_goals (
+            weight_goal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_date TEXT NOT NULL,
+            start_weight REAL NOT NULL CHECK (start_weight > 0),
+            target_weight REAL NOT NULL CHECK (target_weight > 0),
+            target_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active', 'archived')),
+            archived_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_weight_goals_one_active
+            ON weight_goals (status)
+            WHERE status = 'active';
+
+        CREATE INDEX IF NOT EXISTS idx_weight_goals_target_date
+            ON weight_goals (target_date);
+
+        CREATE TABLE IF NOT EXISTS weight_goal_calculations (
+            weight_goal_calculation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            weight_goal_id INTEGER NOT NULL,
+            calculation_date TEXT NOT NULL,
+            current_weight REAL NOT NULL CHECK (current_weight > 0),
+            average_daily_burn REAL NOT NULL
+                CHECK (average_daily_burn > 0),
+            burn_days INTEGER NOT NULL CHECK (burn_days >= 3),
+            days_remaining INTEGER NOT NULL CHECK (days_remaining >= 0),
+            required_weekly_loss REAL,
+            required_daily_deficit REAL,
+            planned_daily_deficit REAL NOT NULL,
+            calorie_target_low REAL NOT NULL
+                CHECK (calorie_target_low >= 1500),
+            calorie_target_high REAL NOT NULL
+                CHECK (calorie_target_high >= calorie_target_low),
+            safely_reachable INTEGER NOT NULL
+                CHECK (safely_reachable IN (0, 1)),
+            projected_weight REAL NOT NULL CHECK (projected_weight > 0),
+            limiting_reason TEXT,
+            created_at TEXT NOT NULL,
+
+            FOREIGN KEY (weight_goal_id)
+                REFERENCES weight_goals (weight_goal_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_weight_goal_calculations_goal
+            ON weight_goal_calculations (
+                weight_goal_id,
+                weight_goal_calculation_id
+            );
+        """
+    )
+
+
 def migrate_version_1_to_2(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1030,6 +1099,19 @@ def migrate_version_7_to_8(
     )
 
 
+def migrate_version_8_to_9(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add persistent Weight Goals and calculation snapshots."""
+    create_weight_goals_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=9,
+        description="Add persistent Weight Goals",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1068,6 +1150,10 @@ def apply_migrations(
         migrate_version_7_to_8(connection)
         version = 8
 
+    if version < 9:
+        migrate_version_8_to_9(connection)
+        version = 9
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -1082,6 +1168,7 @@ def apply_migrations(
     create_pantry_schema(connection)
     create_saved_recipes_schema(connection)
     create_shopping_list_schema(connection)
+    create_weight_goals_schema(connection)
 
 
 def validate_database(
@@ -1119,6 +1206,9 @@ def validate_database(
         "barcode_mappings",
         "pantry_items",
         "saved_recipes",
+        "shopping_list_items",
+        "weight_goals",
+        "weight_goal_calculations",
     }
 
     actual_tables = {

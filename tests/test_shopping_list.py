@@ -67,7 +67,10 @@ class ShoppingListTests(unittest.TestCase):
 
         result = database.initialize_database()
 
-        self.assertEqual(result["schema_version"]["version"], 8)
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
         self.assertIn("shopping_list_items", result["tables"])
 
     def test_adds_lists_and_deduplicates_items(self) -> None:

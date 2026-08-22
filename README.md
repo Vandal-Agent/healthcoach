@@ -15,7 +15,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Renames, updates, or removes Saved Foods while preserving food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the
   entire day after confirmation
-- Reads Lose It CSV summaries from Gmail
+- Manages a safety-capped weight goal with manual calorie-target updates,
+  burn-based projections, and remaining-calorie feedback after food logging
+- Uses the Food Ledger rather than Lose It for current nutrition totals
 - Sends daily and weekly coaching through Telegram
 - Runs scheduled health checks and reminders
 

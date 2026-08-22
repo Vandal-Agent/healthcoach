@@ -442,6 +442,40 @@ Supported workflow:
 The duplicate protection makes repeated taps safe. A copied meal must go
 into an empty meal section for the current day.
 
+---
+
+# Weight Goals
+
+Weight Goals is available from Reports > Goals. HealthCoach supports one
+active weight-loss goal at a time while retaining archived goal history.
+
+Supported workflow:
+
+- Add a goal weight and date using the latest official morning weight as the
+  starting weight.
+- View, edit, manually update, remove, and review goal history.
+- Recalculate only when the user explicitly chooses Update goal. Viewing a
+  goal or logging food never changes the saved calorie target.
+- Use the latest official weight and up to seven completed days of Total Burn
+  from the Health Tracker sheet. Require at least three valid burn days.
+- Save every calculation snapshot, including current weight, burn average,
+  required pace, calorie range, safety result, and projected goal-date weight.
+- Keep the daily calorie range 150 calories wide and rounded to 50-calorie
+  increments.
+- Never plan more than 2 lb per week, more than a 1,000-calorie daily deficit,
+  or less than 1,500 calories per day.
+- When the requested goal is not safely reachable, still provide a safe eating
+  range and show the projected weight at the goal date.
+- After successful food logging, show today's Food Ledger calories, the saved
+  target range, and the remaining range. Warn when any logged item lacks a
+  calorie value.
+- Never carry excess calories forward as debt. Each calendar day starts fresh.
+
+Weight and Total Burn remain Health Tracker facts. Goal records store planning
+settings and calculation snapshots only; they never overwrite Apple Health or
+Google Sheet data. Food calories come only from the Food Ledger, including
+confirmed visual estimates. Lose It is not used for goal calculations.
+
 
 # Future Features
 
