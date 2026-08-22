@@ -6751,7 +6751,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered not in {"1", "yes", "save", "save recipe"}:
+            if lowered not in {"1", "yes"}:
                 send_telegram_msg(
                     "Please choose Yes or No.",
                     chat_id=chat_id,

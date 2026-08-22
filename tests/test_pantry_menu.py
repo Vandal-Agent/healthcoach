@@ -170,6 +170,40 @@ class PantryMenuTests(unittest.TestCase):
         add_entry.assert_not_called()
         self.assertIn("Saved this recipe", send.call_args.args[0])
 
+    def test_repeated_save_recipe_does_not_bypass_confirmation(self) -> None:
+        idea = {
+            "name": "Chicken Pepper Bowl",
+            "ingredients": [],
+            "preparation_steps": [],
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_meal_save_confirmation",
+            "known_data": {
+                "pantry_meal_type": "dinner",
+                "pantry_meal_ideas": [idea],
+                "pantry_meal_selected_index": 0,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "save_pantry_meal_idea") as save,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Save Recipe",
+                }
+            })
+
+        save.assert_not_called()
+        self.assertIn("Please choose Yes or No", send.call_args.args[0])
+
     def test_pantry_menu_exposes_foundation_actions(self) -> None:
         message = app.healthcoach_pantry_menu_text()
         keyboard = app.menu_reply_markup(message)
