@@ -24,6 +24,16 @@ SAVED_RECIPE = {
     "fiber_g": 8,
     "sugar_g": 6,
     "sodium_mg": 520,
+    "heart_healthy_pick": False,
+    "heart_healthy_reason": "",
+}
+
+HEART_HEALTHY_SAVED_RECIPE = {
+    **SAVED_RECIPE,
+    "heart_healthy_pick": True,
+    "heart_healthy_reason": (
+        "Uses lean chicken and vegetables with moderate sodium."
+    ),
 }
 
 
@@ -100,6 +110,29 @@ class SavedRecipeMenuTests(unittest.TestCase):
             keyboard["keyboard"],
         )
         self.assertIn(["Delete Recipe"], keyboard["keyboard"])
+
+    def test_heart_healthy_pick_appears_in_list_and_details(self) -> None:
+        choices = app.format_saved_recipe_choices(
+            [HEART_HEALTHY_SAVED_RECIPE]
+        )
+        details = app.format_saved_recipe_details(
+            HEART_HEALTHY_SAVED_RECIPE
+        )
+
+        self.assertIn("Heart-Healthy Pick", choices)
+        self.assertIn("Heart-Healthy Pick", details)
+        self.assertIn(
+            HEART_HEALTHY_SAVED_RECIPE["heart_healthy_reason"],
+            details,
+        )
+        self.assertIn("not a medical rating", details)
+
+    def test_unlabeled_recipe_does_not_gain_heart_healthy_pick(self) -> None:
+        choices = app.format_saved_recipe_choices([SAVED_RECIPE])
+        details = app.format_saved_recipe_details(SAVED_RECIPE)
+
+        self.assertNotIn("Heart-Healthy Pick", choices)
+        self.assertNotIn("Heart-Healthy Pick", details)
 
     def test_saved_recipe_menu_exposes_edit_and_delete(self) -> None:
         message = app.healthcoach_saved_recipes_menu_text()

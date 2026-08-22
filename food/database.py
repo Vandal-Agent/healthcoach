@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 9
+SCHEMA_VERSION: Final[int] = 10
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -498,6 +498,9 @@ def create_schema(connection: sqlite3.Connection) -> None:
             ingredients_json TEXT NOT NULL,
             preparation_steps_json TEXT NOT NULL,
             estimate_notes TEXT NOT NULL DEFAULT '',
+            heart_healthy_pick INTEGER NOT NULL DEFAULT 0
+                CHECK (heart_healthy_pick IN (0, 1)),
+            heart_healthy_reason TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
 
@@ -612,8 +615,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=9,
         description="Add persistent Weight Goals",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Preserve Heart-Healthy Saved Recipe labels",
     )
 
 
@@ -808,6 +817,9 @@ def create_saved_recipes_schema(
             ingredients_json TEXT NOT NULL,
             preparation_steps_json TEXT NOT NULL,
             estimate_notes TEXT NOT NULL DEFAULT '',
+            heart_healthy_pick INTEGER NOT NULL DEFAULT 0
+                CHECK (heart_healthy_pick IN (0, 1)),
+            heart_healthy_reason TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
 
@@ -1112,6 +1124,42 @@ def migrate_version_8_to_9(
     )
 
 
+def migrate_version_9_to_10(
+    connection: sqlite3.Connection,
+) -> None:
+    """Preserve Heart-Healthy Pantry designations on Saved Recipes."""
+    if not column_exists(
+        connection,
+        "saved_recipes",
+        "heart_healthy_pick",
+    ):
+        connection.execute(
+            """
+            ALTER TABLE saved_recipes
+            ADD COLUMN heart_healthy_pick INTEGER NOT NULL DEFAULT 0
+                CHECK (heart_healthy_pick IN (0, 1))
+            """
+        )
+
+    if not column_exists(
+        connection,
+        "saved_recipes",
+        "heart_healthy_reason",
+    ):
+        connection.execute(
+            """
+            ALTER TABLE saved_recipes
+            ADD COLUMN heart_healthy_reason TEXT NOT NULL DEFAULT ''
+            """
+        )
+
+    record_schema_version(
+        connection,
+        version=10,
+        description="Preserve Heart-Healthy Saved Recipe labels",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1153,6 +1201,10 @@ def apply_migrations(
     if version < 9:
         migrate_version_8_to_9(connection)
         version = 9
+
+    if version < 10:
+        migrate_version_9_to_10(connection)
+        version = 10
 
     if version > SCHEMA_VERSION:
         raise RuntimeError(
@@ -1230,6 +1282,20 @@ def validate_database(
             "Food database initialization is incomplete. "
             "foods.search_key is missing."
         )
+
+    for column_name in (
+        "heart_healthy_pick",
+        "heart_healthy_reason",
+    ):
+        if not column_exists(
+            connection,
+            "saved_recipes",
+            column_name,
+        ):
+            raise RuntimeError(
+                "Food database initialization is incomplete. "
+                f"saved_recipes.{column_name} is missing."
+            )
 
     installed_version = (
         int(schema_row["version"])

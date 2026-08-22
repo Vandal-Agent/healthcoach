@@ -391,6 +391,13 @@ Supported workflow:
 - Save a Pantry meal idea only after explicit confirmation.
 - Store its name, intended lunch or dinner type, estimated nutrition,
   ingredient amounts, preparation steps, and estimate notes.
+- Preserve the generated Heart-Healthy Pick label and its food-pattern
+  explanation when the selected Pantry idea carries that designation.
+- Do not retroactively label existing recipes. Clear the designation when
+  ingredients or nutrition change because the original basis may no longer
+  apply. Name, meal type, summary, and preparation edits preserve it.
+- Present the designation as general food-choice guidance, never as a
+  medical rating, diagnosis, certification, or disease-prevention claim.
 - Do not add anything to the Food Ledger when a recipe is saved.
 - Reject duplicate recipe identities rather than silently replacing the
   original recipe.

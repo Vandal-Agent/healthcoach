@@ -38,6 +38,14 @@ RECIPE_IDEA = {
     "estimate_notes": "Nutrition is estimated.",
 }
 
+HEART_HEALTHY_RECIPE_IDEA = {
+    **RECIPE_IDEA,
+    "heart_healthy_pick": True,
+    "heart_healthy_reason": (
+        "Uses lean chicken and vegetables with moderate sodium."
+    ),
+}
+
 
 class SavedRecipeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -96,6 +104,44 @@ class SavedRecipeTests(unittest.TestCase):
         )
         self.assertIn("saved_recipes", result["tables"])
 
+        with database.get_connection(self.database_path) as connection:
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(saved_recipes)"
+                ).fetchall()
+            }
+        self.assertIn("heart_healthy_pick", columns)
+        self.assertIn("heart_healthy_reason", columns)
+
+    def test_version_nine_database_adds_heart_health_fields(self) -> None:
+        with database.get_connection(self.database_path) as connection:
+            connection.execute(
+                "ALTER TABLE saved_recipes "
+                "DROP COLUMN heart_healthy_reason"
+            )
+            connection.execute(
+                "ALTER TABLE saved_recipes "
+                "DROP COLUMN heart_healthy_pick"
+            )
+            connection.execute(
+                "DELETE FROM schema_version WHERE version = 10"
+            )
+            connection.commit()
+
+        result = database.initialize_database()
+
+        self.assertEqual(result["schema_version"]["version"], 10)
+        with database.get_connection(self.database_path) as connection:
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(saved_recipes)"
+                ).fetchall()
+            }
+        self.assertIn("heart_healthy_pick", columns)
+        self.assertIn("heart_healthy_reason", columns)
+
     def test_version_six_database_migrates_to_saved_recipes(self) -> None:
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE saved_recipes")
@@ -126,6 +172,20 @@ class SavedRecipeTests(unittest.TestCase):
         self.assertEqual(recipe["ingredients"][0]["amount"], "4 ounces")
         self.assertEqual(len(recipe["preparation_steps"]), 2)
         self.assertEqual(len(recipes.list_saved_recipes()), 1)
+
+    def test_preserves_heart_healthy_pick_when_recipe_is_saved(self) -> None:
+        saved = recipes.save_pantry_meal_idea(
+            HEART_HEALTHY_RECIPE_IDEA,
+            meal_type="dinner",
+        )["recipe"]
+
+        self.assertTrue(saved["heart_healthy_pick"])
+        self.assertEqual(
+            saved["heart_healthy_reason"],
+            HEART_HEALTHY_RECIPE_IDEA["heart_healthy_reason"],
+        )
+        listed = recipes.list_saved_recipes()[0]
+        self.assertTrue(listed["heart_healthy_pick"])
 
     def test_duplicate_recipe_is_not_overwritten(self) -> None:
         first = recipes.save_pantry_meal_idea(
@@ -199,9 +259,47 @@ class SavedRecipeTests(unittest.TestCase):
         self.assertEqual(updated["ingredients"][0]["amount"], "3 ounces")
         self.assertEqual(updated["version_number"], 1)
 
+    def test_non_material_edit_preserves_heart_healthy_pick(self) -> None:
+        saved = recipes.save_pantry_meal_idea(
+            HEART_HEALTHY_RECIPE_IDEA,
+            meal_type="dinner",
+        )["recipe"]
+
+        updated = recipes.update_saved_recipe(
+            int(saved["saved_recipe_id"]),
+            name="Heart-Healthy Chicken Bowl",
+            preparation_steps=["Cook carefully and serve."],
+        )
+
+        self.assertTrue(updated["heart_healthy_pick"])
+        self.assertEqual(
+            updated["heart_healthy_reason"],
+            HEART_HEALTHY_RECIPE_IDEA["heart_healthy_reason"],
+        )
+
+    def test_ingredient_edit_clears_heart_healthy_pick(self) -> None:
+        saved = recipes.save_pantry_meal_idea(
+            HEART_HEALTHY_RECIPE_IDEA,
+            meal_type="dinner",
+        )["recipe"]
+
+        updated = recipes.update_saved_recipe(
+            int(saved["saved_recipe_id"]),
+            ingredients=[
+                {
+                    "name": "Chicken breast",
+                    "amount": "3 ounces",
+                    "source": "pantry",
+                },
+            ],
+        )
+
+        self.assertFalse(updated["heart_healthy_pick"])
+        self.assertEqual(updated["heart_healthy_reason"], "")
+
     def test_nutrition_edit_versions_future_logs_only(self) -> None:
         saved = recipes.save_pantry_meal_idea(
-            RECIPE_IDEA,
+            HEART_HEALTHY_RECIPE_IDEA,
             meal_type="dinner",
         )["recipe"]
         old_entry = ledger.add_food_entry(
@@ -236,6 +334,8 @@ class SavedRecipeTests(unittest.TestCase):
 
         self.assertEqual(updated["version_number"], 2)
         self.assertEqual(updated["verification_status"], "estimated")
+        self.assertFalse(updated["heart_healthy_pick"])
+        self.assertEqual(updated["heart_healthy_reason"], "")
         self.assertEqual(old_entry["calories"], 450)
         self.assertEqual(new_entry["calories"], 390)
 

@@ -87,6 +87,19 @@ def validate_recipe_idea(idea: dict[str, Any]) -> dict[str, Any]:
     if nutrition["calories"] <= 0:
         raise ValueError("Recipe calories must be greater than zero.")
 
+    heart_healthy_pick = bool(
+        idea.get("heart_healthy_pick")
+    )
+    heart_healthy_reason = str(
+        idea.get("heart_healthy_reason") or ""
+    ).strip()
+    if heart_healthy_pick and not heart_healthy_reason:
+        raise ValueError(
+            "A Heart-Healthy Pick requires an explanation."
+        )
+    if not heart_healthy_pick:
+        heart_healthy_reason = ""
+
     return {
         "name": name,
         "summary": str(idea.get("summary") or "").strip(),
@@ -95,6 +108,8 @@ def validate_recipe_idea(idea: dict[str, Any]) -> dict[str, Any]:
         "estimate_notes": str(
             idea.get("estimate_notes") or ""
         ).strip(),
+        "heart_healthy_pick": heart_healthy_pick,
+        "heart_healthy_reason": heart_healthy_reason,
         **nutrition,
     }
 
@@ -123,6 +138,8 @@ def recipe_select_sql() -> str:
             saved_recipes.ingredients_json,
             saved_recipes.preparation_steps_json,
             saved_recipes.estimate_notes,
+            saved_recipes.heart_healthy_pick,
+            saved_recipes.heart_healthy_reason,
             saved_recipes.created_at,
             saved_recipes.updated_at,
             foods.canonical_name,
@@ -203,10 +220,12 @@ def save_pantry_meal_idea(
                     ingredients_json,
                     preparation_steps_json,
                     estimate_notes,
+                    heart_healthy_pick,
+                    heart_healthy_reason,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     food_id,
@@ -215,6 +234,8 @@ def save_pantry_meal_idea(
                     json.dumps(cleaned["ingredients"]),
                     json.dumps(cleaned["preparation_steps"]),
                     cleaned["estimate_notes"],
+                    int(cleaned["heart_healthy_pick"]),
+                    cleaned["heart_healthy_reason"],
                     timestamp,
                     timestamp,
                 ),
@@ -295,6 +316,16 @@ def update_saved_recipe(
             if estimate_notes is None
             else estimate_notes
         ),
+        "heart_healthy_pick": (
+            False
+            if ingredients is not None
+            else bool(existing.get("heart_healthy_pick"))
+        ),
+        "heart_healthy_reason": (
+            ""
+            if ingredients is not None
+            else str(existing.get("heart_healthy_reason") or "")
+        ),
         **{
             field: existing.get(field)
             for field in NUTRIENT_FIELDS
@@ -373,6 +404,8 @@ def update_saved_recipe(
                 ingredients_json = ?,
                 preparation_steps_json = ?,
                 estimate_notes = ?,
+                heart_healthy_pick = ?,
+                heart_healthy_reason = ?,
                 updated_at = ?
             WHERE saved_recipe_id = ?
             """,
@@ -382,6 +415,8 @@ def update_saved_recipe(
                 json.dumps(cleaned["ingredients"]),
                 json.dumps(cleaned["preparation_steps"]),
                 cleaned["estimate_notes"],
+                int(cleaned["heart_healthy_pick"]),
+                cleaned["heart_healthy_reason"],
                 timestamp,
                 int(saved_recipe_id),
             ),
@@ -422,6 +457,18 @@ def update_saved_recipe_nutrition(
         verification_status="estimated",
         verification_source="saved_recipe_edit",
     )
+    with get_connection(DATABASE_PATH) as connection:
+        connection.execute(
+            """
+            UPDATE saved_recipes
+            SET heart_healthy_pick = 0,
+                heart_healthy_reason = '',
+                updated_at = ?
+            WHERE saved_recipe_id = ?
+            """,
+            (current_timestamp(), int(saved_recipe_id)),
+        )
+        connection.commit()
     updated = get_saved_recipe(int(saved_recipe_id))
     if updated is None:
         raise RuntimeError("Saved Recipe nutrition could not be verified.")

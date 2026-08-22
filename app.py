@@ -3206,10 +3206,16 @@ def healthcoach_saved_recipes_menu_text() -> str:
 def format_saved_recipe_choices(recipes: list[dict]) -> str:
     lines = ["Choose a saved recipe to view:", ""]
     for index, recipe in enumerate(recipes, start=1):
+        heart_label = (
+            " — Heart-Healthy Pick"
+            if recipe.get("heart_healthy_pick")
+            else ""
+        )
         lines.append(
             f"{index}. {recipe.get('canonical_name') or 'Recipe'} — "
             f"{str(recipe.get('meal_type') or 'meal').title()}, "
             f"{format_display_number(float(recipe.get('calories') or 0), decimals=0)} cal"
+            f"{heart_label}"
         )
     lines.extend(["", "Reply Back to return or Cancel to close."])
     return "\n".join(lines)
@@ -3223,21 +3229,33 @@ def format_saved_recipe_management_choices(
     verb = "edit" if action == "edit" else "delete"
     lines = [f"Choose a saved recipe to {verb}:", ""]
     for index, recipe in enumerate(recipes, start=1):
+        heart_label = (
+            " — Heart-Healthy Pick"
+            if recipe.get("heart_healthy_pick")
+            else ""
+        )
         lines.append(
             f"{index}. {recipe.get('canonical_name') or 'Recipe'} — "
             f"{str(recipe.get('meal_type') or 'meal').title()}, "
             f"{format_display_number(float(recipe.get('calories') or 0), decimals=0)} cal"
+            f"{heart_label}"
         )
     lines.extend(["", "Reply Back to return or Cancel to close."])
     return "\n".join(lines)
 
 
 def format_saved_recipe_edit_menu(recipe: dict) -> str:
+    heart_status = (
+        "Heart-Healthy Pick"
+        if recipe.get("heart_healthy_pick")
+        else "not labeled"
+    )
     return (
         "Saved Recipe Edit Menu\n\n"
         f"Recipe: {recipe.get('canonical_name') or 'Saved recipe'}\n"
         f"Current nutrition version: "
-        f"{int(recipe.get('version_number') or 1)}\n\n"
+        f"{int(recipe.get('version_number') or 1)}\n"
+        f"Heart-health label: {heart_status}\n\n"
         "1. Name\n"
         "2. Meal type\n"
         "3. Summary\n"
@@ -3294,6 +3312,15 @@ def format_saved_recipe_details(recipe: dict) -> str:
         "",
         str(recipe.get("canonical_name") or "Saved recipe"),
         str(recipe.get("summary") or ""),
+    ]
+    if recipe.get("heart_healthy_pick"):
+        lines.extend([
+            "",
+            "Heart-Healthy Pick",
+            str(recipe.get("heart_healthy_reason") or ""),
+            "This is a food-choice label, not a medical rating.",
+        ])
+    lines.extend([
         "",
         "Estimated nutrition for 1 serving:",
         "Calories: "
@@ -3312,7 +3339,7 @@ def format_saved_recipe_details(recipe: dict) -> str:
         f"{format_display_number(float(recipe.get('sodium_mg') or 0), decimals=0)} mg",
         "",
         "Ingredients:",
-    ]
+    ])
     for ingredient in recipe.get("ingredients") or []:
         lines.append(
             f"- {ingredient.get('amount') or 'as needed'} "
@@ -9256,7 +9283,17 @@ def process_telegram_update(update):
             )
             send_telegram_msg(
                 "Saved Recipe updated. Previously logged meals were "
-                "not changed.\n\n"
+                "not changed."
+                + (
+                    " The Heart-Healthy Pick label was removed "
+                    "because the ingredients changed."
+                    if (
+                        kind == "ingredients"
+                        and recipe.get("heart_healthy_pick")
+                    )
+                    else ""
+                )
+                + "\n\n"
                 + format_saved_recipe_details(updated_recipe),
                 chat_id=chat_id,
             )
@@ -9441,7 +9478,14 @@ def process_telegram_update(update):
             send_telegram_msg(
                 "Saved Recipe nutrition updated to version "
                 f"{updated_recipe.get('version_number')}. Previously "
-                "logged meals were not changed.\n\n"
+                "logged meals were not changed."
+                + (
+                    " The Heart-Healthy Pick label was removed "
+                    "because the nutrition changed."
+                    if recipe.get("heart_healthy_pick")
+                    else ""
+                )
+                + "\n\n"
                 + format_saved_recipe_details(updated_recipe),
                 chat_id=chat_id,
             )
