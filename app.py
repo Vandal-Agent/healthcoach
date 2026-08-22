@@ -850,7 +850,7 @@ def row_to_metrics(row):
         "active_cals": safe_float(padded[3], 0),
         "sleep_hours": parse_sleep(padded[4]),
         "sleep_raw": padded[4],
-        "rhr": safe_float(padded[5], 0),
+        "rhr": safe_float(padded[5], None),
         "weight": weight_val,
         "hrv": safe_float(padded[7], 0),
         "dietary_cals": safe_float(padded[8], 0),
@@ -1097,6 +1097,13 @@ def build_progress_message(label, metrics):
             f"{format_display_number(exercise_minutes)} min"
         )
 
+    resting_heart_rate = metrics.get("rhr")
+    resting_heart_rate_text = "not recorded"
+    if resting_heart_rate is not None:
+        resting_heart_rate_text = (
+            f"{format_display_number(resting_heart_rate)} bpm"
+        )
+
     return (
         f"{label}\n"
         f"Steps: {metrics['steps']}\n"
@@ -1104,6 +1111,7 @@ def build_progress_message(label, metrics):
         f"Calories consumed: {metrics['dietary_cals']:.0f}\n"
         f"Protein: {metrics['protein']:.0f}g\n"
         f"Exercise: {exercise_text}\n"
+        f"Resting heart rate: {resting_heart_rate_text}\n"
         f"Sleep: {sleep_text}\n"
         f"Weight: {weight_text}"
     )
@@ -4011,7 +4019,8 @@ def healthcoach_health_menu_text() -> str:
 def healthcoach_health_history_menu_text() -> str:
     return (
         "Health History\n\n"
-        "Choose how much weight, sleep, and exercise history "
+        "Choose how much weight, sleep, exercise, and resting "
+        "heart-rate history "
         "to view.\n\n"
         "1. Last 7 days\n"
         "2. Last 14 days\n"
@@ -4049,6 +4058,7 @@ def build_health_history_data(
     weights = []
     sleep_values = []
     exercise_values = []
+    resting_heart_rate_values = []
 
     for offset in range(period_days):
         current_date = start_date + timedelta(days=offset)
@@ -4056,6 +4066,7 @@ def build_health_history_data(
         weight = metrics.get("weight")
         sleep_hours = metrics.get("sleep_hours")
         exercise_minutes = metrics.get("exercise_minutes")
+        resting_heart_rate = metrics.get("rhr")
 
         if weight is not None:
             weights.append(float(weight))
@@ -4063,6 +4074,10 @@ def build_health_history_data(
             sleep_values.append(float(sleep_hours))
         if exercise_minutes is not None:
             exercise_values.append(float(exercise_minutes))
+        if resting_heart_rate is not None:
+            resting_heart_rate_values.append(
+                float(resting_heart_rate)
+            )
 
         history_days.append(
             {
@@ -4080,6 +4095,11 @@ def build_health_history_data(
                 "exercise_minutes": (
                     float(exercise_minutes)
                     if exercise_minutes is not None
+                    else None
+                ),
+                "resting_heart_rate": (
+                    float(resting_heart_rate)
+                    if resting_heart_rate is not None
                     else None
                 ),
             }
@@ -4113,6 +4133,15 @@ def build_health_history_data(
             else None
         ),
         "exercise_entries": len(exercise_values),
+        "average_resting_heart_rate": (
+            sum(resting_heart_rate_values)
+            / len(resting_heart_rate_values)
+            if resting_heart_rate_values
+            else None
+        ),
+        "resting_heart_rate_entries": len(
+            resting_heart_rate_values
+        ),
     }
 
 
@@ -4128,6 +4157,7 @@ def format_health_history(history: dict) -> str:
         weight = item.get("weight")
         sleep_hours = item.get("sleep_hours")
         exercise_minutes = item.get("exercise_minutes")
+        resting_heart_rate = item.get("resting_heart_rate")
         weight_text = (
             f"{format_display_number(weight)} lb"
             if weight is not None
@@ -4143,10 +4173,16 @@ def format_health_history(history: dict) -> str:
             if exercise_minutes is not None
             else "not recorded"
         )
+        resting_heart_rate_text = (
+            f"{format_display_number(resting_heart_rate)} bpm"
+            if resting_heart_rate is not None
+            else "not recorded"
+        )
         lines.append(
             f"{day.strftime('%a %b ')}{day.day}: "
             f"weight {weight_text}; sleep {sleep_text}; "
-            f"exercise {exercise_text}"
+            f"exercise {exercise_text}; resting HR "
+            f"{resting_heart_rate_text}"
         )
 
     lines.extend(["", "Summary"])
@@ -4155,6 +4191,9 @@ def format_health_history(history: dict) -> str:
     average_sleep = history.get("average_sleep")
     average_exercise = history.get(
         "average_exercise_minutes"
+    )
+    average_resting_heart_rate = history.get(
+        "average_resting_heart_rate"
     )
 
     lines.append(
@@ -4200,6 +4239,19 @@ def format_health_history(history: dict) -> str:
     lines.append(
         "- Exercise recorded: "
         f"{int(history.get('exercise_entries') or 0)}/{period_days} days"
+    )
+    lines.append(
+        "- Average resting heart rate: "
+        + (
+            f"{format_display_number(average_resting_heart_rate)} bpm"
+            if average_resting_heart_rate is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Resting heart rate recorded: "
+        f"{int(history.get('resting_heart_rate_entries') or 0)}"
+        f"/{period_days} days"
     )
     lines.extend(
         [

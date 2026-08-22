@@ -565,6 +565,13 @@ of each monthly Health Tracker worksheet. Older rows remain valid and show
 Exercise Minutes as not recorded. A recorded zero remains zero rather than
 being treated as missing.
 
+The Shortcut may also send `rhr` as Apple Health's resting heart-rate value.
+HealthCoach stores it in the existing RHR column F and displays it in Current
+Status and 7-, 14-, and 30-day Health History. Missing values remain missing
+and do not become zero. Resting heart rate is presented as recorded health
+data only; HealthCoach does not diagnose it or assign a cardiovascular-risk
+score.
+
 The scheduled morning coaching path does not refresh or read Lose It email
 data. If the Food Ledger has no entries for the previous day, HealthCoach
 reports that no foods were recorded and does not calculate a calorie deficit

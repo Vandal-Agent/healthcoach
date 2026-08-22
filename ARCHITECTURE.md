@@ -123,7 +123,7 @@ Webhook sends:
 steps
 active_calories
 total_calories
-rhr
+rhr (optional Apple Health resting heart rate in bpm)
 weight
 hrv
 dietary_calories
@@ -163,6 +163,10 @@ HRV
 Dietary Cals
 Protein
 Exercise Minutes
+
+The RHR column remains column F. Current status and Health History display
+recorded resting heart rate without medical interpretation.
+
 Telegram Messaging
 
 Bot sends:
