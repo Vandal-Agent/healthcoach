@@ -11988,6 +11988,12 @@ def process_telegram_update(update):
 
         if current_step == "goals":
             if lowered in {"1", "view", "view active goal"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goal_view",
+                    known_data={},
+                    missing_fields=[],
+                )
                 send_telegram_msg(
                     format_weight_goal(get_active_weight_goal()),
                     chat_id=chat_id,
@@ -12081,6 +12087,12 @@ def process_telegram_update(update):
                 return
 
             if lowered in {"6", "history", "goal history"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goal_history",
+                    known_data={},
+                    missing_fields=[],
+                )
                 send_telegram_msg(
                     format_weight_goal_history(),
                     chat_id=chat_id,
@@ -12104,6 +12116,28 @@ def process_telegram_update(update):
                 healthcoach_goals_menu_text(),
                 chat_id=chat_id,
             )
+            return
+
+        if current_step in {"goal_view", "goal_history"}:
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="goals",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_goals_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            message = (
+                format_weight_goal(get_active_weight_goal())
+                if current_step == "goal_view"
+                else format_weight_goal_history()
+            )
+            send_telegram_msg(message, chat_id=chat_id)
             return
 
         if current_step in {"goal_add_weight", "goal_edit_weight"}:

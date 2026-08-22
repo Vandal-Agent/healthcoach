@@ -44,6 +44,31 @@ class WeightGoalsMenuTests(unittest.TestCase):
         self.assertEqual(update.call_args.kwargs["current_step"], "goals")
         self.assertIn("Goals Menu", send.call_args.args[0])
 
+    def test_back_from_active_goal_returns_to_goals(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "goal_view",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Back",
+                }
+            })
+
+        self.assertEqual(update.call_args.kwargs["current_step"], "goals")
+        self.assertIn("Goals Menu", send.call_args.args[0])
+
     def test_goal_update_saves_only_when_requested(self) -> None:
         goal = {
             "weight_goal_id": 4,
