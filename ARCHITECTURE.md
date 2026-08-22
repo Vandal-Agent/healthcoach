@@ -131,6 +131,7 @@ protein
 sleep_hours (sometimes)
 exercise_minutes (optional Apple Exercise Time total for today)
 cardio_fitness (optional Apple Health Cardio Fitness in mL/kg/min)
+walking_heart_rate_average (optional Apple Health Walking Heart Rate Average)
 2. Lose It email
 
 Daily CSV attachment downloaded to:
@@ -165,12 +166,16 @@ Dietary Cals
 Protein
 Exercise Minutes
 Cardio Fitness
+Walking Heart Rate Average
 
 The RHR column remains column F. Current status and Health History display
 recorded resting heart rate without medical interpretation.
 
 Cardio Fitness is appended as column L. Existing rows and sheets remain
 valid; missing Cardio Fitness values are not converted to zero.
+
+Walking Heart Rate Average is appended as column M and is stored in beats
+per minute without medical interpretation.
 
 Telegram Messaging
 

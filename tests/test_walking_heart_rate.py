@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import date, datetime
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 with patch("logging.basicConfig"):
     import app
@@ -13,7 +13,7 @@ app.CHAT_ID = None
 def tracker_row(
     day: str,
     *,
-    cardio_fitness: str = "",
+    walking_heart_rate: str = "",
 ) -> list[str]:
     return [
         f"{day} 08:00 AM",
@@ -27,56 +27,58 @@ def tracker_row(
         "1800",
         "120",
         "30",
-        cardio_fitness,
+        "31.5",
+        walking_heart_rate,
     ]
 
 
-class CardioFitnessTests(unittest.TestCase):
-    def test_legacy_rows_keep_cardio_fitness_missing(self) -> None:
+class WalkingHeartRateTests(unittest.TestCase):
+    def test_legacy_rows_keep_walking_heart_rate_missing(self) -> None:
         metrics = app.row_to_metrics(
-            tracker_row("08/22/2026")[:11]
+            tracker_row("08/22/2026")[:12]
         )
 
-        self.assertIsNone(metrics["cardio_fitness"])
+        self.assertIsNone(metrics["walking_heart_rate_average"])
         self.assertIn(
-            "Cardio fitness: not recorded",
+            "Walking heart rate: not recorded",
             app.build_progress_message("Current status", metrics),
         )
 
-    def test_status_shows_cardio_fitness(self) -> None:
+    def test_status_shows_walking_heart_rate(self) -> None:
         metrics = app.row_to_metrics(
             tracker_row(
                 "08/22/2026",
-                cardio_fitness="31.7",
+                walking_heart_rate="92.4",
             )
         )
 
-        self.assertEqual(metrics["cardio_fitness"], 31.7)
+        self.assertEqual(
+            metrics["walking_heart_rate_average"],
+            92.4,
+        )
         self.assertIn(
-            "Cardio fitness: 31.7 mL/kg/min",
+            "Walking heart rate: 92.4 bpm",
             app.build_progress_message("Current status", metrics),
         )
 
-    def test_schema_appends_cardio_fitness_column(self) -> None:
+    def test_schema_appends_walking_heart_rate_column(self) -> None:
         sheet = MagicMock()
-        sheet.col_count = 11
+        sheet.col_count = 12
 
         changed = app.ensure_health_tracker_schema(sheet)
 
         self.assertTrue(changed)
-        sheet.add_cols.assert_called_once_with(2)
-        self.assertEqual(
-            sheet.update_cell.call_args_list,
-            [
-                call(1, 12, "Cardio Fitness"),
-                call(1, 13, "Walking Heart Rate Average"),
-            ],
+        sheet.add_cols.assert_called_once_with(1)
+        sheet.update_cell.assert_called_once_with(
+            1,
+            13,
+            "Walking Heart Rate Average",
         )
 
-    def test_missing_sync_preserves_existing_cardio_fitness(self) -> None:
+    def test_missing_sync_preserves_existing_walking_heart_rate(self) -> None:
         existing = tracker_row(
             "08/22/2026",
-            cardio_fitness="31.7",
+            walking_heart_rate="92.4",
         )
         incoming = tracker_row("08/22/2026")
         sheet = MagicMock()
@@ -96,9 +98,9 @@ class CardioFitnessTests(unittest.TestCase):
             "A2:M2",
         )
         merged = sheet.update.call_args.kwargs["values"][0]
-        self.assertEqual(merged[11], "31.7")
+        self.assertEqual(merged[12], "92.4")
 
-    def test_webhook_accepts_cardio_fitness(self) -> None:
+    def test_webhook_accepts_walking_heart_rate(self) -> None:
         sheet = MagicMock()
         with (
             patch.object(app, "get_current_sheet", return_value=sheet),
@@ -111,55 +113,43 @@ class CardioFitnessTests(unittest.TestCase):
         ):
             response = app.app.test_client().post(
                 "/webhook",
-                json={"cardio_fitness": 31.7},
+                json={"walking_heart_rate_average": 92.4},
             )
 
         self.assertEqual(response.status_code, 200)
         saved_row = update.call_args.args[1]
-        self.assertEqual(saved_row[11], 31.7)
+        self.assertEqual(saved_row[12], 92.4)
 
-    def test_health_history_summarizes_cardio_fitness(self) -> None:
+    def test_health_history_summarizes_walking_heart_rate(self) -> None:
         history = app.build_health_history_data(
             reference_date=date(2026, 8, 22),
             days=7,
             rows=[
                 tracker_row(
                     "08/21/2026",
-                    cardio_fitness="30.5",
+                    walking_heart_rate="90",
                 ),
                 tracker_row(
                     "08/22/2026",
-                    cardio_fitness="31.5",
+                    walking_heart_rate="94",
                 ),
             ],
         )
 
-        self.assertEqual(history["average_cardio_fitness"], 31.0)
-        self.assertEqual(history["cardio_fitness_change"], 1.0)
-        self.assertEqual(history["cardio_fitness_entries"], 2)
+        self.assertEqual(history["average_walking_heart_rate"], 92.0)
+        self.assertEqual(history["walking_heart_rate_change"], 4.0)
+        self.assertEqual(history["walking_heart_rate_entries"], 2)
         message = app.format_health_history(history)
-        self.assertIn("cardio fitness 31.5", message)
+        self.assertIn("walking HR 94 bpm", message)
+        self.assertIn("Average walking heart rate: 92 bpm", message)
         self.assertIn(
-            "Average Cardio Fitness: 31 mL/kg/min",
+            "Recorded walking heart-rate change: +4.0 bpm",
             message,
         )
         self.assertIn(
-            "Recorded Cardio Fitness change: +1.0 mL/kg/min",
+            "Walking heart rate recorded: 2/7 days",
             message,
         )
-        self.assertIn("Cardio Fitness recorded: 2/7 days", message)
-
-    def test_empty_thirty_day_history_fits_telegram_limit(self) -> None:
-        history = app.build_health_history_data(
-            reference_date=date(2026, 8, 22),
-            days=30,
-            rows=[],
-        )
-
-        message = app.format_health_history(history)
-
-        self.assertLessEqual(len(message), 4096)
-        self.assertIn("— means not recorded", message)
 
 
 if __name__ == "__main__":

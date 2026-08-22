@@ -580,6 +580,14 @@ missing and later syncs do not erase an existing value for that day. Cardio
 Fitness is never used for calorie calculations, diagnoses, risk ratings, or
 automatic fitness classifications.
 
+The Shortcut may send `walking_heart_rate_average` as Apple Health's Walking
+Heart Rate Average in beats per minute. HealthCoach appends it to column M,
+shows it in Current Status, and includes daily values, the recorded-day
+average, and first-to-last recorded change in Health History. Missing values
+remain missing and later syncs do not erase an existing value for that day.
+The metric is recorded without medical interpretation and does not affect
+calorie calculations.
+
 The scheduled morning coaching path does not refresh or read Lose It email
 data. If the Food Ledger has no entries for the previous day, HealthCoach
 reports that no foods were recorded and does not calculate a calorie deficit

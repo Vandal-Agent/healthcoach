@@ -6,11 +6,13 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 
 - Receives health data from an iPhone Shortcut
 - Updates the Google Sheet named `Health Tracker`
-- Tracks steps, Apple Exercise Minutes, resting heart rate, Cardio
-  Fitness, protein, sleep, weight, HRV, and calorie data
+- Tracks steps, Apple Exercise Minutes, resting heart rate, walking
+  heart-rate average, Cardio Fitness, protein, sleep, weight, HRV,
+  and calorie data
 - Shows 7-, 14-, and 30-day weight, sleep, exercise, resting
-  heart-rate, and Cardio Fitness history in Telegram, including daily
-  entries, missing days, averages, and changes
+  heart-rate, walking heart-rate, and Cardio Fitness history in
+  Telegram, including daily entries, missing days, averages, and
+  changes
 - Saves Pantry meal ideas as reusable recipes with ingredients,
   preparation, nutrition, Heart-Healthy Pick guidance, and confirmed
   serving-based logging
