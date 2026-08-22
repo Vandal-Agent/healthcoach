@@ -129,6 +129,7 @@ hrv
 dietary_calories
 protein
 sleep_hours (sometimes)
+exercise_minutes (optional Apple Exercise Time total for today)
 2. Lose It email
 
 Daily CSV attachment downloaded to:
@@ -161,6 +162,7 @@ Weight
 HRV
 Dietary Cals
 Protein
+Exercise Minutes
 Telegram Messaging
 
 Bot sends:

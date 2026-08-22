@@ -241,6 +241,7 @@ def build_food_coaching_data(
     weight_today=None,
     recent_weight_avg=None,
     sleep=None,
+    exercise_minutes=None,
     food_data=None,
 ):
     data = (
@@ -279,6 +280,10 @@ def build_food_coaching_data(
         default=None,
     )
     sleep = _safe_number(sleep, default=None)
+    exercise_minutes = _safe_number(
+        exercise_minutes,
+        default=None,
+    )
 
     deficit = None
     if (
@@ -386,6 +391,7 @@ def build_food_coaching_data(
         "weight_today": weight_today,
         "recent_weight_avg": recent_weight_avg,
         "sleep": sleep,
+        "exercise_minutes": exercise_minutes,
         "estimated_deficit": deficit,
         "food_data_complete": food_data_complete,
         "food_entry_count": int(
@@ -422,6 +428,7 @@ def format_food_coaching_message(
         "recent_weight_avg"
     )
     sleep = summary.get("sleep")
+    exercise_minutes = summary.get("exercise_minutes")
     deficit = summary.get("estimated_deficit")
     food_data_complete = bool(
         summary.get("food_data_complete", True)
@@ -454,6 +461,11 @@ def format_food_coaching_message(
 
     if steps is not None and steps > 0:
         message.append(f"Steps: {steps:.0f}")
+
+    if exercise_minutes is not None:
+        message.append(
+            f"Exercise: {exercise_minutes:.0f} min"
+        )
 
     if food_data_complete:
         message.append(f"Protein: {protein:.0f}g")
@@ -508,6 +520,7 @@ def build_food_coaching(
     weight_today=None,
     recent_weight_avg=None,
     sleep=None,
+    exercise_minutes=None,
     food_data=None,
 ):
     coaching_data = build_food_coaching_data(
@@ -516,6 +529,7 @@ def build_food_coaching(
         weight_today=weight_today,
         recent_weight_avg=recent_weight_avg,
         sleep=sleep,
+        exercise_minutes=exercise_minutes,
         food_data=food_data,
     )
     return format_food_coaching_message(coaching_data)
@@ -532,6 +546,7 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
         "protein": 125 or None,
         "sleep_hours": 6.8 or None,
         "weight": 224.1 or None,
+        "exercise_minutes": 32 or None,
     }
 
     Missing values must be passed as None, not zero.
@@ -546,6 +561,11 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
     dietary = [row.get("dietary_cals") for row in week_rows if row.get("dietary_cals") is not None]
     protein = [row.get("protein") for row in week_rows if row.get("protein") is not None]
     sleep = [row.get("sleep_hours") for row in week_rows if row.get("sleep_hours") is not None]
+    exercise = [
+        row.get("exercise_minutes")
+        for row in week_rows
+        if row.get("exercise_minutes") is not None
+    ]
 
     deficits = []
     for row in week_rows:
@@ -561,12 +581,14 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
     avg_food = _safe_avg(dietary, None)
     avg_protein = _safe_avg(protein, None)
     avg_sleep = _safe_avg(sleep, None)
+    avg_exercise = _safe_avg(exercise, None)
     avg_deficit = _safe_avg(deficits, None)
 
     weight_delta = _trend_delta(weights)
     steps_hit_days = _count_hits(steps, 8000, ">=")
     protein_hit_days = _count_hits(protein, 100, ">=")
     sleep_hit_days = _count_hits(sleep, 7, ">=")
+    exercise_hit_days = _count_hits(exercise, 30, ">=")
 
     observations = []
 
@@ -632,6 +654,16 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
                 f"Steps averaged {avg_steps:.0f} on logged days, which is a strong activity baseline."
             )
 
+    if avg_exercise is not None:
+        if avg_exercise >= 30:
+            observations.append(
+                f"Exercise Minutes averaged {avg_exercise:.0f} on recorded days, which shows a strong intentional-movement baseline."
+            )
+        elif avg_exercise < 15:
+            observations.append(
+                f"Exercise Minutes averaged {avg_exercise:.0f} on recorded days. A short deliberate movement block could help on quieter days."
+            )
+
     action_items = []
 
     if avg_protein is not None and avg_protein < 100:
@@ -647,6 +679,11 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
     if avg_steps is not None and avg_steps < 7000:
         action_items.append(
             "Add one deliberate movement block on your lowest-activity days instead of trying to force a big step count every day."
+        )
+
+    if avg_exercise is not None and avg_exercise < 20:
+        action_items.append(
+            "Choose one realistic 10- to 20-minute activity block for days when intentional movement is otherwise low."
         )
 
     if avg_deficit is not None and avg_deficit < 150:
@@ -677,6 +714,10 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
         message.append(f"- Average sleep: {avg_sleep:.2f}h")
     if avg_steps is not None:
         message.append(f"- Average steps: {avg_steps:.0f}")
+    if avg_exercise is not None:
+        message.append(
+            f"- Average Exercise Minutes: {avg_exercise:.0f}"
+        )
     if weights:
         message.append(f"- Weight entries used: {len(weights)}")
     if protein:
@@ -685,6 +726,10 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
         message.append(f"- Sleep days used: {len(sleep)}")
     if steps:
         message.append(f"- Step days used: {len(steps)}")
+    if exercise:
+        message.append(
+            f"- Exercise days used: {len(exercise)}"
+        )
 
     message.append("")
     message.append("What mattered this week")
@@ -699,6 +744,11 @@ def build_weekly_health_report(week_rows, title="Weekly health report"):
         message.append(f"- Days at or above 100g protein: {protein_hit_days}/{len(protein)}")
     if sleep:
         message.append(f"- Days at or above 7 hours sleep: {sleep_hit_days}/{len(sleep)}")
+    if exercise:
+        message.append(
+            "- Days at or above 30 Exercise Minutes: "
+            f"{exercise_hit_days}/{len(exercise)}"
+        )
 
     message.append("")
     message.append("Next-week focus")

@@ -547,8 +547,16 @@ Nutrition now comes directly from the HealthCoach Food Ledger:
 - Top-calorie foods
 - Number of logged entries
 
-Burn and steps come from the previous day's Health Tracker row. Current
-weight and sleep context may come from today's Health Tracker row.
+Burn, steps, and Apple Exercise Minutes come from the previous day's Health
+Tracker row. Current weight and sleep context may come from today's Health
+Tracker row. Exercise Minutes are coaching and reporting context only; they
+are not added to Total Burn or used as extra calories in Weight Goal math.
+
+The iPhone Health Sync Shortcut may send `exercise_minutes` as the summed
+Apple Exercise Time for the current day. HealthCoach appends it to column K
+of each monthly Health Tracker worksheet. Older rows remain valid and show
+Exercise Minutes as not recorded. A recorded zero remains zero rather than
+being treated as missing.
 
 The scheduled morning coaching path does not refresh or read Lose It email
 data. If the Food Ledger has no entries for the previous day, HealthCoach

@@ -152,7 +152,10 @@ HEADERS = [
     "HRV",
     "Dietary Cals",
     "Protein",
+    "Exercise Minutes",
 ]
+
+TRACKER_LAST_COLUMN = "K"
 
 EARLY_PROTEIN_MEALS = {"breakfast", "school snack", "lunch"}
 
@@ -705,11 +708,34 @@ def get_sheet_for_date(target_date):
     month = target_date.strftime("%B %Y")
 
     try:
-        return spreadsheet.worksheet(month)
+        worksheet = spreadsheet.worksheet(month)
+        ensure_health_tracker_schema(worksheet)
+        return worksheet
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=month, rows="500", cols="10")
+        ws = spreadsheet.add_worksheet(
+            title=month,
+            rows="500",
+            cols=str(len(HEADERS)),
+        )
         ws.append_row(HEADERS)
         return ws
+
+
+def ensure_health_tracker_schema(sheet):
+    """Append newly supported tracker columns without moving old data."""
+    current_columns = int(getattr(sheet, "col_count", 0) or 0)
+    missing_columns = len(HEADERS) - current_columns
+
+    if missing_columns <= 0:
+        return False
+
+    sheet.add_cols(missing_columns)
+    sheet.update_cell(1, len(HEADERS), HEADERS[-1])
+    logging.info(
+        "Extended Health Tracker sheet to %s columns",
+        len(HEADERS),
+    )
+    return True
 
 
 def get_current_sheet():
@@ -811,7 +837,7 @@ def row_to_metrics(row):
     if not row:
         return None
 
-    padded = list(row) + [""] * (10 - len(row))
+    padded = list(row) + [""] * (len(HEADERS) - len(row))
 
     weight_val = safe_float(padded[6], None)
     if weight_val == 0:
@@ -829,6 +855,7 @@ def row_to_metrics(row):
         "hrv": safe_float(padded[7], 0),
         "dietary_cals": safe_float(padded[8], 0),
         "protein": safe_float(padded[9], 0),
+        "exercise_minutes": safe_float(padded[10], None),
     }
 
 
@@ -857,7 +884,7 @@ def get_today_row_index_and_row(sheet, today_str):
             match_row = row
 
     if match_row:
-        while len(match_row) < 10:
+        while len(match_row) < len(HEADERS):
             match_row.append("")
 
     return match_index, match_row, rows
@@ -947,20 +974,21 @@ def update_or_insert_today(sheet, row, now):
     row_index, existing_row, _ = get_today_row_index_and_row(sheet, today_str)
 
     if row_index and existing_row:
-        merged = [
-            row[0],
-            row[1] if row[1] not in ("", None) else existing_row[1],
-            row[2] if row[2] not in ("", None) else existing_row[2],
-            row[3] if row[3] not in ("", None) else existing_row[3],
-            row[4] if row[4] not in ("", None) else existing_row[4],
-            row[5] if row[5] not in ("", None) else existing_row[5],
-            row[6] if row[6] not in ("", None) else existing_row[6],
-            row[7] if row[7] not in ("", None) else existing_row[7],
-            row[8] if row[8] not in ("", None) else existing_row[8],
-            row[9] if row[9] not in ("", None) else existing_row[9],
-        ]
+        incoming = list(row) + [""] * (len(HEADERS) - len(row))
+        existing = list(existing_row) + [""] * (
+            len(HEADERS) - len(existing_row)
+        )
+        merged = [incoming[0]]
+        merged.extend(
+            incoming[index]
+            if incoming[index] not in ("", None)
+            else existing[index]
+            for index in range(1, len(HEADERS))
+        )
         sheet.update(
-            range_name=f"A{row_index}:J{row_index}",
+            range_name=(
+                f"A{row_index}:{TRACKER_LAST_COLUMN}{row_index}"
+            ),
             values=[merged],
         )
         logging.info("Updated row %s for %s", row_index, today_str)
@@ -1030,6 +1058,7 @@ def sync_food_ledger_totals_to_sheet(target_date):
             "",
             dietary_cals,
             protein,
+            "",
         ]
 
         sheet.append_row(row)
@@ -1061,12 +1090,20 @@ def build_progress_message(label, metrics):
     if metrics["weight"] is not None:
         weight_text = f"{metrics['weight']:.1f} lbs"
 
+    exercise_minutes = metrics.get("exercise_minutes")
+    exercise_text = "not recorded"
+    if exercise_minutes is not None:
+        exercise_text = (
+            f"{format_display_number(exercise_minutes)} min"
+        )
+
     return (
         f"{label}\n"
         f"Steps: {metrics['steps']}\n"
         f"Total burn: {metrics['total_cals']:.0f}\n"
         f"Calories consumed: {metrics['dietary_cals']:.0f}\n"
         f"Protein: {metrics['protein']:.0f}g\n"
+        f"Exercise: {exercise_text}\n"
         f"Sleep: {sleep_text}\n"
         f"Weight: {weight_text}"
     )
@@ -1630,6 +1667,9 @@ def build_last_week_rows(reference_date):
                 "protein": metrics.get("protein") if metrics.get("protein") > 0 else None,
                 "sleep_hours": metrics.get("sleep_hours"),
                 "weight": metrics.get("weight"),
+                "exercise_minutes": metrics.get(
+                    "exercise_minutes"
+                ),
             })
 
     week.sort(key=lambda x: x["date"])
@@ -1905,6 +1945,9 @@ def send_food_coaching_for_yesterday():
             weight_today=weight_today,
             recent_weight_avg=recent_weight_avg,
             sleep=sleep_today,
+            exercise_minutes=yesterday.get(
+                "exercise_minutes"
+            ),
             food_data=food_data,
         )
         return send_telegram_msg(msg)
@@ -3941,7 +3984,8 @@ def healthcoach_health_menu_text() -> str:
 def healthcoach_health_history_menu_text() -> str:
     return (
         "Health History\n\n"
-        "Choose how much weight and sleep history to view.\n\n"
+        "Choose how much weight, sleep, and exercise history "
+        "to view.\n\n"
         "1. Last 7 days\n"
         "2. Last 14 days\n"
         "3. Last 30 days\n"
@@ -3977,17 +4021,21 @@ def build_health_history_data(
     history_days = []
     weights = []
     sleep_values = []
+    exercise_values = []
 
     for offset in range(period_days):
         current_date = start_date + timedelta(days=offset)
         metrics = metrics_by_date.get(current_date) or {}
         weight = metrics.get("weight")
         sleep_hours = metrics.get("sleep_hours")
+        exercise_minutes = metrics.get("exercise_minutes")
 
         if weight is not None:
             weights.append(float(weight))
         if sleep_hours is not None:
             sleep_values.append(float(sleep_hours))
+        if exercise_minutes is not None:
+            exercise_values.append(float(exercise_minutes))
 
         history_days.append(
             {
@@ -4000,6 +4048,11 @@ def build_health_history_data(
                 "sleep_hours": (
                     float(sleep_hours)
                     if sleep_hours is not None
+                    else None
+                ),
+                "exercise_minutes": (
+                    float(exercise_minutes)
+                    if exercise_minutes is not None
                     else None
                 ),
             }
@@ -4027,6 +4080,12 @@ def build_health_history_data(
             else None
         ),
         "sleep_entries": len(sleep_values),
+        "average_exercise_minutes": (
+            sum(exercise_values) / len(exercise_values)
+            if exercise_values
+            else None
+        ),
+        "exercise_entries": len(exercise_values),
     }
 
 
@@ -4041,6 +4100,7 @@ def format_health_history(history: dict) -> str:
         day = item["date"]
         weight = item.get("weight")
         sleep_hours = item.get("sleep_hours")
+        exercise_minutes = item.get("exercise_minutes")
         weight_text = (
             f"{format_display_number(weight)} lb"
             if weight is not None
@@ -4051,15 +4111,24 @@ def format_health_history(history: dict) -> str:
             if sleep_hours is not None
             else "not recorded"
         )
+        exercise_text = (
+            f"{format_display_number(exercise_minutes)} min"
+            if exercise_minutes is not None
+            else "not recorded"
+        )
         lines.append(
             f"{day.strftime('%a %b ')}{day.day}: "
-            f"weight {weight_text}; sleep {sleep_text}"
+            f"weight {weight_text}; sleep {sleep_text}; "
+            f"exercise {exercise_text}"
         )
 
     lines.extend(["", "Summary"])
     average_weight = history.get("average_weight")
     weight_change = history.get("weight_change")
     average_sleep = history.get("average_sleep")
+    average_exercise = history.get(
+        "average_exercise_minutes"
+    )
 
     lines.append(
         "- Average weight: "
@@ -4092,6 +4161,18 @@ def format_health_history(history: dict) -> str:
     lines.append(
         "- Sleep recorded: "
         f"{int(history.get('sleep_entries') or 0)}/{period_days} days"
+    )
+    lines.append(
+        "- Average Exercise Minutes: "
+        + (
+            f"{format_display_number(average_exercise)} min"
+            if average_exercise is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Exercise recorded: "
+        f"{int(history.get('exercise_entries') or 0)}/{period_days} days"
     )
     lines.extend(
         [
@@ -16003,6 +16084,10 @@ def webhook():
     hrv = safe_float(data.get("hrv"), None)
     dietary = safe_float(data.get("dietary_calories"), None)
     protein = safe_float(data.get("protein"), None)
+    exercise_minutes = safe_float(
+        data.get("exercise_minutes"),
+        None,
+    )
 
     row = [
         timestamp,
@@ -16015,6 +16100,11 @@ def webhook():
         hrv if hrv is not None else "",
         dietary if dietary is not None else "",
         protein if protein is not None else "",
+        (
+            exercise_minutes
+            if exercise_minutes is not None
+            else ""
+        ),
     ]
 
     update_or_insert_today(sheet, row, now)
