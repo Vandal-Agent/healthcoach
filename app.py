@@ -153,9 +153,10 @@ HEADERS = [
     "Dietary Cals",
     "Protein",
     "Exercise Minutes",
+    "Cardio Fitness",
 ]
 
-TRACKER_LAST_COLUMN = "K"
+TRACKER_LAST_COLUMN = "L"
 
 EARLY_PROTEIN_MEALS = {"breakfast", "school snack", "lunch"}
 
@@ -730,7 +731,12 @@ def ensure_health_tracker_schema(sheet):
         return False
 
     sheet.add_cols(missing_columns)
-    sheet.update_cell(1, len(HEADERS), HEADERS[-1])
+    for column_index in range(current_columns, len(HEADERS)):
+        sheet.update_cell(
+            1,
+            column_index + 1,
+            HEADERS[column_index],
+        )
     logging.info(
         "Extended Health Tracker sheet to %s columns",
         len(HEADERS),
@@ -856,6 +862,7 @@ def row_to_metrics(row):
         "dietary_cals": safe_float(padded[8], 0),
         "protein": safe_float(padded[9], 0),
         "exercise_minutes": safe_float(padded[10], None),
+        "cardio_fitness": safe_float(padded[11], None),
     }
 
 
@@ -1104,6 +1111,13 @@ def build_progress_message(label, metrics):
             f"{format_display_number(resting_heart_rate)} bpm"
         )
 
+    cardio_fitness = metrics.get("cardio_fitness")
+    cardio_fitness_text = "not recorded"
+    if cardio_fitness is not None:
+        cardio_fitness_text = (
+            f"{format_display_number(cardio_fitness)} mL/kg/min"
+        )
+
     return (
         f"{label}\n"
         f"Steps: {metrics['steps']}\n"
@@ -1112,6 +1126,7 @@ def build_progress_message(label, metrics):
         f"Protein: {metrics['protein']:.0f}g\n"
         f"Exercise: {exercise_text}\n"
         f"Resting heart rate: {resting_heart_rate_text}\n"
+        f"Cardio fitness: {cardio_fitness_text}\n"
         f"Sleep: {sleep_text}\n"
         f"Weight: {weight_text}"
     )
@@ -4019,8 +4034,8 @@ def healthcoach_health_menu_text() -> str:
 def healthcoach_health_history_menu_text() -> str:
     return (
         "Health History\n\n"
-        "Choose how much weight, sleep, exercise, and resting "
-        "heart-rate history "
+        "Choose how much weight, sleep, exercise, resting "
+        "heart-rate, and Cardio Fitness history "
         "to view.\n\n"
         "1. Last 7 days\n"
         "2. Last 14 days\n"
@@ -4059,6 +4074,7 @@ def build_health_history_data(
     sleep_values = []
     exercise_values = []
     resting_heart_rate_values = []
+    cardio_fitness_values = []
 
     for offset in range(period_days):
         current_date = start_date + timedelta(days=offset)
@@ -4067,6 +4083,7 @@ def build_health_history_data(
         sleep_hours = metrics.get("sleep_hours")
         exercise_minutes = metrics.get("exercise_minutes")
         resting_heart_rate = metrics.get("rhr")
+        cardio_fitness = metrics.get("cardio_fitness")
 
         if weight is not None:
             weights.append(float(weight))
@@ -4078,6 +4095,8 @@ def build_health_history_data(
             resting_heart_rate_values.append(
                 float(resting_heart_rate)
             )
+        if cardio_fitness is not None:
+            cardio_fitness_values.append(float(cardio_fitness))
 
         history_days.append(
             {
@@ -4100,6 +4119,11 @@ def build_health_history_data(
                 "resting_heart_rate": (
                     float(resting_heart_rate)
                     if resting_heart_rate is not None
+                    else None
+                ),
+                "cardio_fitness": (
+                    float(cardio_fitness)
+                    if cardio_fitness is not None
                     else None
                 ),
             }
@@ -4142,11 +4166,24 @@ def build_health_history_data(
         "resting_heart_rate_entries": len(
             resting_heart_rate_values
         ),
+        "average_cardio_fitness": (
+            sum(cardio_fitness_values)
+            / len(cardio_fitness_values)
+            if cardio_fitness_values
+            else None
+        ),
+        "cardio_fitness_change": (
+            cardio_fitness_values[-1] - cardio_fitness_values[0]
+            if len(cardio_fitness_values) >= 2
+            else None
+        ),
+        "cardio_fitness_entries": len(cardio_fitness_values),
     }
 
 
 def format_health_history(history: dict) -> str:
     period_days = int(history.get("period_days") or 0)
+    missing_text = "—" if period_days == 30 else "not recorded"
     lines = [
         f"Health History - Last {period_days} Days",
         "",
@@ -4158,31 +4195,38 @@ def format_health_history(history: dict) -> str:
         sleep_hours = item.get("sleep_hours")
         exercise_minutes = item.get("exercise_minutes")
         resting_heart_rate = item.get("resting_heart_rate")
+        cardio_fitness = item.get("cardio_fitness")
         weight_text = (
             f"{format_display_number(weight)} lb"
             if weight is not None
-            else "not recorded"
+            else missing_text
         )
         sleep_text = (
             f"{format_display_number(sleep_hours)} h"
             if sleep_hours is not None
-            else "not recorded"
+            else missing_text
         )
         exercise_text = (
             f"{format_display_number(exercise_minutes)} min"
             if exercise_minutes is not None
-            else "not recorded"
+            else missing_text
         )
         resting_heart_rate_text = (
             f"{format_display_number(resting_heart_rate)} bpm"
             if resting_heart_rate is not None
-            else "not recorded"
+            else missing_text
+        )
+        cardio_fitness_text = (
+            f"{format_display_number(cardio_fitness)}"
+            if cardio_fitness is not None
+            else missing_text
         )
         lines.append(
             f"{day.strftime('%a %b ')}{day.day}: "
             f"weight {weight_text}; sleep {sleep_text}; "
             f"exercise {exercise_text}; resting HR "
-            f"{resting_heart_rate_text}"
+            f"{resting_heart_rate_text}; cardio fitness "
+            f"{cardio_fitness_text}"
         )
 
     lines.extend(["", "Summary"])
@@ -4194,6 +4238,12 @@ def format_health_history(history: dict) -> str:
     )
     average_resting_heart_rate = history.get(
         "average_resting_heart_rate"
+    )
+    average_cardio_fitness = history.get(
+        "average_cardio_fitness"
+    )
+    cardio_fitness_change = history.get(
+        "cardio_fitness_change"
     )
 
     lines.append(
@@ -4253,11 +4303,38 @@ def format_health_history(history: dict) -> str:
         f"{int(history.get('resting_heart_rate_entries') or 0)}"
         f"/{period_days} days"
     )
+    lines.append(
+        "- Average Cardio Fitness: "
+        + (
+            f"{format_display_number(average_cardio_fitness)} "
+            "mL/kg/min"
+            if average_cardio_fitness is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Recorded Cardio Fitness change: "
+        + (
+            f"{float(cardio_fitness_change):+.1f} mL/kg/min"
+            if cardio_fitness_change is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Cardio Fitness recorded: "
+        f"{int(history.get('cardio_fitness_entries') or 0)}"
+        f"/{period_days} days"
+    )
     lines.extend(
         [
             "",
             "Weight change compares the first and last recorded "
             "weights in this period.",
+            *(
+                ["— means not recorded."]
+                if period_days == 30
+                else []
+            ),
             "Reply 7 days, 14 days, 30 days, Back, or Cancel.",
         ]
     )
@@ -16184,6 +16261,10 @@ def webhook():
         data.get("exercise_minutes"),
         None,
     )
+    cardio_fitness = safe_float(
+        data.get("cardio_fitness"),
+        None,
+    )
 
     row = [
         timestamp,
@@ -16201,6 +16282,7 @@ def webhook():
             if exercise_minutes is not None
             else ""
         ),
+        cardio_fitness if cardio_fitness is not None else "",
     ]
 
     update_or_insert_today(sheet, row, now)

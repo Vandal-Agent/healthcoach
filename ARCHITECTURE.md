@@ -130,6 +130,7 @@ dietary_calories
 protein
 sleep_hours (sometimes)
 exercise_minutes (optional Apple Exercise Time total for today)
+cardio_fitness (optional Apple Health Cardio Fitness in mL/kg/min)
 2. Lose It email
 
 Daily CSV attachment downloaded to:
@@ -163,9 +164,13 @@ HRV
 Dietary Cals
 Protein
 Exercise Minutes
+Cardio Fitness
 
 The RHR column remains column F. Current status and Health History display
 recorded resting heart rate without medical interpretation.
+
+Cardio Fitness is appended as column L. Existing rows and sheets remain
+valid; missing Cardio Fitness values are not converted to zero.
 
 Telegram Messaging
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import date, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 with patch("logging.basicConfig"):
     import app
@@ -64,11 +64,13 @@ class ExerciseMinutesTests(unittest.TestCase):
         changed = app.ensure_health_tracker_schema(sheet)
 
         self.assertTrue(changed)
-        sheet.add_cols.assert_called_once_with(1)
-        sheet.update_cell.assert_called_once_with(
-            1,
-            11,
-            "Exercise Minutes",
+        sheet.add_cols.assert_called_once_with(2)
+        self.assertEqual(
+            sheet.update_cell.call_args_list,
+            [
+                call(1, 11, "Exercise Minutes"),
+                call(1, 12, "Cardio Fitness"),
+            ],
         )
 
     def test_missing_webhook_value_preserves_existing_exercise(self) -> None:
@@ -91,7 +93,7 @@ class ExerciseMinutesTests(unittest.TestCase):
 
         self.assertEqual(
             sheet.update.call_args.kwargs["range_name"],
-            "A2:K2",
+            "A2:L2",
         )
         merged = sheet.update.call_args.kwargs["values"][0]
         self.assertEqual(merged[10], "42")

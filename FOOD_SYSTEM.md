@@ -572,6 +572,14 @@ and do not become zero. Resting heart rate is presented as recorded health
 data only; HealthCoach does not diagnose it or assign a cardiovascular-risk
 score.
 
+The Shortcut may send `cardio_fitness` as Apple Health's Cardio Fitness
+value in mL/kg/min. HealthCoach appends it to column L, shows the recorded
+value in Current Status, and includes daily values, the recorded-day average,
+and first-to-last recorded change in Health History. Missing values remain
+missing and later syncs do not erase an existing value for that day. Cardio
+Fitness is never used for calorie calculations, diagnoses, risk ratings, or
+automatic fitness classifications.
+
 The scheduled morning coaching path does not refresh or read Lose It email
 data. If the Food Ledger has no entries for the previous day, HealthCoach
 reports that no foods were recorded and does not calculate a calorie deficit
