@@ -21,6 +21,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Renames, updates, or removes Saved Foods while preserving food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the
   entire day after confirmation
+- Logs a forgotten food only to the immediately preceding day through either
+  the Food menu or an explicit natural-language `yesterday` request, with an
+  exact-date confirmation and updated yesterday totals
 - Manages a safety-capped weight goal with manual calorie-target updates,
   burn-based projections, and remaining-calorie feedback after food logging
 - Uses the Food Ledger rather than Lose It for current nutrition totals

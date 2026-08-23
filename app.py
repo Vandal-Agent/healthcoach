@@ -548,7 +548,8 @@ def menu_reply_markup(message):
         rows = [["Back", "Cancel"]]
     elif "Food Menu\n\n" in message:
         rows = [
-            ["Log food", "Show today"],
+            ["Log food", "Log food for yesterday"],
+            ["Show today"],
             ["Edit today", "Undo last"],
             ["Same as yesterday"],
             ["Favorites", "Saved foods"],
@@ -1594,11 +1595,116 @@ def get_time_aware_meal_options():
     ]
 
 
-def format_meal_selection_prompt(interpretation):
+def parse_food_entry_date(value, *, default=None):
+    """Parse a stored Food Ledger date without changing its day."""
+    if isinstance(value, date):
+        return value
+
+    if value not in (None, ""):
+        try:
+            return datetime.strptime(str(value), "%Y-%m-%d").date()
+        except ValueError:
+            logging.warning("Invalid Food entry date: %s", value)
+
+    return default
+
+
+def format_food_entry_date(entry_date) -> str:
+    """Return an explicit, readable Food Ledger date label."""
+    target = parse_food_entry_date(entry_date)
+    if target is None:
+        return ""
+
+    today = datetime.now(PACIFIC_TZ).date()
+    if target == today:
+        prefix = "Today"
+    elif target == today - timedelta(days=1):
+        prefix = "Yesterday"
+    else:
+        prefix = target.strftime("%A")
+
+    return (
+        f"{prefix} — {target.strftime('%a %b')} "
+        f"{target.day}, {target.year}"
+    )
+
+
+def extract_yesterday_food_intent(text, *, reference_date=None):
+    """Detect only the immediately preceding day in natural Food text."""
+    original = str(text or "").strip()
+    if re.search(r"\byesterday\b", original, flags=re.IGNORECASE) is None:
+        return None, original
+
+    current = reference_date or datetime.now(PACIFIC_TZ).date()
+    cleaned = re.sub(
+        r"\b(?:for\s+)?yesterday(?:'s)?\b",
+        " ",
+        original,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
+    return current - timedelta(days=1), cleaned
+
+
+def food_logging_meal_options(entry_date=None):
+    """Offer every meal for late entries; keep time-aware choices today."""
+    target = parse_food_entry_date(entry_date)
+    today = datetime.now(PACIFIC_TZ).date()
+    if target is not None and target != today:
+        return [
+            "before breakfast",
+            "breakfast",
+            "morning snack",
+            "lunch",
+            "afternoon snack",
+            "dinner",
+            "dessert",
+        ]
+    return get_time_aware_meal_options()
+
+
+def prompt_for_corrected_food(
+    *,
+    chat_id,
+    known_data,
+    message="Send the corrected food description as a new message.",
+):
+    """Keep a yesterday target when the user edits the description."""
+    target = parse_food_entry_date(
+        (known_data or {}).get("_entry_date")
+    )
+    yesterday = (
+        datetime.now(PACIFIC_TZ).date()
+        - timedelta(days=1)
+    )
+
+    cancel_conversation(chat_id)
+    if target == yesterday:
+        start_conversation(
+            chat_id=chat_id,
+            conversation_type="yesterday_food_logging",
+            current_step="awaiting_food",
+            known_data={"_entry_date": target.isoformat()},
+            missing_fields=[],
+            original_message="",
+        )
+        message += (
+            "\n\nIt will still be logged for "
+            f"{format_food_entry_date(target)}."
+        )
+
+    send_telegram_msg(message, chat_id=chat_id)
+
+
+def format_meal_selection_prompt(interpretation, *, entry_date=None):
     """Format a focused time-aware meal question."""
-    options = get_time_aware_meal_options()
+    options = food_logging_meal_options(entry_date)
 
     lines = ["I interpreted this as:"]
+
+    date_label = format_food_entry_date(entry_date)
+    if date_label:
+        lines.append(f"Date: {date_label}")
 
     fields = (
         ("Restaurant", interpretation.restaurant),
@@ -1658,14 +1764,27 @@ def parse_meal_selection(text, options):
     return None
 
 
-def format_daily_food_totals():
-    """Format today's Food Ledger totals for Telegram."""
+def format_daily_food_totals(entry_date=None):
+    """Format one day's Food Ledger totals for Telegram."""
     today = datetime.now(PACIFIC_TZ).date()
-    totals = get_daily_totals(today)
+    target = parse_food_entry_date(entry_date, default=today)
+    totals = get_daily_totals(target)
+    if target == today:
+        heading = "Today's food totals:"
+    elif target == today - timedelta(days=1):
+        heading = (
+            "Yesterday's food totals — "
+            f"{target.strftime('%a %b')} {target.day}, {target.year}:"
+        )
+    else:
+        heading = (
+            f"Food totals for {target.strftime('%a %b')} "
+            f"{target.day}, {target.year}:"
+        )
 
     return "\n".join(
         [
-            "Today's food totals:",
+            heading,
             "",
             (
                 "Calories: "
@@ -1726,9 +1845,13 @@ def format_daily_food_totals():
     )
 
 
-def format_food_interpretation(interpretation):
+def format_food_interpretation(interpretation, *, entry_date=None):
     """Format a food interpretation for Telegram review."""
     lines = ["I interpreted this as:"]
+
+    date_label = format_food_entry_date(entry_date)
+    if date_label:
+        lines.append(f"Date: {date_label}")
 
     if interpretation.is_combo_meal:
         fields = (
@@ -2839,12 +2962,17 @@ def format_pending_nutrition_confirmation(
     components: list[dict],
     *,
     meal_category: str,
+    entry_date=None,
 ) -> str:
     """Format verified nutrition before Food Ledger logging."""
     lines = [
         "Verified nutrition:",
         "",
     ]
+
+    date_label = format_food_entry_date(entry_date)
+    if date_label:
+        lines.extend([f"Date: {date_label}", ""])
 
     total_calories = 0.0
     total_protein = 0.0
@@ -3054,20 +3182,21 @@ def healthcoach_food_menu_text() -> str:
         "Food Menu\n\n"
         "DAILY FOOD\n"
         "1. Log food\n"
-        "2. Show today's food\n"
-        "3. Edit today's food\n"
-        "4. Undo last food\n"
-        "5. Same as yesterday\n\n"
+        "2. Log food for yesterday\n"
+        "3. Show today's food\n"
+        "4. Edit today's food\n"
+        "5. Undo last food\n"
+        "6. Same as yesterday\n\n"
         "MY FOODS\n"
-        "6. Favorites\n"
-        "7. Saved foods\n"
-        "8. Saved recipes\n"
-        "9. My Pantry\n\n"
+        "7. Favorites\n"
+        "8. Saved foods\n"
+        "9. Saved recipes\n"
+        "10. My Pantry\n\n"
         "TOOLS\n"
-        "10. Photo tools\n"
-        "11. Restaurant\n"
-        "12. Update unknown foods\n"
-        "13. Back"
+        "11. Photo tools\n"
+        "12. Restaurant\n"
+        "13. Update unknown foods\n"
+        "14. Back"
     )
 
 
@@ -6041,6 +6170,56 @@ def process_telegram_update(update):
         return
 
     active_conversation = get_active_conversation(chat_id)
+    forced_food_entry_date = None
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "yesterday_food_logging"
+        and active_conversation.get("current_step")
+        == "awaiting_food"
+    ):
+        lowered = text.lower().strip()
+        if lowered in {"cancel", "exit", "quit", "close"}:
+            cancel_conversation(chat_id)
+            send_telegram_msg(
+                "Yesterday's food entry was cancelled.",
+                chat_id=chat_id,
+                remove_keyboard=True,
+            )
+            return
+
+        if lowered in {"back", "food menu"}:
+            start_conversation(
+                chat_id=chat_id,
+                conversation_type="healthcoach_menu",
+                current_step="food",
+                known_data={},
+                missing_fields=[],
+                original_message="",
+            )
+            send_telegram_msg(
+                healthcoach_food_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        expected_yesterday = (
+            datetime.now(PACIFIC_TZ).date()
+            - timedelta(days=1)
+        )
+        stored_date = parse_food_entry_date(
+            (active_conversation.get("known_data") or {}).get(
+                "_entry_date"
+            )
+        )
+        forced_food_entry_date = (
+            stored_date
+            if stored_date == expected_yesterday
+            else expected_yesterday
+        )
+        cancel_conversation(chat_id)
+        active_conversation = None
 
     if (
         active_conversation
@@ -6158,14 +6337,43 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"2", "show", "show today"}:
+            if lowered in {
+                "2",
+                "log food for yesterday",
+                "log yesterday",
+                "add food to yesterday",
+            }:
+                entry_date = today - timedelta(days=1)
+                start_conversation(
+                    chat_id=chat_id,
+                    conversation_type="yesterday_food_logging",
+                    current_step="awaiting_food",
+                    known_data={
+                        "_entry_date": entry_date.isoformat(),
+                    },
+                    missing_fields=[],
+                    original_message="",
+                )
+                send_telegram_msg(
+                    "Logging food for yesterday — "
+                    f"{entry_date.strftime('%a %b')} "
+                    f"{entry_date.day}, {entry_date.year}.\n\n"
+                    "Send the food naturally, including the meal.\n\n"
+                    "Example: For lunch I had a turkey sandwich.\n\n"
+                    "Reply Back to return or Cancel to close.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {"3", "show", "show today"}:
                 send_telegram_msg(
                     format_daily_food_log(today),
                     chat_id=chat_id,
                 )
                 return
 
-            if lowered in {"3", "edit", "edit today", "edit today's food"}:
+            if lowered in {"4", "edit", "edit today", "edit today's food"}:
                 entries = sorted(
                     list_food_entries(entry_date=today),
                     key=lambda entry: int(entry["food_entry_id"]),
@@ -6196,7 +6404,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"4", "undo", "undo last"}:
+            if lowered in {"5", "undo", "undo last"}:
                 entries = list_food_entries(entry_date=today)
 
                 if not entries:
@@ -6234,7 +6442,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "5",
+                "6",
                 "same as yesterday",
                 "yesterday",
                 "copy yesterday",
@@ -6268,7 +6476,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"6", "favorites", "favorite"}:
+            if lowered in {"7", "favorites", "favorite"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="favorites",
@@ -6282,7 +6490,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "7",
+                "8",
                 "saved foods",
                 "saved food",
             }:
@@ -6299,7 +6507,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "saved recipes",
                 "saved recipe",
                 "recipes",
@@ -6317,7 +6525,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "9",
+                "10",
                 "my pantry",
                 "pantry",
             }:
@@ -6334,7 +6542,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "10",
+                "11",
                 "photo",
                 "photo tools",
             }:
@@ -6351,7 +6559,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "11",
+                "12",
                 "restaurant",
                 "restaurant choices",
             }:
@@ -6368,7 +6576,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "12",
+                "13",
                 "unknown",
                 "update unknown foods",
             }:
@@ -6385,7 +6593,7 @@ def process_telegram_update(update):
                     )
                 return
 
-            if lowered in {"13", "back"}:
+            if lowered in {"14", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -13331,6 +13539,7 @@ def process_telegram_update(update):
                 format_pending_nutrition_confirmation(
                     pending_components,
                     meal_category=item.get("meal_category"),
+                    entry_date=item.get("entry_date"),
                 ),
                 chat_id=chat_id,
             )
@@ -13479,7 +13688,10 @@ def process_telegram_update(update):
 
         send_telegram_msg(
             "Saved your portion profile.\n\n"
-            + format_food_interpretation(interpretation),
+            + format_food_interpretation(
+                interpretation,
+                entry_date=known_data.get("_entry_date"),
+            ),
             chat_id=chat_id,
         )
         return
@@ -13524,12 +13736,13 @@ def process_telegram_update(update):
             "try again",
             "different description",
         }:
-            cancel_conversation(chat_id)
-
-            send_telegram_msg(
-                "Send the food description again with any "
-                "additional brand, flavor, or product details.",
+            prompt_for_corrected_food(
                 chat_id=chat_id,
+                known_data=known_data,
+                message=(
+                    "Send the food description again with any "
+                    "additional brand, flavor, or product details."
+                ),
             )
             return
 
@@ -13546,10 +13759,12 @@ def process_telegram_update(update):
             )
 
             try:
+                target_entry_date = parse_food_entry_date(
+                    known_data.get("_entry_date"),
+                    default=datetime.now(PACIFIC_TZ).date(),
+                )
                 saved_unresolved = save_unresolved_food(
-                    entry_date=datetime.now(
-                        PACIFIC_TZ
-                    ).date().isoformat(),
+                    entry_date=target_entry_date.isoformat(),
                     meal_category=known_data.get(
                         "meal_category"
                     ),
@@ -14103,6 +14318,7 @@ def process_telegram_update(update):
                 format_pending_nutrition_confirmation(
                     pending_components,
                     meal_category=meal_category,
+                    entry_date=known_data.get("_entry_date"),
                 ),
                 chat_id=chat_id,
             )
@@ -14443,6 +14659,7 @@ def process_telegram_update(update):
                 known_data={
                     "meal_category": meal_category,
                     "restaurant": restaurant,
+                    "_entry_date": target_entry_date.isoformat(),
                 },
                 missing_fields=[],
                 original_message=original_message,
@@ -14488,6 +14705,25 @@ def process_telegram_update(update):
             )
             if goal_progress:
                 lines.extend(["", goal_progress])
+
+            if (
+                target_entry_date
+                != datetime.now(PACIFIC_TZ).date()
+            ):
+                try:
+                    updated_totals = format_daily_food_totals(
+                        target_entry_date
+                    )
+                except Exception:
+                    logging.exception(
+                        "Previous-day Food totals failed"
+                    )
+                    updated_totals = (
+                        "The food was logged for "
+                        f"{format_food_entry_date(target_entry_date)}, "
+                        "but I could not calculate the updated totals."
+                    )
+                lines.extend(["", updated_totals])
 
             lines.extend(
                 [
@@ -14558,10 +14794,9 @@ def process_telegram_update(update):
             return
 
         if lowered in {"3", "edit"}:
-            cancel_conversation(chat_id)
-            send_telegram_msg(
-                "Send the corrected food description as a new message.",
+            prompt_for_corrected_food(
                 chat_id=chat_id,
+                known_data=known_data,
             )
             return
 
@@ -14593,6 +14828,10 @@ def process_telegram_update(update):
         lowered = text.lower().strip()
         known_data = active_conversation.get("known_data") or {}
         meal_category = known_data.get("meal_category")
+        entry_date = parse_food_entry_date(
+            known_data.get("_entry_date"),
+            default=datetime.now(PACIFIC_TZ).date(),
+        )
         restaurant = known_data.get("restaurant")
 
         prompt_message_id = known_data.get(
@@ -14625,6 +14864,7 @@ def process_telegram_update(update):
                 known_data={
                     "meal_category": meal_category,
                     "restaurant": restaurant,
+                    "_entry_date": entry_date.isoformat(),
                 },
                 missing_fields=[],
             )
@@ -14649,6 +14889,7 @@ def process_telegram_update(update):
                 known_data={
                     "meal_category": meal_category,
                     "restaurant": None,
+                    "_entry_date": entry_date.isoformat(),
                 },
                 missing_fields=[],
             )
@@ -14701,6 +14942,10 @@ def process_telegram_update(update):
         lowered = text.lower().strip()
         known_data = active_conversation.get("known_data") or {}
         meal_category = known_data.get("meal_category")
+        entry_date = parse_food_entry_date(
+            known_data.get("_entry_date"),
+            default=datetime.now(PACIFIC_TZ).date(),
+        )
 
         prompt_message_id = known_data.get(
             "_food_meal_prompt_message_id"
@@ -14732,6 +14977,7 @@ def process_telegram_update(update):
                 known_data={
                     "meal_category": meal_category,
                     "restaurant": None,
+                    "_entry_date": entry_date.isoformat(),
                 },
                 missing_fields=[],
             )
@@ -14754,14 +15000,16 @@ def process_telegram_update(update):
             complete_conversation(chat_id)
 
             try:
-                totals_message = format_daily_food_totals()
+                totals_message = format_daily_food_totals(
+                    entry_date
+                )
             except Exception:
                 logging.exception(
                     "Daily Food Ledger totals failed"
                 )
                 send_telegram_msg(
                     f"{meal_category.title()} is finished, "
-                    "but I could not calculate today's totals.",
+                    "but I could not calculate the food totals.",
                     chat_id=chat_id,
                 )
                 return
@@ -14804,6 +15052,9 @@ def process_telegram_update(update):
         )
         meal_category = meal_context.get("meal_category")
         restaurant_context = meal_context.get("restaurant")
+        entry_date = parse_food_entry_date(
+            meal_context.get("_entry_date")
+        )
 
         try:
             interpretation = interpret_food_message(text)
@@ -14854,13 +15105,23 @@ def process_telegram_update(update):
                 if not interpretation.missing_fields
                 else "clarification"
             ),
-            known_data=interpretation.model_dump(),
+            known_data={
+                **interpretation.model_dump(),
+                **(
+                    {"_entry_date": entry_date.isoformat()}
+                    if entry_date is not None
+                    else {}
+                ),
+            },
             missing_fields=interpretation.missing_fields,
             original_message=text,
         )
 
         send_telegram_msg(
-            format_food_interpretation(interpretation),
+            format_food_interpretation(
+                interpretation,
+                entry_date=entry_date,
+            ),
             chat_id=chat_id,
         )
         return
@@ -14960,7 +15221,10 @@ def process_telegram_update(update):
                 )
 
                 send_telegram_msg(
-                    format_food_interpretation(interpretation),
+                    format_food_interpretation(
+                        interpretation,
+                        entry_date=known_data.get("_entry_date"),
+                    ),
                     chat_id=chat_id,
                 )
                 return
@@ -15249,7 +15513,10 @@ def process_telegram_update(update):
         )
 
         send_telegram_msg(
-            format_food_interpretation(interpretation),
+            format_food_interpretation(
+                interpretation,
+                entry_date=known_data.get("_entry_date"),
+            ),
             chat_id=chat_id,
         )
         return
@@ -15349,7 +15616,10 @@ def process_telegram_update(update):
                 )
 
                 send_telegram_msg(
-                    format_food_interpretation(interpretation),
+                    format_food_interpretation(
+                        interpretation,
+                        entry_date=known_data.get("_entry_date"),
+                    ),
                     chat_id=chat_id,
                 )
                 return
@@ -15638,7 +15908,10 @@ def process_telegram_update(update):
         )
 
         send_telegram_msg(
-            format_food_interpretation(interpretation),
+            format_food_interpretation(
+                interpretation,
+                entry_date=known_data.get("_entry_date"),
+            ),
             chat_id=chat_id,
         )
         return
@@ -15653,7 +15926,9 @@ def process_telegram_update(update):
         known_data = active_conversation.get("known_data") or {}
         meal_options = (
             known_data.get("_meal_options")
-            or get_time_aware_meal_options()
+            or food_logging_meal_options(
+                known_data.get("_entry_date")
+            )
         )
 
         selected_meal = parse_meal_selection(
@@ -15699,7 +15974,10 @@ def process_telegram_update(update):
         )
 
         send_telegram_msg(
-            format_food_interpretation(interpretation),
+            format_food_interpretation(
+                interpretation,
+                entry_date=known_data.get("_entry_date"),
+            ),
             chat_id=chat_id,
         )
         return
@@ -15869,6 +16147,7 @@ def process_telegram_update(update):
                     format_pending_nutrition_confirmation(
                         pending_components,
                         meal_category=meal_category,
+                        entry_date=known_data.get("_entry_date"),
                     ),
                     chat_id=chat_id,
                 )
@@ -16046,6 +16325,7 @@ def process_telegram_update(update):
                     format_pending_nutrition_confirmation(
                         pending_components,
                         meal_category=meal_category,
+                        entry_date=known_data.get("_entry_date"),
                     ),
                     chat_id=chat_id,
                 )
@@ -16096,9 +16376,17 @@ def process_telegram_update(update):
                     missing_fields=[],
                 )
 
+                date_label = format_food_entry_date(
+                    known_data.get("_entry_date")
+                )
                 send_telegram_msg(
                     "I couldn't verify this product automatically.\n\n"
-                    "1. Enter package label nutrition\n"
+                    + (
+                        f"Date: {date_label}\n\n"
+                        if date_label
+                        else ""
+                    )
+                    + "1. Enter package label nutrition\n"
                     "2. Try a different description\n"
                     "3. Save for later\n"
                     "4. Cancel",
@@ -16289,6 +16577,7 @@ def process_telegram_update(update):
                 format_pending_nutrition_confirmation(
                     pending_components,
                     meal_category=meal_category,
+                    entry_date=known_data.get("_entry_date"),
                 ),
                 chat_id=chat_id,
             )
@@ -16306,10 +16595,9 @@ def process_telegram_update(update):
             return
 
         if lowered in {"2", "edit"}:
-            cancel_conversation(chat_id)
-            send_telegram_msg(
-                "Send the corrected food description as a new message.",
+            prompt_for_corrected_food(
                 chat_id=chat_id,
+                known_data=known_data,
             )
             return
 
@@ -16350,22 +16638,44 @@ def process_telegram_update(update):
         send_weekly_report(chat_id=chat_id)
         return
 
+    natural_entry_date, interpretation_text = (
+        extract_yesterday_food_intent(text)
+    )
+    target_entry_date = (
+        forced_food_entry_date or natural_entry_date
+    )
+    if forced_food_entry_date is not None:
+        interpretation_text = text
+
     try:
-        interpretation = interpret_food_message(text)
+        interpretation = interpret_food_message(
+            interpretation_text
+        )
 
         if interpretation.is_food_logging_request:
+            interpretation_data = interpretation.model_dump()
+            interpretation_data["_accumulated_text"] = (
+                interpretation_text
+            )
+            if target_entry_date is not None:
+                interpretation_data["_entry_date"] = (
+                    target_entry_date.isoformat()
+                )
+
             missing_fields = list(
                 interpretation.missing_fields
             )
 
             if missing_fields == ["meal_category"]:
-                meal_options = get_time_aware_meal_options()
+                meal_options = food_logging_meal_options(
+                    target_entry_date
+                )
 
                 conversation = start_conversation(
                     chat_id=chat_id,
                     conversation_type="food_interpretation",
                     current_step="meal_selection",
-                    known_data=interpretation.model_dump(),
+                    known_data=interpretation_data,
                     missing_fields=missing_fields,
                     original_message=text,
                 )
@@ -16381,7 +16691,8 @@ def process_telegram_update(update):
 
                 send_telegram_msg(
                     format_meal_selection_prompt(
-                        interpretation
+                        interpretation,
+                        entry_date=target_entry_date,
                     ),
                     chat_id=chat_id,
                 )
@@ -16392,13 +16703,16 @@ def process_telegram_update(update):
                     chat_id=chat_id,
                     conversation_type="food_interpretation",
                     current_step="clarification",
-                    known_data=interpretation.model_dump(),
+                    known_data=interpretation_data,
                     missing_fields=missing_fields,
                     original_message=text,
                 )
 
                 send_telegram_msg(
-                    format_food_interpretation(interpretation),
+                    format_food_interpretation(
+                        interpretation,
+                        entry_date=target_entry_date,
+                    ),
                     chat_id=chat_id,
                 )
                 return
@@ -16490,7 +16804,7 @@ def process_telegram_update(update):
                             conversation_type="food_interpretation",
                             current_step="nutrition_confirmation",
                             known_data={
-                                **interpretation.model_dump(),
+                                **interpretation_data,
                                 "_pending_components": (
                                     pending_components
                                 ),
@@ -16505,6 +16819,7 @@ def process_telegram_update(update):
                                 meal_category=(
                                     interpretation.meal_category
                                 ),
+                                entry_date=target_entry_date,
                             ),
                             chat_id=chat_id,
                         )
@@ -16525,13 +16840,16 @@ def process_telegram_update(update):
                 chat_id=chat_id,
                 conversation_type="food_interpretation",
                 current_step="confirmation",
-                known_data=interpretation.model_dump(),
+                known_data=interpretation_data,
                 missing_fields=[],
                 original_message=text,
             )
 
             send_telegram_msg(
-                format_food_interpretation(interpretation),
+                format_food_interpretation(
+                    interpretation,
+                    entry_date=target_entry_date,
+                ),
                 chat_id=chat_id,
             )
             return

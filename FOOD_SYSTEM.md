@@ -454,6 +454,29 @@ into an empty meal section for the current day.
 
 ---
 
+# Previous-Day Food Logging
+
+The Telegram Food menu includes Log food for yesterday. Natural food messages
+that explicitly say `yesterday` use the same previous-day workflow.
+
+Rules:
+
+- The target is always the immediately preceding Pacific calendar day. This
+  workflow does not accept arbitrary historical dates.
+- Food interpretation, tappable meal selection, Food Library resolution,
+  verified nutrition, custom nutrition, and duplicate protection reuse the
+  normal Food logging infrastructure.
+- Confirmation screens display `Yesterday` and the exact date before anything
+  is written.
+- Confirmed entries retain nutrition snapshots and are written to yesterday's
+  Food Ledger. Yesterday's Google Sheet nutrition totals are then synchronized.
+- After each successful entry, HealthCoach shows the complete updated totals
+  for yesterday. It does not show today's Weight Goal calorie allowance.
+- A morning coaching message that was already delivered is not resent or
+  retroactively replaced. Later reports read the corrected Food Ledger.
+
+---
+
 # Weight Goals
 
 Weight Goals is available from Reports > Goals. HealthCoach supports one

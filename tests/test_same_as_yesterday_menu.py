@@ -34,7 +34,7 @@ class SameAsYesterdayMenuTests(unittest.TestCase):
         message = app.healthcoach_food_menu_text()
         keyboard = app.menu_reply_markup(message)
 
-        self.assertIn("5. Same as yesterday", message)
+        self.assertIn("6. Same as yesterday", message)
         self.assertIn(["Same as yesterday"], keyboard["keyboard"])
 
     def test_action_reviews_food_before_copying(self) -> None:
