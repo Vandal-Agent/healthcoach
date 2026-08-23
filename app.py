@@ -4254,7 +4254,19 @@ def format_restaurant_advice(advice: dict) -> str:
     lines = ["Restaurant Recommendations", "", name]
 
     for index, candidate in enumerate(candidates, start=1):
-        lines.extend(["", f"{index}. {clean_restaurant_display_text(candidate['item_name'])}"])
+        pick_label = (
+            " — Heart-Healthy Pick"
+            if candidate.get("heart_healthy_pick")
+            else ""
+        )
+        lines.extend(
+            [
+                "",
+                f"{index}. "
+                f"{clean_restaurant_display_text(candidate['item_name'])}"
+                f"{pick_label}",
+            ]
+        )
         if candidate.get("nutrition_status") == "official":
             nutrition_parts = []
             if candidate.get("calories") is not None:
@@ -4280,13 +4292,37 @@ def format_restaurant_advice(advice: dict) -> str:
         lines.append(
             f"Why: {clean_restaurant_display_text(candidate['recommendation_reason'])}"
         )
+        if candidate.get("heart_healthy_pick"):
+            lines.append(
+                "Heart-healthy note: "
+                + clean_restaurant_display_text(
+                    candidate.get("heart_healthy_reason")
+                )
+            )
         lines.append(
             f"Source: {clean_restaurant_display_text(candidate['source_title'])}"
         )
         lines.append(str(candidate["source_url"]))
 
+    if any(
+        candidate.get("heart_healthy_pick")
+        for candidate in candidates
+    ):
+        heart_label_note = (
+            "Heart-Healthy Pick is based only on cited menu details "
+            "and official nutrition when available. It is general "
+            "food guidance, not a medical rating."
+        )
+    else:
+        heart_label_note = (
+            "No Heart-Healthy Pick was assigned because the cited "
+            "menu details did not support one clearly."
+        )
+
     lines.extend(
         [
+            "",
+            heart_label_note,
             "",
             "Menu availability can change. Nothing has been logged.",
             "",

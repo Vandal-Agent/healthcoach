@@ -6,6 +6,9 @@ import requests
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from food.heart_guidance import (
+    sanitize_optional_heart_healthy_picks,
+)
 from food.nutrition_lookup import MODEL_NAME, get_client
 
 
@@ -19,6 +22,11 @@ class MenuPhotoCandidate(BaseModel):
     printed_calories: float | None = None
     visible_details: str
     recommendation_reason: str
+    heart_healthy_pick: bool = False
+    heart_healthy_reason: str | None = Field(
+        default=None,
+        max_length=400,
+    )
 
 
 class MenuPhotoAnalysis(BaseModel):
@@ -116,6 +124,16 @@ Rules:
 8. Copy item names closely enough to order them.
 9. Set readable=false when the photo is too blurry or incomplete.
 10. Mention when nutrition is not printed.
+11. Set heart_healthy_pick=true for no more than one candidate, and only
+    when visible menu details clearly support it as the strongest
+    relative food-pattern choice. Favor visible vegetables, fruits,
+    whole grains, beans, fish, and lean unprocessed protein, and prefer
+    grilled, baked, or roasted preparation over fried or creamy choices.
+12. For a selected candidate, heart_healthy_reason must name only the
+    visible strengths and any visible limitation. Do not infer sodium,
+    saturated fat, ingredients, or nutrition that is not printed.
+13. If the visible evidence is insufficient, leave every candidate
+    unselected. Never claim disease prevention or personal heart risk.
 """
 
     client = get_client()
@@ -151,7 +169,20 @@ Rules:
 
     if not result.readable:
         result.candidates = []
-    return result.model_dump()
+    dumped = result.model_dump()
+    candidates, pick_status = sanitize_optional_heart_healthy_picks(
+        list(dumped.get("candidates") or [])
+    )
+    dumped["candidates"] = candidates
+    if pick_status == "multiple":
+        dumped["notes"].append(
+            "An ambiguous Heart-Healthy Pick designation was removed."
+        )
+    elif pick_status == "missing_reason":
+        dumped["notes"].append(
+            "An unexplained Heart-Healthy Pick designation was removed."
+        )
+    return dumped
 
 
 def format_menu_photo_analysis(result: dict[str, Any]) -> str:
@@ -171,7 +202,14 @@ def format_menu_photo_analysis(result: dict[str, Any]) -> str:
     ]
 
     for index, candidate in enumerate(candidates[:3], start=1):
-        lines.append(f"{index}. {candidate['item_name']}")
+        pick_label = (
+            " — Heart-Healthy Pick"
+            if candidate.get("heart_healthy_pick")
+            else ""
+        )
+        lines.append(
+            f"{index}. {candidate['item_name']}{pick_label}"
+        )
         calories = candidate.get("printed_calories")
         lines.append(
             f"Printed calories: {float(calories):g}"
@@ -185,8 +223,27 @@ def format_menu_photo_analysis(result: dict[str, Any]) -> str:
         lines.append(
             f"Why: {candidate.get('recommendation_reason') or ''}"
         )
+        if candidate.get("heart_healthy_pick"):
+            lines.append(
+                "Heart-healthy note: "
+                f"{candidate.get('heart_healthy_reason') or ''}"
+            )
         lines.append("")
 
+    if any(
+        candidate.get("heart_healthy_pick")
+        for candidate in candidates[:3]
+    ):
+        lines.append(
+            "Heart-Healthy Pick is based only on visible menu details. "
+            "It is general food guidance, not a medical rating."
+        )
+    else:
+        lines.append(
+            "No Heart-Healthy Pick was assigned because the visible "
+            "menu details did not support one clearly."
+        )
+    lines.append("")
     lines.append(
         "Nothing has been logged. These recommendations use only "
         "what is visible in the picture."

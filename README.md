@@ -17,6 +17,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Adds a non-diagnostic Heart Health Report with recorded averages,
   first-to-last trends, data completeness, and supporting exercise,
   sleep, and weight context
+- Labels no more than one evidence-supported Heart-Healthy Pick in Pantry,
+  cited online Restaurant, and visible menu-photo recommendations
 - Saves Pantry meal ideas as reusable recipes with ingredients,
   preparation, nutrition, Heart-Healthy Pick guidance, and confirmed
   serving-based logging

@@ -18,6 +18,8 @@ def candidate(
     status: str = "official",
     calories: float | None = 520,
     protein: float | None = 42,
+    heart_healthy_pick: bool = False,
+    heart_healthy_reason: str | None = None,
 ) -> RestaurantCandidate:
     return RestaurantCandidate(
         item_name=name,
@@ -25,6 +27,8 @@ def candidate(
         protein_g=protein,
         nutrition_status=status,
         recommendation_reason="Protein-forward grilled entrée.",
+        heart_healthy_pick=heart_healthy_pick,
+        heart_healthy_reason=heart_healthy_reason,
         source_title=title,
         source_url=url,
     )
@@ -136,6 +140,88 @@ class RestaurantAdvisorTests(unittest.TestCase):
         self.assertEqual(
             result["candidates"][0]["item_name"],
             "Vegetable and Chicken Bowl",
+        )
+
+    def test_preserves_one_explained_heart_healthy_pick(self) -> None:
+        structured = RestaurantAdvice(
+            found=True,
+            restaurant_display_name="Example Restaurant",
+            candidates=[
+                candidate(
+                    name="Grilled Fish and Vegetable Plate",
+                    heart_healthy_pick=True,
+                    heart_healthy_reason=(
+                        "Grilled fish with visible vegetables; sodium "
+                        "was not published."
+                    ),
+                ),
+                candidate(name="Chicken Bowl"),
+            ],
+        )
+
+        result = self.run_advisor(structured)
+
+        self.assertTrue(
+            result["candidates"][0]["heart_healthy_pick"]
+        )
+        self.assertIn(
+            "visible vegetables",
+            result["candidates"][0]["heart_healthy_reason"],
+        )
+        self.assertFalse(
+            result["candidates"][1]["heart_healthy_pick"]
+        )
+
+    def test_removes_ambiguous_multiple_picks(self) -> None:
+        structured = RestaurantAdvice(
+            found=True,
+            restaurant_display_name="Example Restaurant",
+            candidates=[
+                candidate(
+                    name="Fish Plate",
+                    heart_healthy_pick=True,
+                    heart_healthy_reason="Fish and vegetables.",
+                ),
+                candidate(
+                    name="Bean Bowl",
+                    heart_healthy_pick=True,
+                    heart_healthy_reason="Beans and vegetables.",
+                ),
+            ],
+        )
+
+        result = self.run_advisor(structured)
+
+        self.assertFalse(
+            any(
+                item["heart_healthy_pick"]
+                for item in result["candidates"]
+            )
+        )
+        self.assertIn(
+            "Removed an ambiguous Heart-Healthy Pick",
+            result["notes"][-1],
+        )
+
+    def test_removes_unexplained_pick(self) -> None:
+        structured = RestaurantAdvice(
+            found=True,
+            restaurant_display_name="Example Restaurant",
+            candidates=[
+                candidate(
+                    heart_healthy_pick=True,
+                    heart_healthy_reason=None,
+                )
+            ],
+        )
+
+        result = self.run_advisor(structured)
+
+        self.assertFalse(
+            result["candidates"][0]["heart_healthy_pick"]
+        )
+        self.assertIsNone(
+            result["candidates"][0]["heart_healthy_reason"]
         )
 
 

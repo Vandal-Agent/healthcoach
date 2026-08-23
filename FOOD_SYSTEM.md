@@ -180,6 +180,11 @@ Flow:
 - Official calories and protein are displayed only when published by the restaurant.
 - Missing nutrition remains missing; HealthCoach never estimates it.
 - Local menu recommendations may be shown without nutrition when supported by a cited primary menu source.
+- When cited menu details or official nutrition support a clear relative
+  choice, label no more than one recommendation as the Heart-Healthy Pick and
+  explain the supported strengths and limitations.
+- If cited information is insufficient, do not assign the label. Ambiguous or
+  unexplained model designations are removed rather than guessed.
 - Results are advisory and are never logged automatically.
 - Menu availability may change, so the response retains source links and an availability notice.
 
@@ -214,7 +219,17 @@ Flow:
 - It recommends up to three promising entrees.
 - Printed calories are displayed only when visible in the photograph.
 - Nutrition that is not printed is not invented.
+- When visible menu details support a clear relative choice, label no more
+  than one recommendation as the Heart-Healthy Pick and explain only visible
+  strengths and limitations.
+- If the photo does not support a clear choice, assign no label. Never infer
+  sodium, saturated fat, or hidden ingredients from the image.
 - Menu-photo recommendations are advisory and are never logged automatically.
+
+Across Pantry, online Restaurant, and menu-photo recommendations,
+Heart-Healthy Pick is general food-pattern guidance. It is not a medical
+rating, diagnosis, certification, disease-prevention claim, or assessment of
+the user's cardiovascular risk.
 
 ## Actual Meal Photos
 

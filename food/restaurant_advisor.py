@@ -7,6 +7,9 @@ from typing import Any, Literal
 from google.genai import types
 from pydantic import BaseModel, Field, field_validator
 
+from food.heart_guidance import (
+    sanitize_optional_heart_healthy_picks,
+)
 from food.nutrition_lookup import (
     MODEL_NAME,
     extract_citations,
@@ -22,6 +25,11 @@ class RestaurantCandidate(BaseModel):
     protein_g: float | None = None
     nutrition_status: Literal["official", "not_published"]
     recommendation_reason: str
+    heart_healthy_pick: bool = False
+    heart_healthy_reason: str | None = Field(
+        default=None,
+        max_length=400,
+    )
     source_title: str
     source_url: str
 
@@ -93,6 +101,13 @@ Selection priorities:
 13. If current availability is uncertain, prefer all-day menu items.
 14. Keep the report concise and include why each item may be a good
     choice.
+15. When the cited menu or official nutrition provides enough evidence,
+    identify no more than one relative Heart-Healthy Pick. Favor an
+    overall pattern with vegetables, fruits, whole grains, beans and
+    other plant proteins, fish, lean unprocessed protein, and
+    unsaturated fats, while limiting sodium, added sugar, saturated fat,
+    and heavily processed foods. If the evidence is insufficient, do not
+    designate a pick.
 """
 
     interaction = client.interactions.create(
@@ -141,6 +156,15 @@ Rules:
    description or official nutrition.
 9. Set found=false if no current entrée could be supported.
 10. Do not include sides, drinks, desserts, or unavailable items.
+11. Set heart_healthy_pick=true for no more than one candidate, and only
+    when the supplied cited report supports why it is the strongest
+    relative food-pattern choice. It does not need to be the lowest-
+    calorie item.
+12. For the selected candidate, heart_healthy_reason must name the
+    supported strengths and any important limitation. Never claim that
+    it prevents disease or describes the user's personal heart risk.
+13. When the evidence is insufficient, set heart_healthy_pick=false and
+    heart_healthy_reason=null for every candidate.
 
 CITATIONS:
 {json.dumps(citations, indent=2)}
@@ -229,13 +253,27 @@ def recommend_restaurant_entrees(
             + ", ".join(rejected_names)
         )
 
+    candidate_dicts, pick_status = (
+        sanitize_optional_heart_healthy_picks(
+            [
+                candidate.model_dump()
+                for candidate in valid_candidates[:3]
+            ]
+        )
+    )
+    if pick_status == "multiple":
+        notes.append(
+            "Removed an ambiguous Heart-Healthy Pick designation."
+        )
+    elif pick_status == "missing_reason":
+        notes.append(
+            "Removed an unexplained Heart-Healthy Pick designation."
+        )
+
     return {
         "found": bool(result.found and valid_candidates),
         "restaurant_display_name": result.restaurant_display_name,
-        "candidates": [
-            candidate.model_dump()
-            for candidate in valid_candidates[:3]
-        ],
+        "candidates": candidate_dicts,
         "notes": notes,
         "citations": citations,
     }
