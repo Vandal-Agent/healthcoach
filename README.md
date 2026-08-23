@@ -14,6 +14,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   history in
   Telegram, including daily entries, missing days, averages, and
   changes
+- Adds a non-diagnostic Heart Health Report with recorded averages,
+  first-to-last trends, data completeness, and supporting exercise,
+  sleep, and weight context
 - Saves Pantry meal ideas as reusable recipes with ingredients,
   preparation, nutrition, Heart-Healthy Pick guidance, and confirmed
   serving-based logging

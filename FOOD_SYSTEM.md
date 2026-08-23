@@ -628,6 +628,28 @@ Health Tracker day, preventing an older reading from being copied forward.
 Blood pressure is informational only and is never diagnosed, rated, or used
 for calorie calculations.
 
+## Heart Health Report
+
+Reports includes a Heart Health Report for the last 7, 14, or 30 days. It
+reuses the recorded Health Tracker facts already shown in Health History:
+
+- Resting heart rate
+- Cardio Fitness
+- Walking Heart Rate Average
+- Blood pressure
+- Exercise Minutes
+- Sleep
+- Weight
+
+The report shows recorded-day averages, first-to-last recorded changes where
+appropriate, the latest blood-pressure pair, and data completeness. Missing
+days stay missing and never become zeros. It also points to the existing
+Heart-Healthy Pick in Pantry Meal Ideas and Smart Pantry swaps.
+
+The report is informational only. It never diagnoses, assigns a
+cardiovascular-risk score, classifies an isolated measurement, changes calorie
+targets, or writes back to Apple Health or the Health Tracker.
+
 The scheduled morning coaching path does not refresh or read Lose It email
 data. If the Food Ledger has no entries for the previous day, HealthCoach
 reports that no foods were recorded and does not calculate a calorie deficit

@@ -630,10 +630,16 @@ def menu_reply_markup(message):
             ["7 days", "14 days", "30 days"],
             ["Back", "Cancel"],
         ]
+    elif message.startswith("Heart Health Report"):
+        rows = [
+            ["7 days", "14 days", "30 days"],
+            ["Back", "Cancel"],
+        ]
     elif "Reports Menu\n\n" in message:
         rows = [
             ["Today", "Weekly report"],
             ["Goals"],
+            ["Heart health"],
             ["Back", "Cancel"],
         ]
     elif "Goals Menu\n\n" in message:
@@ -4804,13 +4810,220 @@ def get_formatted_health_history(
     return format_health_history(history)
 
 
+def healthcoach_heart_health_menu_text() -> str:
+    return (
+        "Heart Health Report\n\n"
+        "Choose how much recorded heart-health history to "
+        "summarize.\n\n"
+        "1. Last 7 days\n"
+        "2. Last 14 days\n"
+        "3. Last 30 days\n"
+        "4. Back\n\n"
+        "This report shows recorded trends only. It does not "
+        "diagnose or assign a medical risk rating."
+    )
+
+
+def recorded_metric_change(
+    history: dict,
+    field: str,
+) -> float | None:
+    values = [
+        float(item[field])
+        for item in history.get("days") or []
+        if item.get(field) is not None
+    ]
+    if len(values) < 2:
+        return None
+    return values[-1] - values[0]
+
+
+def format_recorded_change(
+    value: float | None,
+    unit: str,
+) -> str:
+    if value is None:
+        return "not available"
+    return f"{float(value):+.1f} {unit}"
+
+
+def format_heart_health_report(history: dict) -> str:
+    period_days = int(history.get("period_days") or 0)
+    start_date = history.get("start_date")
+    end_date = history.get("end_date")
+
+    resting_change = recorded_metric_change(
+        history,
+        "resting_heart_rate",
+    )
+    cardio_change = recorded_metric_change(
+        history,
+        "cardio_fitness",
+    )
+    walking_change = recorded_metric_change(
+        history,
+        "walking_heart_rate_average",
+    )
+
+    blood_pressure_days = [
+        item
+        for item in history.get("days") or []
+        if (
+            item.get("blood_pressure_systolic") is not None
+            and item.get("blood_pressure_diastolic") is not None
+        )
+    ]
+    latest_blood_pressure = (
+        blood_pressure_days[-1]
+        if blood_pressure_days
+        else None
+    )
+
+    def average_text(field: str, unit: str) -> str:
+        value = history.get(field)
+        if value is None:
+            return "not available"
+        return f"{format_display_number(value)} {unit}".strip()
+
+    period_text = ""
+    if start_date is not None and end_date is not None:
+        period_text = (
+            f"{start_date.strftime('%b ')}{start_date.day}–"
+            f"{end_date.strftime('%b ')}{end_date.day}, "
+            f"{end_date.year}"
+        )
+
+    lines = [
+        f"Heart Health Report - Last {period_days} Days",
+        period_text,
+        "",
+        "Heart measurements",
+        "- Resting heart rate: average "
+        + average_text("average_resting_heart_rate", "bpm")
+        + "; recorded change "
+        + format_recorded_change(resting_change, "bpm")
+        + "; recorded "
+        + f"{int(history.get('resting_heart_rate_entries') or 0)}"
+        + f"/{period_days} days",
+        "- Cardio Fitness: average "
+        + average_text("average_cardio_fitness", "mL/kg/min")
+        + "; recorded change "
+        + format_recorded_change(cardio_change, "mL/kg/min")
+        + "; recorded "
+        + f"{int(history.get('cardio_fitness_entries') or 0)}"
+        + f"/{period_days} days",
+        "- Walking heart rate: average "
+        + average_text("average_walking_heart_rate", "bpm")
+        + "; recorded change "
+        + format_recorded_change(walking_change, "bpm")
+        + "; recorded "
+        + f"{int(history.get('walking_heart_rate_entries') or 0)}"
+        + f"/{period_days} days",
+    ]
+
+    average_systolic = history.get(
+        "average_blood_pressure_systolic"
+    )
+    average_diastolic = history.get(
+        "average_blood_pressure_diastolic"
+    )
+    if (
+        average_systolic is not None
+        and average_diastolic is not None
+    ):
+        average_blood_pressure_text = (
+            f"{format_display_number(average_systolic)}/"
+            f"{format_display_number(average_diastolic)} mmHg"
+        )
+    else:
+        average_blood_pressure_text = "not available"
+
+    latest_blood_pressure_text = "not available"
+    if latest_blood_pressure is not None:
+        latest_blood_pressure_text = (
+            f"{format_display_number(latest_blood_pressure['blood_pressure_systolic'])}/"
+            f"{format_display_number(latest_blood_pressure['blood_pressure_diastolic'])} "
+            "mmHg on "
+            f"{latest_blood_pressure['date'].strftime('%a %b ')}"
+            f"{latest_blood_pressure['date'].day}"
+        )
+
+    lines.extend(
+        [
+            "- Blood pressure: average "
+            + average_blood_pressure_text
+            + "; latest "
+            + latest_blood_pressure_text
+            + "; recorded "
+            + f"{int(history.get('blood_pressure_entries') or 0)}"
+            + f"/{period_days} days",
+            "",
+            "Activity and recovery context",
+            "- Exercise Minutes: average "
+            + average_text("average_exercise_minutes", "min")
+            + "; recorded "
+            + f"{int(history.get('exercise_entries') or 0)}"
+            + f"/{period_days} days",
+            "- Sleep: average "
+            + average_text("average_sleep", "h")
+            + "; recorded "
+            + f"{int(history.get('sleep_entries') or 0)}"
+            + f"/{period_days} days",
+            "- Weight: average "
+            + average_text("average_weight", "lb")
+            + "; recorded change "
+            + format_recorded_change(
+                history.get("weight_change"),
+                "lb",
+            )
+            + "; recorded "
+            + f"{int(history.get('weight_entries') or 0)}"
+            + f"/{period_days} days",
+            "",
+            "How to read this",
+            "- Averages use recorded days only.",
+            "- Changes compare the first and last recorded values.",
+            "- Missing readings stay missing and are never treated as zero.",
+            "",
+            "Food support",
+            "- Pantry Meal Ideas includes a Heart-Healthy Pick.",
+            "- Smart Pantry swaps can suggest practical replacements.",
+            "",
+            "This report organizes recorded trends only. It does not "
+            "diagnose, score cardiovascular risk, or classify a single "
+            "reading. Discuss medical interpretation with a clinician.",
+            "",
+            "Reply 7 days, 14 days, 30 days, Back, or Cancel.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def get_formatted_heart_health_report(
+    *,
+    reference_date,
+    days: int,
+) -> str:
+    rows = get_recent_rows(
+        reference_date,
+        days_back=int(days) - 1,
+    )
+    history = build_health_history_data(
+        reference_date=reference_date,
+        days=days,
+        rows=rows,
+    )
+    return format_heart_health_report(history)
+
+
 def healthcoach_reports_menu_text() -> str:
     return (
         "Reports Menu\n\n"
         "1. Today's summary\n"
         "2. Weekly report\n"
         "3. Goals\n"
-        "4. Back"
+        "4. Heart health\n"
+        "5. Back"
     )
 
 
@@ -12746,6 +12959,63 @@ def process_telegram_update(update):
             )
             return
 
+        if current_step == "heart_health_report":
+            if lowered in {"4", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="reports",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_reports_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            period_days = (
+                7
+                if lowered in {"1", "7", "7 days", "last 7 days"}
+                else 14
+                if lowered in {
+                    "2",
+                    "14",
+                    "14 days",
+                    "last 14 days",
+                }
+                else 30
+                if lowered in {
+                    "3",
+                    "30",
+                    "30 days",
+                    "last 30 days",
+                }
+                else None
+            )
+            if period_days is None:
+                send_telegram_msg(
+                    healthcoach_heart_health_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            try:
+                message = get_formatted_heart_health_report(
+                    reference_date=today,
+                    days=period_days,
+                )
+            except Exception:
+                logging.exception("Heart Health Report lookup failed")
+                send_telegram_msg(
+                    "I couldn't load the Heart Health Report right "
+                    "now. No health data was changed.",
+                    chat_id=chat_id,
+                )
+                return
+
+            send_telegram_msg(message, chat_id=chat_id)
+            return
+
         if current_step == "health_sleep_entry":
             sleep_value = extract_sleep_value_from_text(
                 text,
@@ -13213,7 +13483,24 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"4", "back"}:
+            if lowered in {
+                "4",
+                "heart health",
+                "heart health report",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="heart_health_report",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_heart_health_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"5", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
