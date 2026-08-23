@@ -116,6 +116,36 @@ class BloodPressureTests(unittest.TestCase):
         self.assertEqual(saved_row[13:15], [121.0, 79.0])
         self.assertEqual(saved_row[15], "08/22/2026 07:15 AM")
 
+    def test_webhook_accepts_direct_iphone_start_date_text(self):
+        response, saved_row = self.post_webhook(
+            {
+                "blood_pressure_systolic": 121,
+                "blood_pressure_diastolic": 79,
+                "blood_pressure_measured_at": (
+                    "8/22/26, 7:15\u202fAM"
+                ),
+            }
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(saved_row[13:15], [121.0, 79.0])
+        self.assertEqual(saved_row[15], "08/22/2026 07:15 AM")
+
+    def test_webhook_rejects_multiple_iphone_dates(self):
+        response, saved_row = self.post_webhook(
+            {
+                "blood_pressure_systolic": 121,
+                "blood_pressure_diastolic": 79,
+                "blood_pressure_measured_at": (
+                    "8/22/26, 12:00\u202fPM\n"
+                    "8/22/26, 7:00\u202fAM"
+                ),
+            }
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(saved_row[13:16], ["", "", ""])
+
     def test_missing_sync_preserves_existing_paired_reading(self):
         existing = tracker_row(
             "08/22/2026",

@@ -776,8 +776,15 @@ def parse_health_measurement_timestamp(value):
     if isinstance(value, datetime):
         parsed = value
     else:
-        text = str(value or "").strip()
+        text = (
+            str(value or "")
+            .replace("\u202f", " ")
+            .replace("\u00a0", " ")
+            .strip()
+        )
         if not text:
+            return None
+        if len(text.splitlines()) != 1:
             return None
 
         parsed = None
@@ -788,6 +795,9 @@ def parse_health_measurement_timestamp(value):
         except ValueError:
             for date_format in (
                 "%m/%d/%Y %I:%M %p",
+                "%m/%d/%Y, %I:%M %p",
+                "%m/%d/%y %I:%M %p",
+                "%m/%d/%y, %I:%M %p",
                 "%Y-%m-%d %H:%M:%S",
             ):
                 try:
