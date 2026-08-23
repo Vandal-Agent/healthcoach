@@ -10,7 +10,7 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   heart-rate average, Cardio Fitness, paired blood-pressure readings,
   protein, sleep, weight, HRV, and calorie data
 - Shows 7-, 14-, and 30-day weight, sleep, exercise, resting
-  heart-rate, walking heart-rate, Cardio Fitness, and blood-pressure
+  heart-rate, HRV, walking heart-rate, Cardio Fitness, and blood-pressure
   history in
   Telegram, including daily entries, missing days, averages, and
   changes

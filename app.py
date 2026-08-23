@@ -948,6 +948,10 @@ def row_to_metrics(row):
     if weight_val == 0:
         weight_val = None
 
+    hrv_value = safe_float(padded[7], None)
+    if hrv_value is not None and hrv_value <= 0:
+        hrv_value = None
+
     row_date = parse_row_date(padded)
     blood_pressure = parse_blood_pressure(
         padded[13],
@@ -965,7 +969,7 @@ def row_to_metrics(row):
         "sleep_raw": padded[4],
         "rhr": safe_float(padded[5], None),
         "weight": weight_val,
-        "hrv": safe_float(padded[7], 0),
+        "hrv": hrv_value,
         "dietary_cals": safe_float(padded[8], 0),
         "protein": safe_float(padded[9], 0),
         "exercise_minutes": safe_float(padded[10], None),
@@ -1236,6 +1240,11 @@ def build_progress_message(label, metrics):
             f"{format_display_number(resting_heart_rate)} bpm"
         )
 
+    hrv = metrics.get("hrv")
+    hrv_text = "not recorded"
+    if hrv is not None:
+        hrv_text = f"{format_display_number(hrv)} ms"
+
     cardio_fitness = metrics.get("cardio_fitness")
     cardio_fitness_text = "not recorded"
     if cardio_fitness is not None:
@@ -1282,6 +1291,7 @@ def build_progress_message(label, metrics):
         f"Protein: {metrics['protein']:.0f}g\n"
         f"Exercise: {exercise_text}\n"
         f"Resting heart rate: {resting_heart_rate_text}\n"
+        f"HRV: {hrv_text}\n"
         f"Cardio fitness: {cardio_fitness_text}\n"
         f"Walking heart rate: {walking_heart_rate_text}\n"
         f"Blood pressure: {blood_pressure_text}\n"
@@ -4357,7 +4367,7 @@ def healthcoach_health_history_menu_text() -> str:
     return (
         "Health History\n\n"
         "Choose how much weight, sleep, exercise, resting "
-        "heart-rate, Cardio Fitness, walking heart-rate, and "
+        "heart-rate, HRV, Cardio Fitness, walking heart-rate, and "
         "blood-pressure history "
         "to view.\n\n"
         "1. Last 7 days\n"
@@ -4397,6 +4407,7 @@ def build_health_history_data(
     sleep_values = []
     exercise_values = []
     resting_heart_rate_values = []
+    hrv_values = []
     cardio_fitness_values = []
     walking_heart_rate_values = []
     blood_pressure_systolic_values = []
@@ -4409,6 +4420,7 @@ def build_health_history_data(
         sleep_hours = metrics.get("sleep_hours")
         exercise_minutes = metrics.get("exercise_minutes")
         resting_heart_rate = metrics.get("rhr")
+        hrv = metrics.get("hrv")
         cardio_fitness = metrics.get("cardio_fitness")
         walking_heart_rate = metrics.get(
             "walking_heart_rate_average"
@@ -4433,6 +4445,8 @@ def build_health_history_data(
             resting_heart_rate_values.append(
                 float(resting_heart_rate)
             )
+        if hrv is not None:
+            hrv_values.append(float(hrv))
         if cardio_fitness is not None:
             cardio_fitness_values.append(float(cardio_fitness))
         if walking_heart_rate is not None:
@@ -4472,6 +4486,11 @@ def build_health_history_data(
                 "resting_heart_rate": (
                     float(resting_heart_rate)
                     if resting_heart_rate is not None
+                    else None
+                ),
+                "hrv": (
+                    float(hrv)
+                    if hrv is not None
                     else None
                 ),
                 "cardio_fitness": (
@@ -4539,6 +4558,17 @@ def build_health_history_data(
         "resting_heart_rate_entries": len(
             resting_heart_rate_values
         ),
+        "average_hrv": (
+            sum(hrv_values) / len(hrv_values)
+            if hrv_values
+            else None
+        ),
+        "hrv_change": (
+            hrv_values[-1] - hrv_values[0]
+            if len(hrv_values) >= 2
+            else None
+        ),
+        "hrv_entries": len(hrv_values),
         "average_cardio_fitness": (
             sum(cardio_fitness_values)
             / len(cardio_fitness_values)
@@ -4598,6 +4628,7 @@ def format_health_history(history: dict) -> str:
         sleep_hours = item.get("sleep_hours")
         exercise_minutes = item.get("exercise_minutes")
         resting_heart_rate = item.get("resting_heart_rate")
+        hrv = item.get("hrv")
         cardio_fitness = item.get("cardio_fitness")
         walking_heart_rate = item.get(
             "walking_heart_rate_average"
@@ -4628,6 +4659,11 @@ def format_health_history(history: dict) -> str:
             if resting_heart_rate is not None
             else missing_text
         )
+        hrv_text = (
+            f"{format_display_number(hrv)} ms"
+            if hrv is not None
+            else missing_text
+        )
         cardio_fitness_text = (
             f"{format_display_number(cardio_fitness)}"
             if cardio_fitness is not None
@@ -4652,6 +4688,7 @@ def format_health_history(history: dict) -> str:
                 f"{day.strftime('%a %b ')}{day.day}: "
                 f"wt {weight_text}; sl {sleep_text}; "
                 f"ex {exercise_text}; RHR {resting_heart_rate_text}; "
+                f"HRV {hrv_text}; "
                 f"CF {cardio_fitness_text}; WHR "
                 f"{walking_heart_rate_text}; BP {blood_pressure_text}"
             )
@@ -4660,7 +4697,8 @@ def format_health_history(history: dict) -> str:
                 f"{day.strftime('%a %b ')}{day.day}: "
                 f"weight {weight_text}; sleep {sleep_text}; "
                 f"exercise {exercise_text}; resting HR "
-                f"{resting_heart_rate_text}; cardio fitness "
+                f"{resting_heart_rate_text}; HRV {hrv_text}; "
+                f"cardio fitness "
                 f"{cardio_fitness_text}; walking HR "
                 f"{walking_heart_rate_text}; blood pressure "
                 f"{blood_pressure_text}"
@@ -4676,6 +4714,8 @@ def format_health_history(history: dict) -> str:
     average_resting_heart_rate = history.get(
         "average_resting_heart_rate"
     )
+    average_hrv = history.get("average_hrv")
+    hrv_change = history.get("hrv_change")
     average_cardio_fitness = history.get(
         "average_cardio_fitness"
     )
@@ -4750,6 +4790,27 @@ def format_health_history(history: dict) -> str:
     lines.append(
         "- Resting heart rate recorded: "
         f"{int(history.get('resting_heart_rate_entries') or 0)}"
+        f"/{period_days} days"
+    )
+    lines.append(
+        "- Average HRV: "
+        + (
+            f"{format_display_number(average_hrv)} ms"
+            if average_hrv is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Recorded HRV change: "
+        + (
+            f"{float(hrv_change):+.1f} ms"
+            if hrv_change is not None
+            else "not available"
+        )
+    )
+    lines.append(
+        "- HRV recorded: "
+        f"{int(history.get('hrv_entries') or 0)}"
         f"/{period_days} days"
     )
     lines.append(
@@ -4892,6 +4953,10 @@ def format_heart_health_report(history: dict) -> str:
         history,
         "resting_heart_rate",
     )
+    hrv_change = recorded_metric_change(
+        history,
+        "hrv",
+    )
     cardio_change = recorded_metric_change(
         history,
         "cardio_fitness",
@@ -4940,6 +5005,13 @@ def format_heart_health_report(history: dict) -> str:
         + format_recorded_change(resting_change, "bpm")
         + "; recorded "
         + f"{int(history.get('resting_heart_rate_entries') or 0)}"
+        + f"/{period_days} days",
+        "- HRV: average "
+        + average_text("average_hrv", "ms")
+        + "; recorded change "
+        + format_recorded_change(hrv_change, "ms")
+        + "; recorded "
+        + f"{int(history.get('hrv_entries') or 0)}"
         + f"/{period_days} days",
         "- Cardio Fitness: average "
         + average_text("average_cardio_fitness", "mL/kg/min")
@@ -17279,6 +17351,8 @@ def webhook():
         weight = None
 
     hrv = safe_float(data.get("hrv"), None)
+    if hrv is not None and hrv <= 0:
+        hrv = None
     dietary = safe_float(data.get("dietary_calories"), None)
     protein = safe_float(data.get("protein"), None)
     exercise_minutes = safe_float(

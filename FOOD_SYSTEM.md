@@ -613,6 +613,14 @@ and do not become zero. Resting heart rate is presented as recorded health
 data only; HealthCoach does not diagnose it or assign a cardiovascular-risk
 score.
 
+The Shortcut may send `hrv` as Apple Health's Heart Rate Variability value in
+milliseconds. HealthCoach stores it in the existing HRV column H, displays it
+in Current Status, and includes daily values, the recorded-day average, and
+first-to-last recorded change in Health History and the Heart Health Report.
+Blank and nonpositive values display as not recorded rather than zero. HRV is
+informational only and is never diagnosed, classified, compared with other
+people, or used for calorie calculations.
+
 The Shortcut may send `cardio_fitness` as Apple Health's Cardio Fitness
 value in mL/kg/min. HealthCoach appends it to column L, shows the recorded
 value in Current Status, and includes daily values, the recorded-day average,
@@ -649,6 +657,7 @@ Reports includes a Heart Health Report for the last 7, 14, or 30 days. It
 reuses the recorded Health Tracker facts already shown in Health History:
 
 - Resting heart rate
+- Heart Rate Variability (HRV)
 - Cardio Fitness
 - Walking Heart Rate Average
 - Blood pressure
