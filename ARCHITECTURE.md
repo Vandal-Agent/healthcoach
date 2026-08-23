@@ -205,7 +205,10 @@ messages already sent
 sleep prompt status
 telegram polling offset
 
-Prevents duplicate messages.
+Prevents duplicate messages. The offset advances after each individual
+update even when that update raises an application error. A failed update is
+logged, the user is notified, and later Telegram messages continue instead
+of remaining blocked behind one repeatedly failing update.
 
 Environment Variables
 

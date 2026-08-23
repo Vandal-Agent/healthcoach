@@ -24,6 +24,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   burn-based projections, and remaining-calorie feedback after food logging
 - Uses the Food Ledger rather than Lose It for current nutrition totals
 - Sends daily and weekly coaching through Telegram
+- Skips and reports an individual failed Telegram update so one malformed
+  interaction cannot freeze all later messages
 - Runs scheduled health checks and reminders
 
 ## Project Location

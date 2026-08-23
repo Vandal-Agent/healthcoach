@@ -222,6 +222,9 @@ Flow:
 - User selects Estimate an actual meal photo or captions a photo with
   "Estimate this meal."
 - HealthCoach estimates ranges for calories, protein, carbohydrates, and fat.
+- If the photo is unreadable or has no usable nutrition ranges, HealthCoach
+  stops the estimate and asks for another photo. It never advances an
+  unreadable result to portion, meal, confirmation, or logging steps.
 - The estimate lists visible components, portion assumptions, and uncertainty.
 - HealthCoach asks for high-impact clarification such as protein type,
   preparation method, sauce, dressing, or added oil.

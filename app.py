@@ -5064,6 +5064,26 @@ def handle_food_photo_conversation(
         )
         return True
 
+    if current_step in {"clarification", "portion", "meal"}:
+        estimate = dict(known_data.get("estimate") or {})
+        if not estimate.get("readable"):
+            start_conversation(
+                chat_id=chat_id,
+                conversation_type="healthcoach_menu",
+                current_step="await_food_photo",
+                known_data={},
+                missing_fields=[],
+                original_message="Retry unreadable meal photo",
+            )
+            send_telegram_msg(
+                "I couldn't see enough nutrition information in "
+                "that photo to continue safely. Nothing was "
+                "logged.\n\nSend another clear meal photo, reply "
+                "Back, or reply Cancel.",
+                chat_id=chat_id,
+            )
+            return True
+
     if current_step == "clarification":
         estimate = dict(known_data.get("estimate") or {})
 
@@ -5633,28 +5653,43 @@ def process_telegram_update(update):
                     user_context=caption,
                 )
 
-                start_conversation(
-                    chat_id=chat_id,
-                    conversation_type="food_photo_estimate",
-                    current_step="clarification",
-                    known_data={
-                        "estimate": result,
-                        "photo_caption": caption,
-                    },
-                    missing_fields=[],
-                    original_message=caption or "Food photo",
-                )
+                if result.get("readable"):
+                    start_conversation(
+                        chat_id=chat_id,
+                        conversation_type="food_photo_estimate",
+                        current_step="clarification",
+                        known_data={
+                            "estimate": result,
+                            "photo_caption": caption,
+                        },
+                        missing_fields=[],
+                        original_message=caption or "Food photo",
+                    )
 
-                response_message = (
-                    format_food_photo_estimate(result)
-                    + "\n\n"
-                    "Tell me any details that would improve this "
-                    "estimate. The most useful details are:\n"
-                    "- Type of meat or protein\n"
-                    "- Grilled, fried, breaded, or another method\n"
-                    "- Added oil, sauce, or dressing\n\n"
-                    "Reply with the details, Skip details, or Cancel."
-                )
+                    response_message = (
+                        format_food_photo_estimate(result)
+                        + "\n\n"
+                        "Tell me any details that would improve this "
+                        "estimate. The most useful details are:\n"
+                        "- Type of meat or protein\n"
+                        "- Grilled, fried, breaded, or another method\n"
+                        "- Added oil, sauce, or dressing\n\n"
+                        "Reply with the details, Skip details, or Cancel."
+                    )
+                else:
+                    start_conversation(
+                        chat_id=chat_id,
+                        conversation_type="healthcoach_menu",
+                        current_step="await_food_photo",
+                        known_data={},
+                        missing_fields=[],
+                        original_message="Retry unreadable meal photo",
+                    )
+                    response_message = (
+                        format_food_photo_estimate(result)
+                        + "\n\nNothing was logged. Send another clear "
+                        "meal photo, reply Back, or reply Cancel."
+                    )
             else:
                 result = analyze_menu_photo(
                     image_bytes,
@@ -16269,6 +16304,43 @@ def process_telegram_update(update):
     send_telegram_msg(build_help_message(), chat_id=chat_id)
 
 
+def process_telegram_update_safely(update):
+    """Process one update without allowing it to block later updates."""
+    update_id = update.get("update_id")
+
+    try:
+        process_telegram_update(update)
+    except Exception:
+        logging.exception(
+            "Telegram update %s failed and will be skipped",
+            update_id,
+        )
+        chat_id = (
+            update.get("message", {})
+            .get("chat", {})
+            .get("id")
+        )
+        if chat_id is not None:
+            send_telegram_msg(
+                "I couldn't finish processing that message. "
+                "It was skipped so HealthCoach can continue. "
+                "Please send /menu or try again.",
+                chat_id=chat_id,
+            )
+    finally:
+        if update_id is not None:
+            state = load_state()
+            next_offset = int(update_id) + 1
+            current_offset = state.get("telegram_update_offset")
+            if current_offset is not None:
+                next_offset = max(
+                    next_offset,
+                    int(current_offset),
+                )
+            state["telegram_update_offset"] = next_offset
+            save_state(state)
+
+
 def telegram_poll_loop():
     logging.info("Telegram polling started")
 
@@ -16292,13 +16364,7 @@ def telegram_poll_loop():
                 continue
 
             for update in data.get("result", []):
-                process_telegram_update(update)
-                update_id = update.get("update_id")
-
-                if update_id is not None:
-                    state = load_state()
-                    state["telegram_update_offset"] = int(update_id) + 1
-                    save_state(state)
+                process_telegram_update_safely(update)
 
         except Exception as e:
             logging.error("Telegram polling error: %s", e)

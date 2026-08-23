@@ -109,6 +109,81 @@ class PhotoIntentTests(unittest.TestCase):
             send.call_args.args[0],
         )
 
+    def test_unreadable_meal_photo_does_not_start_estimate_flow(self) -> None:
+        unreadable = {
+            "readable": False,
+            "dish_name": None,
+            "visible_components": [],
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=None,
+            ),
+            patch.object(app, "start_conversation") as start,
+            patch.object(
+                app,
+                "download_telegram_photo",
+                return_value=(b"photo", "image/jpeg"),
+            ),
+            patch.object(
+                app,
+                "analyze_food_photo",
+                return_value=unreadable,
+            ),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "photo": [{"file_id": "photo-1"}],
+                    "caption": "Estimate this meal",
+                }
+            })
+
+        self.assertEqual(
+            start.call_args.kwargs["conversation_type"],
+            "healthcoach_menu",
+        )
+        self.assertEqual(
+            start.call_args.kwargs["current_step"],
+            "await_food_photo",
+        )
+        self.assertIn("Nothing was logged", send.call_args.args[0])
+        self.assertNotIn("Skip details", send.call_args.args[0])
+
+    def test_unreadable_saved_estimate_cannot_reach_midpoint(self) -> None:
+        conversation = {
+            "conversation_type": "food_photo_estimate",
+            "current_step": "meal",
+            "known_data": {
+                "estimate": {"readable": False},
+                "portion_fraction": 1.0,
+            },
+        }
+        with (
+            patch.object(app, "start_conversation") as start,
+            patch.object(
+                app,
+                "midpoint_food_photo_nutrition",
+            ) as midpoint,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            handled = app.handle_food_photo_conversation(
+                active_conversation=conversation,
+                text="Afternoon snack",
+                chat_id=123,
+            )
+
+        self.assertTrue(handled)
+        midpoint.assert_not_called()
+        self.assertEqual(
+            start.call_args.kwargs["current_step"],
+            "await_food_photo",
+        )
+        self.assertIn("Nothing was logged", send.call_args.args[0])
+
     def test_chooser_selection_reuses_photo_for_menu(self) -> None:
         chooser = {
             "conversation_type": "healthcoach_menu",
