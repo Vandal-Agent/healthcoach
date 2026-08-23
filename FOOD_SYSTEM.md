@@ -595,6 +595,16 @@ Shortcut sync replaces them.
 The metric is recorded without medical interpretation and does not affect
 calorie calculations.
 
+The Shortcut may send `blood_pressure_systolic`,
+`blood_pressure_diastolic`, and `blood_pressure_measured_at` from one Apple
+Health blood-pressure sample. HealthCoach stores the complete pair and its
+actual measurement time in columns N through P, shows it in Current Status,
+and includes recorded-day averages in 7-, 14-, and 30-day Health History.
+The three values must travel together and the source date must match the
+Health Tracker day, preventing an older reading from being copied forward.
+Blood pressure is informational only and is never diagnosed, rated, or used
+for calorie calculations.
+
 The scheduled morning coaching path does not refresh or read Lose It email
 data. If the Food Ledger has no entries for the previous day, HealthCoach
 reports that no foods were recorded and does not calculate a calorie deficit

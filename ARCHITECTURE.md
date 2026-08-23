@@ -132,6 +132,9 @@ sleep_hours (sometimes)
 exercise_minutes (optional Apple Exercise Time total for today)
 cardio_fitness (optional Apple Health Cardio Fitness in mL/kg/min)
 walking_heart_rate_average (optional Apple Health Walking Heart Rate Average)
+blood_pressure_systolic (optional paired Apple Health reading)
+blood_pressure_diastolic (optional paired Apple Health reading)
+blood_pressure_measured_at (required source time for a paired reading)
 2. Lose It email
 
 Daily CSV attachment downloaded to:
@@ -167,6 +170,9 @@ Protein
 Exercise Minutes
 Cardio Fitness
 Walking Heart Rate Average
+Blood Pressure Systolic
+Blood Pressure Diastolic
+Blood Pressure Measured At
 
 The RHR column remains column F. Current status and Health History display
 recorded resting heart rate without medical interpretation.
@@ -176,6 +182,10 @@ valid; missing Cardio Fitness values are not converted to zero.
 
 Walking Heart Rate Average is appended as column M and is stored in beats
 per minute without medical interpretation.
+
+Blood-pressure systolic, diastolic, and source measurement time are appended
+as columns N through P. HealthCoach accepts and displays them only as one
+complete same-day pair, and does not diagnose or rate the reading.
 
 Telegram Messaging
 

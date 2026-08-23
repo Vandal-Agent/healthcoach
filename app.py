@@ -155,10 +155,14 @@ HEADERS = [
     "Exercise Minutes",
     "Cardio Fitness",
     "Walking Heart Rate Average",
+    "Blood Pressure Systolic",
+    "Blood Pressure Diastolic",
+    "Blood Pressure Measured At",
 ]
 
-TRACKER_LAST_COLUMN = "M"
+TRACKER_LAST_COLUMN = "P"
 MAX_WALKING_HEART_RATE_BPM = 300.0
+MAX_BLOOD_PRESSURE_MMHG = 300.0
 
 EARLY_PROTEIN_MEALS = {"breakfast", "school snack", "lunch"}
 
@@ -767,6 +771,72 @@ def parse_walking_heart_rate(value):
     return parsed
 
 
+def parse_health_measurement_timestamp(value):
+    """Return an Apple Health measurement time in Pacific time."""
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+
+        parsed = None
+        try:
+            parsed = datetime.fromisoformat(
+                text.replace("Z", "+00:00")
+            )
+        except ValueError:
+            for date_format in (
+                "%m/%d/%Y %I:%M %p",
+                "%Y-%m-%d %H:%M:%S",
+            ):
+                try:
+                    parsed = datetime.strptime(text, date_format)
+                    break
+                except ValueError:
+                    continue
+
+        if parsed is None:
+            return None
+
+    if parsed.tzinfo is None:
+        return PACIFIC_TZ.localize(parsed)
+    return parsed.astimezone(PACIFIC_TZ)
+
+
+def parse_blood_pressure(
+    systolic_value,
+    diastolic_value,
+    measured_at_value,
+    *,
+    expected_date=None,
+):
+    """Validate one paired blood-pressure reading and its source time."""
+    systolic = safe_float(systolic_value, None)
+    diastolic = safe_float(diastolic_value, None)
+    measured_at = parse_health_measurement_timestamp(
+        measured_at_value
+    )
+
+    if (
+        systolic is None
+        or diastolic is None
+        or measured_at is None
+        or not 0 < systolic <= MAX_BLOOD_PRESSURE_MMHG
+        or not 0 < diastolic <= MAX_BLOOD_PRESSURE_MMHG
+    ):
+        return None
+
+    if expected_date is not None and measured_at.date() != expected_date:
+        return None
+
+    return {
+        "systolic": systolic,
+        "diastolic": diastolic,
+        "measured_at": measured_at,
+    }
+
+
 def safe_int(value, default=0):
     try:
         if value in ("", None):
@@ -859,6 +929,14 @@ def row_to_metrics(row):
     if weight_val == 0:
         weight_val = None
 
+    row_date = parse_row_date(padded)
+    blood_pressure = parse_blood_pressure(
+        padded[13],
+        padded[14],
+        padded[15],
+        expected_date=row_date,
+    )
+
     return {
         "timestamp": padded[0],
         "steps": safe_int(padded[1], 0),
@@ -875,6 +953,21 @@ def row_to_metrics(row):
         "cardio_fitness": safe_float(padded[11], None),
         "walking_heart_rate_average": parse_walking_heart_rate(
             padded[12]
+        ),
+        "blood_pressure_systolic": (
+            blood_pressure["systolic"]
+            if blood_pressure is not None
+            else None
+        ),
+        "blood_pressure_diastolic": (
+            blood_pressure["diastolic"]
+            if blood_pressure is not None
+            else None
+        ),
+        "blood_pressure_measured_at": (
+            blood_pressure["measured_at"]
+            if blood_pressure is not None
+            else None
         ),
     }
 
@@ -1140,6 +1233,28 @@ def build_progress_message(label, metrics):
             f"{format_display_number(walking_heart_rate)} bpm"
         )
 
+    blood_pressure_text = "not recorded"
+    blood_pressure_systolic = metrics.get(
+        "blood_pressure_systolic"
+    )
+    blood_pressure_diastolic = metrics.get(
+        "blood_pressure_diastolic"
+    )
+    blood_pressure_measured_at = metrics.get(
+        "blood_pressure_measured_at"
+    )
+    if (
+        blood_pressure_systolic is not None
+        and blood_pressure_diastolic is not None
+        and blood_pressure_measured_at is not None
+    ):
+        blood_pressure_text = (
+            f"{format_display_number(blood_pressure_systolic)}/"
+            f"{format_display_number(blood_pressure_diastolic)} "
+            "mmHg at "
+            f"{blood_pressure_measured_at.strftime('%I:%M %p').lstrip('0')}"
+        )
+
     return (
         f"{label}\n"
         f"Steps: {metrics['steps']}\n"
@@ -1150,6 +1265,7 @@ def build_progress_message(label, metrics):
         f"Resting heart rate: {resting_heart_rate_text}\n"
         f"Cardio fitness: {cardio_fitness_text}\n"
         f"Walking heart rate: {walking_heart_rate_text}\n"
+        f"Blood pressure: {blood_pressure_text}\n"
         f"Sleep: {sleep_text}\n"
         f"Weight: {weight_text}"
     )
@@ -4058,8 +4174,8 @@ def healthcoach_health_history_menu_text() -> str:
     return (
         "Health History\n\n"
         "Choose how much weight, sleep, exercise, resting "
-        "heart-rate, Cardio Fitness, and walking heart-rate "
-        "history "
+        "heart-rate, Cardio Fitness, walking heart-rate, and "
+        "blood-pressure history "
         "to view.\n\n"
         "1. Last 7 days\n"
         "2. Last 14 days\n"
@@ -4100,6 +4216,8 @@ def build_health_history_data(
     resting_heart_rate_values = []
     cardio_fitness_values = []
     walking_heart_rate_values = []
+    blood_pressure_systolic_values = []
+    blood_pressure_diastolic_values = []
 
     for offset in range(period_days):
         current_date = start_date + timedelta(days=offset)
@@ -4111,6 +4229,15 @@ def build_health_history_data(
         cardio_fitness = metrics.get("cardio_fitness")
         walking_heart_rate = metrics.get(
             "walking_heart_rate_average"
+        )
+        blood_pressure_systolic = metrics.get(
+            "blood_pressure_systolic"
+        )
+        blood_pressure_diastolic = metrics.get(
+            "blood_pressure_diastolic"
+        )
+        blood_pressure_measured_at = metrics.get(
+            "blood_pressure_measured_at"
         )
 
         if weight is not None:
@@ -4128,6 +4255,17 @@ def build_health_history_data(
         if walking_heart_rate is not None:
             walking_heart_rate_values.append(
                 float(walking_heart_rate)
+            )
+        if (
+            blood_pressure_systolic is not None
+            and blood_pressure_diastolic is not None
+            and blood_pressure_measured_at is not None
+        ):
+            blood_pressure_systolic_values.append(
+                float(blood_pressure_systolic)
+            )
+            blood_pressure_diastolic_values.append(
+                float(blood_pressure_diastolic)
             )
 
         history_days.append(
@@ -4161,6 +4299,21 @@ def build_health_history_data(
                 "walking_heart_rate_average": (
                     float(walking_heart_rate)
                     if walking_heart_rate is not None
+                    else None
+                ),
+                "blood_pressure_systolic": (
+                    float(blood_pressure_systolic)
+                    if blood_pressure_systolic is not None
+                    else None
+                ),
+                "blood_pressure_diastolic": (
+                    float(blood_pressure_diastolic)
+                    if blood_pressure_diastolic is not None
+                    else None
+                ),
+                "blood_pressure_measured_at": (
+                    blood_pressure_measured_at
+                    if blood_pressure_measured_at is not None
                     else None
                 ),
             }
@@ -4230,6 +4383,21 @@ def build_health_history_data(
         "walking_heart_rate_entries": len(
             walking_heart_rate_values
         ),
+        "average_blood_pressure_systolic": (
+            sum(blood_pressure_systolic_values)
+            / len(blood_pressure_systolic_values)
+            if blood_pressure_systolic_values
+            else None
+        ),
+        "average_blood_pressure_diastolic": (
+            sum(blood_pressure_diastolic_values)
+            / len(blood_pressure_diastolic_values)
+            if blood_pressure_diastolic_values
+            else None
+        ),
+        "blood_pressure_entries": len(
+            blood_pressure_systolic_values
+        ),
     }
 
 
@@ -4250,6 +4418,12 @@ def format_health_history(history: dict) -> str:
         cardio_fitness = item.get("cardio_fitness")
         walking_heart_rate = item.get(
             "walking_heart_rate_average"
+        )
+        blood_pressure_systolic = item.get(
+            "blood_pressure_systolic"
+        )
+        blood_pressure_diastolic = item.get(
+            "blood_pressure_diastolic"
         )
         weight_text = (
             f"{format_display_number(weight)} lb"
@@ -4281,14 +4455,33 @@ def format_health_history(history: dict) -> str:
             if walking_heart_rate is not None
             else missing_text
         )
-        lines.append(
-            f"{day.strftime('%a %b ')}{day.day}: "
-            f"weight {weight_text}; sleep {sleep_text}; "
-            f"exercise {exercise_text}; resting HR "
-            f"{resting_heart_rate_text}; cardio fitness "
-            f"{cardio_fitness_text}; walking HR "
-            f"{walking_heart_rate_text}"
+        blood_pressure_text = (
+            f"{format_display_number(blood_pressure_systolic)}/"
+            f"{format_display_number(blood_pressure_diastolic)} mmHg"
+            if (
+                blood_pressure_systolic is not None
+                and blood_pressure_diastolic is not None
+            )
+            else missing_text
         )
+        if period_days == 30:
+            lines.append(
+                f"{day.strftime('%a %b ')}{day.day}: "
+                f"wt {weight_text}; sl {sleep_text}; "
+                f"ex {exercise_text}; RHR {resting_heart_rate_text}; "
+                f"CF {cardio_fitness_text}; WHR "
+                f"{walking_heart_rate_text}; BP {blood_pressure_text}"
+            )
+        else:
+            lines.append(
+                f"{day.strftime('%a %b ')}{day.day}: "
+                f"weight {weight_text}; sleep {sleep_text}; "
+                f"exercise {exercise_text}; resting HR "
+                f"{resting_heart_rate_text}; cardio fitness "
+                f"{cardio_fitness_text}; walking HR "
+                f"{walking_heart_rate_text}; blood pressure "
+                f"{blood_pressure_text}"
+            )
 
     lines.extend(["", "Summary"])
     average_weight = history.get("average_weight")
@@ -4311,6 +4504,12 @@ def format_health_history(history: dict) -> str:
     )
     walking_heart_rate_change = history.get(
         "walking_heart_rate_change"
+    )
+    average_blood_pressure_systolic = history.get(
+        "average_blood_pressure_systolic"
+    )
+    average_blood_pressure_diastolic = history.get(
+        "average_blood_pressure_diastolic"
     )
 
     lines.append(
@@ -4411,6 +4610,24 @@ def format_health_history(history: dict) -> str:
     lines.append(
         "- Walking heart rate recorded: "
         f"{int(history.get('walking_heart_rate_entries') or 0)}"
+        f"/{period_days} days"
+    )
+    lines.append(
+        "- Average blood pressure: "
+        + (
+            f"{format_display_number(average_blood_pressure_systolic)}/"
+            f"{format_display_number(average_blood_pressure_diastolic)} "
+            "mmHg"
+            if (
+                average_blood_pressure_systolic is not None
+                and average_blood_pressure_diastolic is not None
+            )
+            else "not available"
+        )
+    )
+    lines.append(
+        "- Blood pressure recorded: "
+        f"{int(history.get('blood_pressure_entries') or 0)}"
         f"/{period_days} days"
     )
     lines.extend(
@@ -16434,6 +16651,38 @@ def webhook():
             walking_heart_rate_raw,
         )
 
+    blood_pressure_systolic_raw = data.get(
+        "blood_pressure_systolic"
+    )
+    blood_pressure_diastolic_raw = data.get(
+        "blood_pressure_diastolic"
+    )
+    blood_pressure_measured_at_raw = data.get(
+        "blood_pressure_measured_at"
+    )
+    blood_pressure_supplied = any(
+        value not in ("", None)
+        for value in (
+            blood_pressure_systolic_raw,
+            blood_pressure_diastolic_raw,
+            blood_pressure_measured_at_raw,
+        )
+    )
+    blood_pressure = parse_blood_pressure(
+        blood_pressure_systolic_raw,
+        blood_pressure_diastolic_raw,
+        blood_pressure_measured_at_raw,
+        expected_date=now.date(),
+    )
+    if blood_pressure_supplied and blood_pressure is None:
+        logging.warning(
+            "Ignored incomplete, invalid, or stale blood-pressure "
+            "reading: systolic=%r diastolic=%r measured_at=%r",
+            blood_pressure_systolic_raw,
+            blood_pressure_diastolic_raw,
+            blood_pressure_measured_at_raw,
+        )
+
     row = [
         timestamp,
         steps if steps is not None else "",
@@ -16452,6 +16701,23 @@ def webhook():
         ),
         cardio_fitness if cardio_fitness is not None else "",
         walking_heart_rate if walking_heart_rate is not None else "",
+        (
+            blood_pressure["systolic"]
+            if blood_pressure is not None
+            else ""
+        ),
+        (
+            blood_pressure["diastolic"]
+            if blood_pressure is not None
+            else ""
+        ),
+        (
+            blood_pressure["measured_at"].strftime(
+                "%m/%d/%Y %I:%M %p"
+            )
+            if blood_pressure is not None
+            else ""
+        ),
     ]
 
     update_or_insert_today(sheet, row, now)

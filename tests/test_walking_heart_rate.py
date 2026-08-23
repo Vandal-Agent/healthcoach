@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import date, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 with patch("logging.basicConfig"):
     import app
@@ -82,11 +82,15 @@ class WalkingHeartRateTests(unittest.TestCase):
         changed = app.ensure_health_tracker_schema(sheet)
 
         self.assertTrue(changed)
-        sheet.add_cols.assert_called_once_with(1)
-        sheet.update_cell.assert_called_once_with(
-            1,
-            13,
-            "Walking Heart Rate Average",
+        sheet.add_cols.assert_called_once_with(4)
+        self.assertEqual(
+            sheet.update_cell.call_args_list,
+            [
+                call(1, 13, "Walking Heart Rate Average"),
+                call(1, 14, "Blood Pressure Systolic"),
+                call(1, 15, "Blood Pressure Diastolic"),
+                call(1, 16, "Blood Pressure Measured At"),
+            ],
         )
 
     def test_missing_sync_preserves_existing_walking_heart_rate(self) -> None:
@@ -109,7 +113,7 @@ class WalkingHeartRateTests(unittest.TestCase):
 
         self.assertEqual(
             sheet.update.call_args.kwargs["range_name"],
-            "A2:M2",
+            "A2:P2",
         )
         merged = sheet.update.call_args.kwargs["values"][0]
         self.assertEqual(merged[12], "92.4")

@@ -64,13 +64,16 @@ class ExerciseMinutesTests(unittest.TestCase):
         changed = app.ensure_health_tracker_schema(sheet)
 
         self.assertTrue(changed)
-        sheet.add_cols.assert_called_once_with(3)
+        sheet.add_cols.assert_called_once_with(6)
         self.assertEqual(
             sheet.update_cell.call_args_list,
             [
                 call(1, 11, "Exercise Minutes"),
                 call(1, 12, "Cardio Fitness"),
                 call(1, 13, "Walking Heart Rate Average"),
+                call(1, 14, "Blood Pressure Systolic"),
+                call(1, 15, "Blood Pressure Diastolic"),
+                call(1, 16, "Blood Pressure Measured At"),
             ],
         )
 
@@ -94,7 +97,7 @@ class ExerciseMinutesTests(unittest.TestCase):
 
         self.assertEqual(
             sheet.update.call_args.kwargs["range_name"],
-            "A2:M2",
+            "A2:P2",
         )
         merged = sheet.update.call_args.kwargs["values"][0]
         self.assertEqual(merged[10], "42")
