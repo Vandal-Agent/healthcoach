@@ -588,6 +588,10 @@ Heart Rate Average in beats per minute. HealthCoach appends it to column M,
 shows it in Current Status, and includes daily values, the recorded-day
 average, and first-to-last recorded change in Health History. Missing values
 remain missing and later syncs do not erase an existing value for that day.
+Malformed or combined Shortcut values are rejected with a broad ingestion
+sanity check: the value must be greater than 0 and no more than 300 bpm.
+Previously stored invalid values are displayed as not recorded until a valid
+Shortcut sync replaces them.
 The metric is recorded without medical interpretation and does not affect
 calorie calculations.
 

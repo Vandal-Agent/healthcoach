@@ -61,6 +61,20 @@ class WalkingHeartRateTests(unittest.TestCase):
             app.build_progress_message("Current status", metrics),
         )
 
+    def test_status_hides_concatenated_walking_heart_rate(self) -> None:
+        metrics = app.row_to_metrics(
+            tracker_row(
+                "08/22/2026",
+                walking_heart_rate="707070700",
+            )
+        )
+
+        self.assertIsNone(metrics["walking_heart_rate_average"])
+        self.assertIn(
+            "Walking heart rate: not recorded",
+            app.build_progress_message("Current status", metrics),
+        )
+
     def test_schema_appends_walking_heart_rate_column(self) -> None:
         sheet = MagicMock()
         sheet.col_count = 12
@@ -119,6 +133,28 @@ class WalkingHeartRateTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         saved_row = update.call_args.args[1]
         self.assertEqual(saved_row[12], 92.4)
+
+    def test_webhook_ignores_concatenated_walking_heart_rate(self) -> None:
+        sheet = MagicMock()
+        with (
+            patch.object(app, "get_current_sheet", return_value=sheet),
+            patch.object(
+                app,
+                "get_today_row_index_and_row",
+                return_value=(None, None, [app.HEADERS]),
+            ),
+            patch.object(app, "update_or_insert_today") as update,
+        ):
+            response = app.app.test_client().post(
+                "/webhook",
+                json={
+                    "walking_heart_rate_average": 707070700,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        saved_row = update.call_args.args[1]
+        self.assertEqual(saved_row[12], "")
 
     def test_health_history_summarizes_walking_heart_rate(self) -> None:
         history = app.build_health_history_data(

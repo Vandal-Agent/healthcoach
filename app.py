@@ -158,6 +158,7 @@ HEADERS = [
 ]
 
 TRACKER_LAST_COLUMN = "M"
+MAX_WALKING_HEART_RATE_BPM = 300.0
 
 EARLY_PROTEIN_MEALS = {"breakfast", "school snack", "lunch"}
 
@@ -758,6 +759,14 @@ def safe_float(value, default=0.0):
         return default
 
 
+def parse_walking_heart_rate(value):
+    """Return one plausible bpm value or None for malformed input."""
+    parsed = safe_float(value, None)
+    if parsed is None or not 0 < parsed <= MAX_WALKING_HEART_RATE_BPM:
+        return None
+    return parsed
+
+
 def safe_int(value, default=0):
     try:
         if value in ("", None):
@@ -864,9 +873,8 @@ def row_to_metrics(row):
         "protein": safe_float(padded[9], 0),
         "exercise_minutes": safe_float(padded[10], None),
         "cardio_fitness": safe_float(padded[11], None),
-        "walking_heart_rate_average": safe_float(
-            padded[12],
-            None,
+        "walking_heart_rate_average": parse_walking_heart_rate(
+            padded[12]
         ),
     }
 
@@ -16411,10 +16419,20 @@ def webhook():
         data.get("cardio_fitness"),
         None,
     )
-    walking_heart_rate = safe_float(
-        data.get("walking_heart_rate_average"),
-        None,
+    walking_heart_rate_raw = data.get(
+        "walking_heart_rate_average"
     )
+    walking_heart_rate = parse_walking_heart_rate(
+        walking_heart_rate_raw
+    )
+    if (
+        walking_heart_rate_raw not in ("", None)
+        and walking_heart_rate is None
+    ):
+        logging.warning(
+            "Ignored invalid walking heart-rate value: %r",
+            walking_heart_rate_raw,
+        )
 
     row = [
         timestamp,
