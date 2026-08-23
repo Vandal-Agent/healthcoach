@@ -113,6 +113,8 @@ class SavedRecipeTests(unittest.TestCase):
             }
         self.assertIn("heart_healthy_pick", columns)
         self.assertIn("heart_healthy_reason", columns)
+        self.assertIn("yield_servings", columns)
+        self.assertIn("saved_recipe_ingredients", result["tables"])
 
     def test_version_nine_database_adds_heart_health_fields(self) -> None:
         with database.get_connection(self.database_path) as connection:
@@ -125,13 +127,16 @@ class SavedRecipeTests(unittest.TestCase):
                 "DROP COLUMN heart_healthy_pick"
             )
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 10"
+                "DELETE FROM schema_version WHERE version IN (10, 11)"
             )
             connection.commit()
 
         result = database.initialize_database()
 
-        self.assertEqual(result["schema_version"]["version"], 10)
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
         with database.get_connection(self.database_path) as connection:
             columns = {
                 row["name"]
@@ -141,6 +146,303 @@ class SavedRecipeTests(unittest.TestCase):
             }
         self.assertIn("heart_healthy_pick", columns)
         self.assertIn("heart_healthy_reason", columns)
+
+    def add_builder_food(
+        self,
+        *,
+        name: str,
+        serving_amount: float,
+        serving_unit: str,
+        calories: float,
+        protein_g: float,
+        carbohydrates_g: float,
+        fat_g: float,
+        fiber_g: float,
+        sugar_g: float,
+        sodium_mg: float,
+    ) -> dict:
+        return library.add_food_with_nutrition(
+            canonical_name=name,
+            serving_description=(
+                f"{serving_amount:g} {serving_unit}"
+            ),
+            serving_amount=serving_amount,
+            serving_unit=serving_unit,
+            verification_status="verified",
+            verification_source="user_entered",
+            calories=calories,
+            protein_g=protein_g,
+            carbohydrates_g=carbohydrates_g,
+            fat_g=fat_g,
+            fiber_g=fiber_g,
+            sugar_g=sugar_g,
+            sodium_mg=sodium_mg,
+        )
+
+    def test_recipe_builder_calculates_and_links_exact_versions(self) -> None:
+        turkey = self.add_builder_food(
+            name="Browned Ground Turkey",
+            serving_amount=3,
+            serving_unit="oz",
+            calories=170,
+            protein_g=22,
+            carbohydrates_g=0,
+            fat_g=9,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=80,
+        )
+        cheese = self.add_builder_food(
+            name="Mexican Cheese Blend",
+            serving_amount=28,
+            serving_unit="g",
+            calories=110,
+            protein_g=7,
+            carbohydrates_g=1,
+            fat_g=9,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=170,
+        )
+        ingredients = [
+            recipes.prepare_recipe_ingredient(
+                food_id=int(turkey["food"]["food_id"]),
+                amount_description="6 oz",
+            ),
+            recipes.prepare_recipe_ingredient(
+                food_id=int(cheese["food"]["food_id"]),
+                amount_description="28 g",
+            ),
+        ]
+
+        result = recipes.create_saved_recipe_from_ingredients(
+            name="Turkey Cheese Skillet",
+            meal_type="dinner",
+            yield_servings=2,
+            ingredients=ingredients,
+            preparation_steps=["Heat the turkey and melt in the cheese."],
+            summary="A two-serving turkey skillet.",
+        )
+
+        self.assertTrue(result["created"])
+        recipe = result["recipe"]
+        self.assertEqual(recipe["yield_servings"], 2)
+        self.assertEqual(recipe["calories"], 225)
+        self.assertEqual(recipe["protein_g"], 25.5)
+        self.assertEqual(result["total_nutrition"]["calories"], 450)
+        links = recipes.list_saved_recipe_ingredients(
+            int(recipe["saved_recipe_id"])
+        )
+        self.assertEqual(len(links), 2)
+        self.assertEqual(links[0]["amount_description"], "6 oz")
+        self.assertEqual(
+            links[0]["nutrition_version_id"],
+            turkey["nutrition"]["nutrition_version_id"],
+        )
+
+    def test_builder_recipe_does_not_change_when_ingredient_changes(self) -> None:
+        turkey = self.add_builder_food(
+            name="Recipe Turkey",
+            serving_amount=3,
+            serving_unit="oz",
+            calories=170,
+            protein_g=22,
+            carbohydrates_g=0,
+            fat_g=9,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=80,
+        )
+        ingredient = recipes.prepare_recipe_ingredient(
+            food_id=int(turkey["food"]["food_id"]),
+            amount_description="3 oz",
+        )
+        saved = recipes.create_saved_recipe_from_ingredients(
+            name="Versioned Turkey Recipe",
+            meal_type="lunch",
+            yield_servings=1,
+            ingredients=[ingredient],
+            preparation_steps=["Heat and serve."],
+        )["recipe"]
+
+        library.add_user_nutrition_version(
+            food_id=int(turkey["food"]["food_id"]),
+            calories=200,
+            protein_g=20,
+            carbohydrates_g=1,
+            fat_g=12,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=100,
+        )
+
+        unchanged = recipes.get_saved_recipe(
+            int(saved["saved_recipe_id"])
+        )
+        self.assertEqual(unchanged["calories"], 170)
+        link = recipes.list_saved_recipe_ingredients(
+            int(saved["saved_recipe_id"])
+        )[0]
+        self.assertEqual(
+            link["nutrition_version_id"],
+            ingredient["nutrition_version_id"],
+        )
+
+    def test_builder_recalculation_versions_future_recipe_logs(self) -> None:
+        turkey = self.add_builder_food(
+            name="Recalculation Turkey",
+            serving_amount=3,
+            serving_unit="oz",
+            calories=170,
+            protein_g=22,
+            carbohydrates_g=0,
+            fat_g=9,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=80,
+        )
+        food_id = int(turkey["food"]["food_id"])
+        original_ingredient = recipes.prepare_recipe_ingredient(
+            food_id=food_id,
+            amount_description="3 oz",
+        )
+        saved = recipes.create_saved_recipe_from_ingredients(
+            name="Recalculated Turkey Recipe",
+            meal_type="dinner",
+            yield_servings=1,
+            ingredients=[original_ingredient],
+            preparation_steps=["Heat and serve."],
+        )["recipe"]
+        old_entry = ledger.add_food_entry(
+            entry_date=date(2026, 8, 15),
+            meal_category="dinner",
+            food_id=int(saved["food_id"]),
+            quantity=1,
+            logging_source="recipe",
+            quantity_is_estimated=True,
+            user_confirmed=True,
+        )
+
+        library.add_user_nutrition_version(
+            food_id=food_id,
+            calories=200,
+            protein_g=20,
+            carbohydrates_g=1,
+            fat_g=12,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=100,
+        )
+        changed_ingredient = recipes.prepare_recipe_ingredient(
+            food_id=food_id,
+            amount_description="6 oz",
+        )
+        updated = recipes.update_saved_recipe_from_ingredients(
+            int(saved["saved_recipe_id"]),
+            yield_servings=1,
+            ingredients=[changed_ingredient],
+            preparation_steps=["Heat two portions and serve."],
+            summary="Updated ingredient amount.",
+        )["recipe"]
+        new_entry = ledger.add_food_entry(
+            entry_date=date(2026, 8, 16),
+            meal_category="dinner",
+            food_id=int(saved["food_id"]),
+            quantity=1,
+            logging_source="recipe",
+            quantity_is_estimated=True,
+            user_confirmed=True,
+        )
+
+        self.assertEqual(old_entry["calories"], 170)
+        self.assertEqual(updated["version_number"], 2)
+        self.assertEqual(updated["calories"], 400)
+        self.assertEqual(new_entry["calories"], 400)
+        link = recipes.list_saved_recipe_ingredients(
+            int(saved["saved_recipe_id"])
+        )[0]
+        self.assertEqual(
+            link["nutrition_version_id"],
+            changed_ingredient["nutrition_version_id"],
+        )
+
+    def test_recreating_deleted_builder_recipe_uses_new_nutrition(self) -> None:
+        turkey = self.add_builder_food(
+            name="Recreate Recipe Turkey",
+            serving_amount=3,
+            serving_unit="oz",
+            calories=170,
+            protein_g=22,
+            carbohydrates_g=0,
+            fat_g=9,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=80,
+        )
+        food_id = int(turkey["food"]["food_id"])
+        one_serving = recipes.prepare_recipe_ingredient(
+            food_id=food_id,
+            amount_description="3 oz",
+        )
+        original = recipes.create_saved_recipe_from_ingredients(
+            name="Recreated Turkey Recipe",
+            meal_type="dinner",
+            yield_servings=1,
+            ingredients=[one_serving],
+            preparation_steps=["Heat and serve."],
+        )["recipe"]
+        old_entry = ledger.add_food_entry(
+            entry_date=date(2026, 8, 15),
+            meal_category="dinner",
+            food_id=int(original["food_id"]),
+            quantity=1,
+            logging_source="recipe",
+            quantity_is_estimated=True,
+            user_confirmed=True,
+        )
+        recipes.delete_saved_recipe(int(original["saved_recipe_id"]))
+
+        two_servings = recipes.prepare_recipe_ingredient(
+            food_id=food_id,
+            amount_description="6 oz",
+        )
+        recreated = recipes.create_saved_recipe_from_ingredients(
+            name="Recreated Turkey Recipe",
+            meal_type="dinner",
+            yield_servings=1,
+            ingredients=[two_servings],
+            preparation_steps=["Heat both portions and serve."],
+        )["recipe"]
+
+        self.assertEqual(recreated["food_id"], original["food_id"])
+        self.assertEqual(recreated["version_number"], 2)
+        self.assertEqual(recreated["calories"], 340)
+        self.assertEqual(old_entry["calories"], 170)
+
+    def test_recipe_amount_conversion_is_strict(self) -> None:
+        self.assertAlmostEqual(
+            recipes.ingredient_serving_multiplier(
+                amount_description="1 1/2 oz",
+                serving_amount=3,
+                serving_unit="oz",
+            ),
+            0.5,
+        )
+        self.assertAlmostEqual(
+            recipes.ingredient_serving_multiplier(
+                amount_description="56 g",
+                serving_amount=1,
+                serving_unit="oz",
+            ),
+            1.9753419,
+            places=5,
+        )
+        with self.assertRaisesRegex(ValueError, "cannot be converted"):
+            recipes.ingredient_serving_multiplier(
+                amount_description="1 cup",
+                serving_amount=28,
+                serving_unit="g",
+            )
 
     def test_version_six_database_migrates_to_saved_recipes(self) -> None:
         with database.get_connection(self.database_path) as connection:
@@ -157,6 +459,30 @@ class SavedRecipeTests(unittest.TestCase):
             database.SCHEMA_VERSION,
         )
         self.assertIn("saved_recipes", result["tables"])
+
+    def test_version_ten_database_migrates_to_recipe_builder(self) -> None:
+        with database.get_connection(self.database_path) as connection:
+            connection.execute("DROP TABLE saved_recipe_ingredients")
+            connection.execute(
+                "ALTER TABLE saved_recipes DROP COLUMN yield_servings"
+            )
+            connection.execute(
+                "DELETE FROM schema_version WHERE version = 11"
+            )
+            connection.commit()
+
+        result = database.initialize_database()
+
+        self.assertEqual(result["schema_version"]["version"], 11)
+        self.assertIn("saved_recipe_ingredients", result["tables"])
+        with database.get_connection(self.database_path) as connection:
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(saved_recipes)"
+                ).fetchall()
+            }
+        self.assertIn("yield_servings", columns)
 
     def test_saves_lists_and_reads_complete_recipe(self) -> None:
         result = recipes.save_pantry_meal_idea(

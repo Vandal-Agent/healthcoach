@@ -407,6 +407,24 @@ Saved Recipes is a separate library under Food > My Foods.
 Supported workflow:
 
 - Save a Pantry meal idea only after explicit confirmation.
+- Create a recipe directly from the Saved Recipes menu using Recipe Builder.
+- Ask for the recipe name, lunch or dinner type, total serving yield,
+  ingredients, optional summary, preparation steps, and final confirmation.
+- Select each Recipe Builder ingredient from a trusted Saved Food or create a
+  new Saved Food before continuing. Free-text ingredients without saved
+  nutrition are not silently estimated.
+- Require an explicit ingredient amount such as `1 serving`, `40 g`, `3 oz`,
+  or `2 slices`. Convert only compatible units; ask for a different amount
+  instead of guessing conversions such as cups to grams.
+- Calculate the recipe's complete nutrition from the exact active Nutrition
+  Version of every selected ingredient, then divide the total by the entered
+  serving yield. Store the calculated per-serving nutrition as the recipe's
+  active Nutrition Version.
+- Store immutable links to each ingredient Food, its exact Nutrition Version,
+  amount text, and serving multiplier in database schema version `11`.
+- Show both whole-recipe and per-serving nutrition before saving.
+- Saving from Recipe Builder creates a reusable Saved Recipe but never logs it
+  as eaten.
 - Store its name, intended lunch or dinner type, estimated nutrition,
   ingredient amounts, preparation steps, and estimate notes.
 - Preserve the generated Heart-Healthy Pick label and its food-pattern
@@ -426,6 +444,14 @@ Supported workflow:
 - Create a new estimated nutrition version for future logs whenever recipe
   nutrition is edited. Previously logged entries retain their original
   nutrition snapshots.
+- Rebuilding a recipe's ingredient list recalculates future nutrition from the
+  newly selected ingredient versions and clears any prior Heart-Healthy Pick
+  label. Earlier Food Ledger entries retain their original snapshots.
+- Changing a Saved Food later does not silently recalculate an existing
+  recipe. The recipe changes only when the user explicitly rebuilds and saves
+  its ingredients.
+- Recreating a previously deleted recipe identity creates a fresh active
+  recipe nutrition version while retaining the older Food and ledger history.
 - Reject a rename when another Food or Saved Recipe already uses that
   identity.
 - Delete a Saved Recipe only after explicit confirmation.
@@ -439,9 +465,9 @@ Supported workflow:
 - Preserve the nutrition snapshot on each Food Ledger entry so later
   nutrition changes cannot rewrite historical logs.
 
-Editing the ingredient or preparation list replaces that complete list.
-Ingredient edits use one `amount | ingredient` item per line so amounts stay
-separate from ingredient names.
+Recipe Builder ingredient editing replaces the complete linked ingredient
+list only after review and confirmation. Existing legacy Pantry recipes may
+still display their stored text ingredient list until they are rebuilt.
 
 ---
 

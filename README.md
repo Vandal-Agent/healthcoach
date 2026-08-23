@@ -19,9 +19,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   sleep, and weight context
 - Labels no more than one evidence-supported Heart-Healthy Pick in Pantry,
   cited online Restaurant, and visible menu-photo recommendations
-- Saves Pantry meal ideas as reusable recipes with ingredients,
-  preparation, nutrition, Heart-Healthy Pick guidance, and confirmed
-  serving-based logging
+- Saves Pantry meal ideas as reusable recipes and builds new recipes from
+  version-linked Saved Food ingredients, explicit amounts, serving yields,
+  calculated per-serving nutrition, preparation, and confirmation
 - Edits or deletes Saved Recipes without rewriting previously logged meals
 - Renames, updates, or removes Saved Foods while preserving food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the

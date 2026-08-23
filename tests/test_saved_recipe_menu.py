@@ -36,6 +36,24 @@ HEART_HEALTHY_SAVED_RECIPE = {
     ),
 }
 
+BUILDER_INGREDIENT = {
+    "food_id": 12,
+    "nutrition_version_id": 21,
+    "name": "Browned Ground Turkey",
+    "amount_description": "3 oz",
+    "serving_multiplier": 1.0,
+    "serving_description": "3 oz",
+    "nutrition": {
+        "calories": 170.0,
+        "protein_g": 22.0,
+        "carbohydrates_g": 0.0,
+        "fat_g": 9.0,
+        "fiber_g": 0.0,
+        "sugar_g": 0.0,
+        "sodium_mg": 80.0,
+    },
+}
+
 
 class SavedRecipeMenuTests(unittest.TestCase):
     def test_food_menu_routes_to_saved_recipes(self) -> None:
@@ -138,13 +156,135 @@ class SavedRecipeMenuTests(unittest.TestCase):
         message = app.healthcoach_saved_recipes_menu_text()
         keyboard = app.menu_reply_markup(message)
 
-        self.assertIn("2. Edit saved recipe", message)
-        self.assertIn("3. Delete saved recipe", message)
+        self.assertIn("2. Create recipe", message)
+        self.assertIn("3. Edit saved recipe", message)
+        self.assertIn("4. Delete saved recipe", message)
         self.assertIn(
-            ["Browse saved recipes", "Edit saved recipe"],
+            ["Browse saved recipes", "Create recipe"],
             keyboard["keyboard"],
         )
+        self.assertIn(["Edit saved recipe"], keyboard["keyboard"])
         self.assertIn(["Delete saved recipe"], keyboard["keyboard"])
+
+    def test_create_recipe_starts_builder(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "saved_recipes",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Create recipe",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_name",
+        )
+        self.assertIn("What should this recipe be called", send.call_args.args[0])
+
+    def test_builder_adds_calculated_ingredient(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_ingredient_amount",
+            "known_data": {
+                "_recipe_builder_name": "Turkey Bowl",
+                "_recipe_builder_meal_type": "dinner",
+                "_recipe_builder_yield": 2,
+                "_recipe_builder_ingredients": [],
+                "_recipe_builder_selected_food_id": 12,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "prepare_recipe_ingredient",
+                return_value=BUILDER_INGREDIENT,
+            ) as prepare,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "3 oz"}
+            })
+
+        prepare.assert_called_once_with(
+            food_id=12,
+            amount_description="3 oz",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_ingredient_menu",
+        )
+        self.assertIn("Per serving so far", send.call_args.args[0])
+
+    def test_builder_confirmation_saves_without_logging(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_confirmation",
+            "known_data": {
+                "_recipe_builder_name": "Turkey Bowl",
+                "_recipe_builder_meal_type": "dinner",
+                "_recipe_builder_yield": 2,
+                "_recipe_builder_ingredients": [BUILDER_INGREDIENT],
+                "_recipe_builder_summary": "Simple turkey bowl.",
+                "_recipe_builder_steps": ["Heat and serve."],
+            },
+        }
+        created_recipe = {
+            **SAVED_RECIPE,
+            "saved_recipe_id": 8,
+            "canonical_name": "Turkey Bowl",
+            "yield_servings": 2,
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "create_saved_recipe_from_ingredients",
+                return_value={
+                    "created": True,
+                    "recipe": created_recipe,
+                },
+            ) as create,
+            patch.object(app, "add_food_entry") as add_entry,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Save Recipe",
+                }
+            })
+
+        create.assert_called_once()
+        add_entry.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "saved_recipe_details",
+        )
+        self.assertIn("Nothing was logged", send.call_args.args[0])
 
     def test_edit_selection_opens_edit_menu(self) -> None:
         conversation = {

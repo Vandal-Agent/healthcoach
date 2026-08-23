@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 10
+SCHEMA_VERSION: Final[int] = 11
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -501,6 +501,8 @@ def create_schema(connection: sqlite3.Connection) -> None:
             heart_healthy_pick INTEGER NOT NULL DEFAULT 0
                 CHECK (heart_healthy_pick IN (0, 1)),
             heart_healthy_reason TEXT NOT NULL DEFAULT '',
+            yield_servings REAL NOT NULL DEFAULT 1
+                CHECK (yield_servings > 0),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
 
@@ -560,6 +562,7 @@ def create_initial_database(
     """Create a new database directly at the current schema."""
     create_schema(connection)
     create_weight_goals_schema(connection)
+    create_recipe_builder_schema(connection)
 
     record_schema_version(
         connection,
@@ -621,8 +624,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=10,
         description="Preserve Heart-Healthy Saved Recipe labels",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add reproducible Recipe Builder ingredients",
     )
 
 
@@ -830,6 +839,61 @@ def create_saved_recipes_schema(
 
         CREATE INDEX IF NOT EXISTS idx_saved_recipes_meal_type
             ON saved_recipes (meal_type);
+        """
+    )
+
+
+def create_recipe_builder_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create normalized ingredient storage for user-built recipes."""
+    if not column_exists(
+        connection,
+        "saved_recipes",
+        "yield_servings",
+    ):
+        connection.execute(
+            """
+            ALTER TABLE saved_recipes
+            ADD COLUMN yield_servings REAL NOT NULL DEFAULT 1
+                CHECK (yield_servings > 0)
+            """
+        )
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS saved_recipe_ingredients (
+            saved_recipe_ingredient_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            saved_recipe_id INTEGER NOT NULL,
+            position INTEGER NOT NULL CHECK (position > 0),
+            food_id INTEGER NOT NULL,
+            nutrition_version_id INTEGER NOT NULL,
+            amount_description TEXT NOT NULL,
+            serving_multiplier REAL NOT NULL
+                CHECK (serving_multiplier > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            FOREIGN KEY (saved_recipe_id)
+                REFERENCES saved_recipes (saved_recipe_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (food_id)
+                REFERENCES foods (food_id),
+            FOREIGN KEY (nutrition_version_id)
+                REFERENCES nutrition_versions (
+                    nutrition_version_id
+                ),
+            UNIQUE (saved_recipe_id, position)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_saved_recipe_ingredients_recipe
+            ON saved_recipe_ingredients (
+                saved_recipe_id,
+                position
+            );
+
+        CREATE INDEX IF NOT EXISTS idx_saved_recipe_ingredients_food
+            ON saved_recipe_ingredients (food_id);
         """
     )
 
@@ -1160,6 +1224,19 @@ def migrate_version_9_to_10(
     )
 
 
+def migrate_version_10_to_11(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add Recipe Builder yield and version-linked ingredients."""
+    create_recipe_builder_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=11,
+        description="Add reproducible Recipe Builder ingredients",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1206,6 +1283,10 @@ def apply_migrations(
         migrate_version_9_to_10(connection)
         version = 10
 
+    if version < 11:
+        migrate_version_10_to_11(connection)
+        version = 11
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -1219,6 +1300,7 @@ def apply_migrations(
     create_barcode_mapping_schema(connection)
     create_pantry_schema(connection)
     create_saved_recipes_schema(connection)
+    create_recipe_builder_schema(connection)
     create_shopping_list_schema(connection)
     create_weight_goals_schema(connection)
 
@@ -1258,6 +1340,7 @@ def validate_database(
         "barcode_mappings",
         "pantry_items",
         "saved_recipes",
+        "saved_recipe_ingredients",
         "shopping_list_items",
         "weight_goals",
         "weight_goal_calculations",
@@ -1286,6 +1369,7 @@ def validate_database(
     for column_name in (
         "heart_healthy_pick",
         "heart_healthy_reason",
+        "yield_servings",
     ):
         if not column_exists(
             connection,

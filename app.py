@@ -87,11 +87,17 @@ from food.shopping import (
     remove_shopping_item,
 )
 from food.recipes import (
+    calculate_recipe_nutrition,
+    create_saved_recipe_from_ingredients,
     delete_saved_recipe,
+    find_recipe_ingredient_food,
     get_saved_recipe,
+    list_recipe_ingredient_foods,
     list_saved_recipes,
+    prepare_recipe_ingredient,
     save_pantry_meal_idea,
     update_saved_recipe,
+    update_saved_recipe_from_ingredients,
     update_saved_recipe_nutrition,
 )
 from food.nutrition_provider import lookup_official_nutrition
@@ -437,9 +443,25 @@ def menu_reply_markup(message):
         ]
     elif "Saved Recipes Menu\n\n" in message:
         rows = [
-            ["Browse saved recipes", "Edit saved recipe"],
+            ["Browse saved recipes", "Create recipe"],
+            ["Edit saved recipe"],
             ["Delete saved recipe"],
             ["Back", "Cancel"],
+        ]
+    elif "Recipe Builder — Ingredients\n\n" in message:
+        rows = [
+            ["Add another ingredient", "Continue"],
+            ["Remove last ingredient"],
+            ["Cancel"],
+        ]
+    elif "Recipe Builder Review\n\n" in message:
+        rows = [
+            [
+                "Save Changes"
+                if "1. Save Changes" in message
+                else "Save Recipe"
+            ],
+            ["Change ingredients", "Cancel"],
         ]
     elif "Saved Recipe Details\n\n" in message:
         rows = [
@@ -3514,11 +3536,12 @@ def healthcoach_saved_recipes_menu_text() -> str:
     return (
         "Saved Recipes Menu\n\n"
         "1. Browse saved recipes\n"
-        "2. Edit saved recipe\n"
-        "3. Delete saved recipe\n"
-        "4. Back\n\n"
-        "Recipes can be saved from Pantry meal ideas. Saving a "
-        "recipe does not log it as eaten."
+        "2. Create recipe\n"
+        "3. Edit saved recipe\n"
+        "4. Delete saved recipe\n"
+        "5. Back\n\n"
+        "Create recipes from Saved Foods or save them from Pantry "
+        "meal ideas. Saving a recipe does not log it as eaten."
     )
 
 
@@ -3625,6 +3648,120 @@ def parse_saved_recipe_steps(value: str) -> list[str]:
     return steps
 
 
+def format_recipe_builder_food_choices(foods: list[dict]) -> str:
+    lines = [
+        "Recipe Builder — Choose a Saved Food",
+        "",
+    ]
+    for index, food in enumerate(foods, start=1):
+        lines.append(
+            f"{index}. {food.get('canonical_name') or 'Saved Food'} — "
+            f"{food.get('serving_description') or '1 serving'}"
+        )
+    lines.extend([
+        "",
+        "Choose a number, type the Saved Food name, or reply Back.",
+    ])
+    return "\n".join(lines)
+
+
+def format_recipe_builder_ingredients(
+    known_data: dict,
+) -> str:
+    ingredients = list(
+        known_data.get("_recipe_builder_ingredients") or []
+    )
+    lines = ["Recipe Builder — Ingredients", ""]
+    for index, ingredient in enumerate(ingredients, start=1):
+        lines.append(
+            f"{index}. {ingredient.get('amount_description')} "
+            f"{ingredient.get('name')}"
+        )
+    calculation = calculate_recipe_nutrition(
+        ingredients,
+        yield_servings=float(
+            known_data.get("_recipe_builder_yield") or 1
+        ),
+    )
+    total = calculation["total"]
+    per_serving = calculation["per_serving"]
+    lines.extend([
+        "",
+        "Recipe total so far: "
+        f"{format_display_number(total['calories'], decimals=0)} cal",
+        "Per serving so far: "
+        f"{format_display_number(per_serving['calories'], decimals=0)} cal, "
+        f"{format_display_number(per_serving['protein_g'])} g protein",
+        "",
+        "1. Add another ingredient",
+        "2. Continue",
+        "3. Remove last ingredient",
+        "4. Cancel",
+    ])
+    return "\n".join(lines)
+
+
+def format_recipe_builder_review(known_data: dict) -> str:
+    ingredients = list(
+        known_data.get("_recipe_builder_ingredients") or []
+    )
+    yield_servings = float(
+        known_data.get("_recipe_builder_yield") or 1
+    )
+    calculation = calculate_recipe_nutrition(
+        ingredients,
+        yield_servings=yield_servings,
+    )
+    total = calculation["total"]
+    per_serving = calculation["per_serving"]
+    is_update = bool(known_data.get("_recipe_builder_existing_id"))
+    lines = [
+        "Recipe Builder Review",
+        "",
+        f"Recipe: {known_data.get('_recipe_builder_name')}",
+        "Meal type: "
+        f"{str(known_data.get('_recipe_builder_meal_type')).title()}",
+        "Makes: "
+        f"{format_display_number(yield_servings)} serving(s)",
+        "",
+        "Ingredients:",
+    ]
+    for ingredient in ingredients:
+        lines.append(
+            f"- {ingredient.get('amount_description')} "
+            f"{ingredient.get('name')}"
+        )
+    lines.extend([
+        "",
+        "Entire recipe:",
+        f"Calories: {format_display_number(total['calories'], decimals=0)}",
+        f"Protein: {format_display_number(total['protein_g'])} g",
+        f"Carbohydrates: {format_display_number(total['carbohydrates_g'])} g",
+        f"Fat: {format_display_number(total['fat_g'])} g",
+        f"Fiber: {format_display_number(total['fiber_g'])} g",
+        f"Sugar: {format_display_number(total['sugar_g'])} g",
+        f"Sodium: {format_display_number(total['sodium_mg'], decimals=0)} mg",
+        "",
+        "Per serving:",
+        f"Calories: {format_display_number(per_serving['calories'], decimals=0)}",
+        f"Protein: {format_display_number(per_serving['protein_g'])} g",
+        f"Carbohydrates: {format_display_number(per_serving['carbohydrates_g'])} g",
+        f"Fat: {format_display_number(per_serving['fat_g'])} g",
+        f"Fiber: {format_display_number(per_serving['fiber_g'])} g",
+        f"Sugar: {format_display_number(per_serving['sugar_g'])} g",
+        f"Sodium: {format_display_number(per_serving['sodium_mg'], decimals=0)} mg",
+        "",
+        "Nutrition is calculated from the exact Saved Food versions "
+        "selected above.",
+        "Nothing has been saved or logged yet.",
+        "",
+        "1. Save Changes" if is_update else "1. Save Recipe",
+        "2. Change ingredients",
+        "3. Cancel",
+    ])
+    return "\n".join(lines)
+
+
 def format_saved_recipe_details(recipe: dict) -> str:
     lines = [
         "Saved Recipe Details",
@@ -3641,6 +3778,8 @@ def format_saved_recipe_details(recipe: dict) -> str:
         ])
     lines.extend([
         "",
+        "Recipe yield: "
+        f"{format_display_number(float(recipe.get('yield_servings') or 1))} serving(s)",
         "Estimated nutrition for 1 serving:",
         "Calories: "
         f"{format_display_number(float(recipe.get('calories') or 0), decimals=0)}",
@@ -9731,8 +9870,8 @@ def process_telegram_update(update):
                 recipes = list_saved_recipes()
                 if not recipes:
                     send_telegram_msg(
-                        "There are no Saved Recipes yet. Choose a "
-                        "Pantry meal idea and tap Save Recipe first.",
+                        "There are no Saved Recipes yet. Choose Create "
+                        "recipe, or save one from a Pantry meal idea.",
                         chat_id=chat_id,
                     )
                     return
@@ -9754,7 +9893,35 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"2", "edit", "edit saved recipe"}:
+            if lowered in {
+                "2",
+                "create",
+                "create recipe",
+                "add recipe",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_name",
+                    known_data={
+                        "_recipe_builder_name": None,
+                        "_recipe_builder_existing_id": None,
+                        "_recipe_builder_meal_type": None,
+                        "_recipe_builder_yield": None,
+                        "_recipe_builder_ingredients": [],
+                        "_recipe_builder_summary": "",
+                        "_recipe_builder_steps": [],
+                        "_recipe_builder_selected_food_id": None,
+                        "_recipe_builder_food_ids": [],
+                    },
+                    missing_fields=["recipe_name"],
+                )
+                send_telegram_msg(
+                    "Recipe Builder\n\nWhat should this recipe be called?",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"3", "edit", "edit saved recipe"}:
                 recipes = list_saved_recipes()
                 if not recipes:
                     send_telegram_msg(
@@ -9782,7 +9949,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"3", "delete", "delete saved recipe"}:
+            if lowered in {"4", "delete", "delete saved recipe"}:
                 recipes = list_saved_recipes()
                 if not recipes:
                     send_telegram_msg(
@@ -9810,7 +9977,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"4", "back"}:
+            if lowered in {"5", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -9825,6 +9992,505 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_saved_recipes_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_name":
+            name = text.strip()
+            if len(name) < 2:
+                send_telegram_msg(
+                    "Enter a recipe name with at least two characters.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="recipe_builder_meal_type",
+                known_data={"_recipe_builder_name": name},
+                missing_fields=["meal_type"],
+            )
+            send_telegram_msg(
+                "Is this recipe mainly for lunch or dinner?\n\n"
+                "1. Lunch\n"
+                "2. Dinner",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_meal_type":
+            meal_type = {
+                "1": "lunch",
+                "lunch": "lunch",
+                "2": "dinner",
+                "dinner": "dinner",
+            }.get(lowered)
+            if meal_type is None:
+                send_telegram_msg(
+                    "Choose Lunch or Dinner.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="recipe_builder_yield",
+                known_data={"_recipe_builder_meal_type": meal_type},
+                missing_fields=["yield_servings"],
+            )
+            send_telegram_msg(
+                "How many servings will the entire recipe make?\n\n"
+                "Examples: 1, 2, 4, or 6",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_yield":
+            try:
+                yield_servings = float(text.strip())
+            except (TypeError, ValueError):
+                yield_servings = 0
+            if yield_servings <= 0 or yield_servings > 100:
+                send_telegram_msg(
+                    "Enter a number greater than 0 and no more than 100.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="recipe_builder_ingredient_name",
+                known_data={"_recipe_builder_yield": yield_servings},
+                missing_fields=["ingredient"],
+            )
+            send_telegram_msg(
+                "Type the first Saved Food ingredient name.\n\n"
+                "You can also reply Browse foods or Add new saved food.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step in {
+            "recipe_builder_ingredient_name",
+            "recipe_builder_ingredient_select",
+        }:
+            if lowered == "back":
+                ingredients = list(
+                    known_data.get("_recipe_builder_ingredients") or []
+                )
+                if ingredients:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="recipe_builder_ingredient_menu",
+                        known_data={
+                            "_recipe_builder_selected_food_id": None,
+                        },
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        format_recipe_builder_ingredients(known_data),
+                        chat_id=chat_id,
+                    )
+                else:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="recipe_builder_yield",
+                        missing_fields=["yield_servings"],
+                    )
+                    send_telegram_msg(
+                        "How many servings will the entire recipe make?",
+                        chat_id=chat_id,
+                    )
+                return
+
+            if lowered in {
+                "browse",
+                "browse foods",
+                "browse saved foods",
+            }:
+                foods = list_recipe_ingredient_foods()
+                if not foods:
+                    send_telegram_msg(
+                        "There are no complete trusted Saved Foods yet. "
+                        "Reply Add new saved food to create one.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_ingredient_select",
+                    known_data={
+                        "_recipe_builder_food_ids": [
+                            int(food["food_id"]) for food in foods
+                        ],
+                    },
+                    missing_fields=["ingredient"],
+                )
+                send_telegram_msg(
+                    format_recipe_builder_food_choices(foods),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "add new saved food",
+                "new saved food",
+                "add saved food",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_food_add_name",
+                    known_data={"_recipe_builder_return": True},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "What should the new Saved Food ingredient be called?",
+                    chat_id=chat_id,
+                )
+                return
+
+            food = None
+            if current_step == "recipe_builder_ingredient_select":
+                food_ids = list(
+                    known_data.get("_recipe_builder_food_ids") or []
+                )
+                try:
+                    selected_index = int(text.strip()) - 1
+                    if selected_index < 0:
+                        raise IndexError
+                    selected_id = int(food_ids[selected_index])
+                    food = next(
+                        (
+                            item
+                            for item in list_recipe_ingredient_foods()
+                            if int(item["food_id"]) == selected_id
+                        ),
+                        None,
+                    )
+                except (IndexError, TypeError, ValueError):
+                    food = find_recipe_ingredient_food(text)
+            else:
+                food = find_recipe_ingredient_food(text)
+
+            if food is None:
+                send_telegram_msg(
+                    "I couldn't find one trusted Saved Food with that "
+                    "name. Type another name, reply Browse foods, or "
+                    "reply Add new saved food.",
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="recipe_builder_ingredient_amount",
+                known_data={
+                    "_recipe_builder_selected_food_id": int(food["food_id"]),
+                },
+                missing_fields=["ingredient_amount"],
+            )
+            send_telegram_msg(
+                f"How much {food.get('canonical_name')} is in the "
+                "entire recipe?\n\n"
+                f"Saved serving: {food.get('serving_description')}\n"
+                "Examples: 1 serving, 40 g, 3 oz, or 2 slices.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_ingredient_amount":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_ingredient_name",
+                    known_data={"_recipe_builder_selected_food_id": None},
+                    missing_fields=["ingredient"],
+                )
+                send_telegram_msg(
+                    "Type the Saved Food ingredient name, Browse foods, "
+                    "or Add new saved food.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                ingredient = prepare_recipe_ingredient(
+                    food_id=int(
+                        known_data.get(
+                            "_recipe_builder_selected_food_id"
+                        )
+                    ),
+                    amount_description=text,
+                )
+            except (TypeError, ValueError) as exc:
+                send_telegram_msg(str(exc), chat_id=chat_id)
+                return
+
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            ingredients.append(ingredient)
+            updated = dict(known_data)
+            updated["_recipe_builder_ingredients"] = ingredients
+            updated["_recipe_builder_selected_food_id"] = None
+            update_conversation(
+                chat_id=chat_id,
+                current_step="recipe_builder_ingredient_menu",
+                known_data=updated,
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_recipe_builder_ingredients(updated),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_ingredient_menu":
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            if lowered in {"1", "add", "add another ingredient"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_ingredient_name",
+                    missing_fields=["ingredient"],
+                )
+                send_telegram_msg(
+                    "Type the next Saved Food ingredient name.\n\n"
+                    "You can also reply Browse foods or Add new saved food.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"3", "remove", "remove last ingredient"}:
+                if not ingredients:
+                    send_telegram_msg(
+                        "There is no ingredient to remove.",
+                        chat_id=chat_id,
+                    )
+                    return
+                ingredients.pop()
+                if not ingredients:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="recipe_builder_ingredient_name",
+                        known_data={"_recipe_builder_ingredients": []},
+                        missing_fields=["ingredient"],
+                    )
+                    send_telegram_msg(
+                        "The ingredient list is empty. Type a Saved Food "
+                        "ingredient name.",
+                        chat_id=chat_id,
+                    )
+                    return
+                updated = dict(known_data)
+                updated["_recipe_builder_ingredients"] = ingredients
+                update_conversation(
+                    chat_id=chat_id,
+                    known_data=updated,
+                )
+                send_telegram_msg(
+                    format_recipe_builder_ingredients(updated),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"2", "continue", "done"}:
+                if not ingredients:
+                    send_telegram_msg(
+                        "Add at least one ingredient before continuing.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_summary",
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Enter a short description of the recipe, or reply Skip.",
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                format_recipe_builder_ingredients(known_data),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_summary":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_ingredient_menu",
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_recipe_builder_ingredients(known_data),
+                    chat_id=chat_id,
+                )
+                return
+            summary = "" if lowered in {"skip", "none"} else text.strip()
+            update_conversation(
+                chat_id=chat_id,
+                current_step="recipe_builder_preparation",
+                known_data={"_recipe_builder_summary": summary},
+                missing_fields=["preparation_steps"],
+            )
+            send_telegram_msg(
+                "Enter the preparation steps, one per line.\n\n"
+                "Example:\n"
+                "1. Brown the turkey.\n"
+                "2. Add the vegetables and simmer.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_preparation":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_summary",
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Enter a short description, or reply Skip.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                steps = parse_saved_recipe_steps(text)
+            except ValueError as exc:
+                send_telegram_msg(str(exc), chat_id=chat_id)
+                return
+            updated = dict(known_data)
+            updated["_recipe_builder_steps"] = steps
+            update_conversation(
+                chat_id=chat_id,
+                current_step="recipe_builder_confirmation",
+                known_data=updated,
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_recipe_builder_review(updated),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_confirmation":
+            if lowered in {"2", "back", "change ingredients"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_ingredient_menu",
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_recipe_builder_ingredients(known_data),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {
+                "1",
+                "save",
+                "save recipe",
+                "save changes",
+            }:
+                save_label = (
+                    "Save Changes"
+                    if known_data.get("_recipe_builder_existing_id")
+                    else "Save Recipe"
+                )
+                send_telegram_msg(
+                    f"Reply {save_label}, Change ingredients, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+            existing_recipe_id = int(
+                known_data.get("_recipe_builder_existing_id") or 0
+            )
+            try:
+                if existing_recipe_id:
+                    update_result = update_saved_recipe_from_ingredients(
+                        existing_recipe_id,
+                        yield_servings=float(
+                            known_data.get("_recipe_builder_yield") or 0
+                        ),
+                        ingredients=list(
+                            known_data.get(
+                                "_recipe_builder_ingredients"
+                            ) or []
+                        ),
+                        preparation_steps=list(
+                            known_data.get("_recipe_builder_steps") or []
+                        ),
+                        summary=str(
+                            known_data.get("_recipe_builder_summary") or ""
+                        ),
+                    )
+                    result = {
+                        "created": True,
+                        "recipe": update_result["recipe"],
+                    }
+                else:
+                    result = create_saved_recipe_from_ingredients(
+                        name=str(
+                            known_data.get("_recipe_builder_name") or ""
+                        ),
+                        meal_type=str(
+                            known_data.get("_recipe_builder_meal_type") or ""
+                        ),
+                        yield_servings=float(
+                            known_data.get("_recipe_builder_yield") or 0
+                        ),
+                        ingredients=list(
+                            known_data.get(
+                                "_recipe_builder_ingredients"
+                            ) or []
+                        ),
+                        preparation_steps=list(
+                            known_data.get("_recipe_builder_steps") or []
+                        ),
+                        summary=str(
+                            known_data.get("_recipe_builder_summary") or ""
+                        ),
+                    )
+            except (TypeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't save that recipe: {exc}\n\n"
+                    "Nothing was logged.",
+                    chat_id=chat_id,
+                )
+                return
+            except Exception:
+                logging.exception("Recipe Builder save failed")
+                send_telegram_msg(
+                    "I couldn't save that recipe safely. Nothing was "
+                    "logged or changed.",
+                    chat_id=chat_id,
+                )
+                return
+
+            recipe = result.get("recipe")
+            if not result.get("created"):
+                send_telegram_msg(
+                    "A Saved Recipe with that name already exists. "
+                    "Nothing was overwritten.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_details",
+                known_data={
+                    "saved_recipe_id": int(recipe["saved_recipe_id"]),
+                    "saved_recipe_servings": None,
+                    "saved_recipe_meal": None,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                (
+                    "Saved Recipe recalculated for future logs. "
+                    "Previous food entries were not changed.\n\n"
+                    if existing_recipe_id
+                    else "Saved Recipe created. Nothing was logged.\n\n"
+                )
+                + format_saved_recipe_details(recipe),
                 chat_id=chat_id,
             )
             return
@@ -10078,6 +10744,46 @@ def process_telegram_update(update):
                 )
                 return
 
+            if lowered in {"4", "ingredients"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_ingredient_name",
+                    known_data={
+                        "_recipe_builder_existing_id": int(
+                            recipe["saved_recipe_id"]
+                        ),
+                        "_recipe_builder_name": str(
+                            recipe.get("canonical_name") or ""
+                        ),
+                        "_recipe_builder_meal_type": str(
+                            recipe.get("meal_type") or "dinner"
+                        ),
+                        "_recipe_builder_yield": float(
+                            recipe.get("yield_servings") or 1
+                        ),
+                        "_recipe_builder_ingredients": [],
+                        "_recipe_builder_summary": str(
+                            recipe.get("summary") or ""
+                        ),
+                        "_recipe_builder_steps": list(
+                            recipe.get("preparation_steps") or []
+                        ),
+                        "_recipe_builder_selected_food_id": None,
+                        "_recipe_builder_food_ids": [],
+                    },
+                    missing_fields=["ingredient"],
+                )
+                send_telegram_msg(
+                    "Recipe Builder — Recalculate Ingredients\n\n"
+                    "Re-enter all ingredients and amounts. Saving will "
+                    "create a new recipe nutrition version for future "
+                    "logs; previous food entries will remain unchanged.\n\n"
+                    "Type the first Saved Food ingredient name, Browse "
+                    "foods, or Add new saved food.",
+                    chat_id=chat_id,
+                )
+                return
+
             edit_steps = {
                 "1": ("saved_recipe_edit_name", "What should this recipe be called?"),
                 "name": ("saved_recipe_edit_name", "What should this recipe be called?"),
@@ -10085,20 +10791,6 @@ def process_telegram_update(update):
                 "meal type": ("saved_recipe_edit_meal_type", "Should this recipe be for lunch or dinner?"),
                 "3": ("saved_recipe_edit_summary", "Enter a short recipe summary. Reply Clear to remove it."),
                 "summary": ("saved_recipe_edit_summary", "Enter a short recipe summary. Reply Clear to remove it."),
-                "4": (
-                    "saved_recipe_edit_ingredients",
-                    "Enter all ingredients, one per line, using:\n"
-                    "amount | ingredient\n\n"
-                    "Example:\n4 ounces | chicken breast\n"
-                    "1/2 cup | green peppers",
-                ),
-                "ingredients": (
-                    "saved_recipe_edit_ingredients",
-                    "Enter all ingredients, one per line, using:\n"
-                    "amount | ingredient\n\n"
-                    "Example:\n4 ounces | chicken breast\n"
-                    "1/2 cup | green peppers",
-                ),
                 "5": (
                     "saved_recipe_edit_preparation",
                     "Enter the preparation steps, one per line.",
@@ -11637,6 +12329,19 @@ def process_telegram_update(update):
 
         if current_step == "saved_food_add_confirmation":
             if lowered in {"2", "no"}:
+                if known_data.get("_recipe_builder_return"):
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="recipe_builder_ingredient_name",
+                        known_data={"_recipe_builder_return": False},
+                        missing_fields=["ingredient"],
+                    )
+                    send_telegram_msg(
+                        "No Saved Food was added. Type an existing Saved "
+                        "Food ingredient name, Browse foods, or Back.",
+                        chat_id=chat_id,
+                    )
+                    return
                 update_conversation(
                     chat_id=chat_id,
                     current_step="saved_foods",
@@ -11714,6 +12419,32 @@ def process_telegram_update(update):
 
             food = result["food"]
             created = bool(result.get("created"))
+            if known_data.get("_recipe_builder_return"):
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_ingredient_amount",
+                    known_data={
+                        "_recipe_builder_return": False,
+                        "_recipe_builder_selected_food_id": int(
+                            food["food_id"]
+                        ),
+                    },
+                    missing_fields=["ingredient_amount"],
+                )
+                saved_note = (
+                    "Saved the new ingredient."
+                    if created
+                    else "That Saved Food already existed."
+                )
+                send_telegram_msg(
+                    f"{saved_note}\n\n"
+                    f"How much {food.get('canonical_name')} is in the "
+                    "entire recipe?\n\n"
+                    f"Saved serving: {food.get('serving_description')}\n"
+                    "Examples: 1 serving, 40 g, 3 oz, or 2 slices.",
+                    chat_id=chat_id,
+                )
+                return
             update_conversation(
                 chat_id=chat_id,
                 current_step="saved_foods",
