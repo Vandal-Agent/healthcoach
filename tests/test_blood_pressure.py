@@ -131,6 +131,21 @@ class BloodPressureTests(unittest.TestCase):
         self.assertEqual(saved_row[13:15], [121.0, 79.0])
         self.assertEqual(saved_row[15], "08/22/2026 07:15 AM")
 
+    def test_webhook_accepts_spelled_out_iphone_start_date_text(self):
+        response, saved_row = self.post_webhook(
+            {
+                "blood_pressure_systolic": 107,
+                "blood_pressure_diastolic": 74,
+                "blood_pressure_measured_at": (
+                    "Aug 22, 2026 at 6:52\u202fAM"
+                ),
+            }
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(saved_row[13:15], [107.0, 74.0])
+        self.assertEqual(saved_row[15], "08/22/2026 06:52 AM")
+
     def test_webhook_rejects_multiple_iphone_dates(self):
         response, saved_row = self.post_webhook(
             {

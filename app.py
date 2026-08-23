@@ -798,6 +798,8 @@ def parse_health_measurement_timestamp(value):
                 "%m/%d/%Y, %I:%M %p",
                 "%m/%d/%y %I:%M %p",
                 "%m/%d/%y, %I:%M %p",
+                "%b %d, %Y at %I:%M %p",
+                "%B %d, %Y at %I:%M %p",
                 "%Y-%m-%d %H:%M:%S",
             ):
                 try:
