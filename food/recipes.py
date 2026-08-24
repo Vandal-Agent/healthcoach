@@ -709,6 +709,7 @@ def create_saved_recipe_from_ingredients(
     ingredients: list[dict[str, Any]],
     preparation_steps: list[str],
     summary: str = "",
+    excluded_ingredients: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a reproducible Saved Recipe from frozen ingredient versions."""
     validated_ingredients = validate_linked_recipe_ingredients(ingredients)
@@ -724,15 +725,27 @@ def create_saved_recipe_from_ingredients(
         }
         for ingredient in validated_ingredients
     ]
+    estimate_notes = (
+        "Calculated from the exact Saved Food nutrition versions "
+        "listed when this recipe was created."
+    )
+    excluded = [
+        str(item).strip()
+        for item in excluded_ingredients or []
+        if str(item).strip()
+    ]
+    if excluded:
+        estimate_notes += (
+            " Nutrition excludes these user-approved optional or "
+            "trace ingredients: " + ", ".join(excluded) + "."
+        )
+
     idea = {
         "name": str(name).strip(),
         "summary": str(summary or "").strip(),
         "ingredients": display_ingredients,
         "preparation_steps": preparation_steps,
-        "estimate_notes": (
-            "Calculated from the exact Saved Food nutrition versions "
-            "listed when this recipe was created."
-        ),
+        "estimate_notes": estimate_notes,
         "heart_healthy_pick": False,
         "heart_healthy_reason": "",
         **calculated["per_serving"],

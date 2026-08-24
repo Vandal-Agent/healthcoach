@@ -166,14 +166,181 @@ class SavedRecipeMenuTests(unittest.TestCase):
         keyboard = app.menu_reply_markup(message)
 
         self.assertIn("2. Create recipe", message)
-        self.assertIn("3. Edit saved recipe", message)
-        self.assertIn("4. Delete saved recipe", message)
+        self.assertIn("3. Import recipe", message)
+        self.assertIn("4. Edit saved recipe", message)
+        self.assertIn("5. Delete saved recipe", message)
         self.assertIn(
             ["Browse saved recipes", "Create recipe"],
             keyboard["keyboard"],
         )
         self.assertIn(["Edit saved recipe"], keyboard["keyboard"])
         self.assertIn(["Delete saved recipe"], keyboard["keyboard"])
+
+    def test_import_recipe_accepts_text_and_reaches_review(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_input",
+            "known_data": {},
+        }
+        draft = {
+            "readable": True,
+            "recipe_name": "Imported Turkey",
+            "meal_type": "dinner",
+            "yield_servings": 2,
+            "summary": "Quick turkey.",
+            "ingredients": [
+                {
+                    "ingredient_name": "ground turkey",
+                    "amount_description": "6 oz",
+                    "brand": None,
+                    "optional": False,
+                    "trace_only": False,
+                }
+            ],
+            "preparation_steps": ["Cook and serve."],
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "parse_recipe_text", return_value=draft),
+            patch.object(
+                app,
+                "find_recipe_ingredient_food",
+                return_value={"food_id": 12, "canonical_name": "Turkey"},
+            ),
+            patch.object(
+                app,
+                "prepare_recipe_ingredient",
+                return_value=BUILDER_INGREDIENT,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Imported recipe text",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_confirmation",
+        )
+        self.assertIn("Recipe Builder Review", send.call_args.args[0])
+        self.assertIn("Nothing has been saved", send.call_args.args[0])
+
+    def test_major_imported_ingredient_cannot_be_excluded(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_ingredient",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "chicken breast",
+                    "amount_description": "16 oz",
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Exclude"}
+            })
+
+        update.assert_not_called()
+        self.assertIn("major ingredient", send.call_args.args[0])
+
+    def test_verified_import_lookup_requires_confirmation_before_save(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_ingredient",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "chicken breast",
+                    "amount_description": "4 oz",
+                    "brand": None,
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        result = {
+            "found": True,
+            "food": {
+                "canonical_name": "Chicken breast, cooked",
+                "serving_description": "4 oz",
+                "serving_amount": 4.0,
+                "serving_unit": "oz",
+                "brand": None,
+            },
+            "nutrition": {
+                "calories": 187.0,
+                "protein_g": 35.0,
+                "carbohydrates_g": 0.0,
+                "fat_g": 4.0,
+                "fiber_g": 0.0,
+                "sugar_g": 0.0,
+                "sodium_mg": 80.0,
+            },
+            "verification": {"source": "USDA FoodData Central"},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "lookup_official_nutrition",
+                return_value=result,
+            ),
+            patch.object(
+                app,
+                "ingredient_serving_multiplier",
+                return_value=1.0,
+            ),
+            patch.object(app, "add_food_with_nutrition") as add,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Try verified lookup",
+                }
+            })
+
+        add.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_import_verified_confirmation",
+        )
+        self.assertIn("Save this as a Saved Food", send.call_args.args[0])
+
+    def test_trace_ingredient_exclusion_is_shown_in_review(self) -> None:
+        message = app.format_recipe_builder_review({
+            "_recipe_builder_name": "Test Recipe",
+            "_recipe_builder_meal_type": "dinner",
+            "_recipe_builder_yield": 1,
+            "_recipe_builder_ingredients": [BUILDER_INGREDIENT],
+            "_recipe_import_excluded": ["1 tsp dried parsley"],
+        })
+
+        self.assertIn("Excluded from nutrition", message)
+        self.assertIn("1 tsp dried parsley", message)
 
     def test_create_recipe_starts_builder(self) -> None:
         conversation = {

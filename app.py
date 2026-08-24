@@ -92,6 +92,7 @@ from food.recipes import (
     delete_saved_recipe,
     find_recipe_ingredient_food,
     get_saved_recipe,
+    ingredient_serving_multiplier,
     list_recipe_ingredient_foods,
     list_recipe_pantry_foods,
     list_saved_recipes,
@@ -100,6 +101,10 @@ from food.recipes import (
     update_saved_recipe,
     update_saved_recipe_from_ingredients,
     update_saved_recipe_nutrition,
+)
+from food.recipe_importer import (
+    parse_recipe_photo,
+    parse_recipe_text,
 )
 from food.nutrition_provider import lookup_official_nutrition
 from food.menu_photo_advisor import (
@@ -415,6 +420,8 @@ def menu_reply_markup(message):
             "Delete this Saved Recipe?",
             "Copy yesterday's food?",
             "Copy this meal from yesterday?",
+            "Add the new Saved Food ingredients created during this "
+            "import to My Pantry?",
         )
     ):
         rows = [["Yes", "No"]]
@@ -445,6 +452,7 @@ def menu_reply_markup(message):
     elif "Saved Recipes Menu\n\n" in message:
         rows = [
             ["Browse saved recipes", "Create recipe"],
+            ["Import recipe"],
             ["Edit saved recipe"],
             ["Delete saved recipe"],
             ["Back", "Cancel"],
@@ -570,6 +578,7 @@ def menu_reply_markup(message):
             ["Read restaurant menu"],
             ["Scan product barcode"],
             ["Add scanned product to Pantry"],
+            ["Import a recipe"],
             ["Cancel"],
         ]
         one_time = True
@@ -3277,7 +3286,8 @@ def healthcoach_photo_intent_text() -> str:
         "2. Read a restaurant menu\n"
         "3. Scan a product barcode\n"
         "4. Add a scanned product to My Pantry\n"
-        "5. Cancel\n\n"
+        "5. Import a recipe\n"
+        "6. Cancel\n\n"
         "Nothing will be saved or logged without your confirmation."
     )
 
@@ -3288,6 +3298,11 @@ def photo_intent_from_caption(caption: str | None) -> str | None:
 
     if not lowered:
         return None
+
+    if "recipe" in lowered and any(
+        word in lowered for word in ("import", "read", "save")
+    ):
+        return "recipe"
 
     if is_food_photo_request(lowered):
         return "meal"
@@ -3558,11 +3573,13 @@ def healthcoach_saved_recipes_menu_text() -> str:
         "Saved Recipes Menu\n\n"
         "1. Browse saved recipes\n"
         "2. Create recipe\n"
-        "3. Edit saved recipe\n"
-        "4. Delete saved recipe\n"
-        "5. Back\n\n"
-        "Create recipes from Saved Foods or save them from Pantry "
-        "meal ideas. Saving a recipe does not log it as eaten."
+        "3. Import recipe\n"
+        "4. Edit saved recipe\n"
+        "5. Delete saved recipe\n"
+        "6. Back\n\n"
+        "Import pasted recipe text or a recipe photo, create recipes "
+        "from Saved Foods, or save them from Pantry meal ideas. "
+        "Saving a recipe does not log it as eaten."
     )
 
 
@@ -3786,6 +3803,226 @@ def format_recipe_builder_ingredients(
     return "\n".join(lines)
 
 
+def format_recipe_import_missing(ingredient: dict) -> str:
+    name = str(ingredient.get("ingredient_name") or "ingredient")
+    amount = str(ingredient.get("amount_description") or "").strip()
+    brand = str(ingredient.get("brand") or "").strip()
+    label = " ".join(part for part in (amount, brand, name) if part)
+    lines = [
+        "Recipe Import — Ingredient Needed",
+        "",
+        label,
+    ]
+    if (
+        ingredient.get("candidate_food_id")
+        and not ingredient.get("conversion_error")
+        and (ingredient.get("optional") or ingredient.get("trace_only"))
+    ):
+        lines.extend([
+            "",
+            "Matched Saved Food: "
+            + str(ingredient.get("candidate_food_name") or "Saved Food"),
+            "Reply Include ingredient or Exclude ingredient.",
+        ])
+    elif ingredient.get("candidate_food_id"):
+        lines.extend([
+            "",
+            "I found a Saved Food, but its serving could not be safely "
+            "matched to this recipe amount.",
+            "Reply Amount: followed by an equivalent amount that works "
+            "with the Saved Food (for example, Amount: 2 servings).",
+        ])
+    else:
+        lines.extend([
+            "",
+            "I could not match this to one nutrition-ready Saved Food.",
+            "Type the exact name of an existing Saved Food, or reply "
+            "Try verified lookup or Add new saved food.",
+        ])
+    if ingredient.get("optional") or ingredient.get("trace_only"):
+        lines.append(
+            "You may also reply Exclude ingredient. It will be listed "
+            "as excluded from the nutrition calculation."
+        )
+    lines.extend([
+        "",
+        "A major ingredient cannot be silently skipped.",
+        "Reply Cancel to stop without saving.",
+    ])
+    return "\n".join(lines)
+
+
+def continue_recipe_import_resolution(
+    *,
+    chat_id: int,
+    known_data: dict,
+) -> None:
+    pending = list(known_data.get("_recipe_import_pending") or [])
+    updated = dict(known_data)
+    updated["_recipe_import_pending"] = pending
+    if pending:
+        update_conversation(
+            chat_id=chat_id,
+            current_step="recipe_import_ingredient",
+            known_data=updated,
+            missing_fields=["recipe_ingredient"],
+        )
+        send_telegram_msg(
+            format_recipe_import_missing(pending[0]),
+            chat_id=chat_id,
+        )
+        return
+
+    update_conversation(
+        chat_id=chat_id,
+        current_step="recipe_builder_confirmation",
+        known_data=updated,
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_recipe_builder_review(updated),
+        chat_id=chat_id,
+    )
+
+
+def resolve_recipe_import_ingredients(
+    *,
+    chat_id: int,
+    known_data: dict,
+) -> None:
+    resolved = list(known_data.get("_recipe_builder_ingredients") or [])
+    pending = []
+    for source in list(known_data.get("_recipe_import_source_ingredients") or []):
+        item = dict(source)
+        name = str(item.get("ingredient_name") or "").strip()
+        brand = str(item.get("brand") or "").strip()
+        food = (
+            find_recipe_ingredient_food(f"{brand} {name}".strip())
+            if brand
+            else None
+        ) or find_recipe_ingredient_food(name)
+        if food is not None:
+            item["candidate_food_id"] = int(food["food_id"])
+            item["candidate_food_name"] = str(food["canonical_name"])
+        if food is not None and not (
+            item.get("optional") or item.get("trace_only")
+        ):
+            try:
+                resolved.append(
+                    prepare_recipe_ingredient(
+                        food_id=int(food["food_id"]),
+                        amount_description=str(
+                            item.get("amount_description") or ""
+                        ),
+                    )
+                )
+                continue
+            except (TypeError, ValueError) as exc:
+                item["conversion_error"] = str(exc)
+        pending.append(item)
+
+    updated = dict(known_data)
+    updated["_recipe_builder_ingredients"] = resolved
+    updated["_recipe_import_pending"] = pending
+    continue_recipe_import_resolution(chat_id=chat_id, known_data=updated)
+
+
+def advance_recipe_import_metadata(
+    *,
+    chat_id: int,
+    known_data: dict,
+) -> None:
+    if not str(known_data.get("_recipe_builder_name") or "").strip():
+        update_conversation(
+            chat_id=chat_id,
+            current_step="recipe_import_name",
+            known_data=known_data,
+            missing_fields=["recipe_name"],
+        )
+        send_telegram_msg(
+            "Recipe Import\n\nWhat should this recipe be called?",
+            chat_id=chat_id,
+        )
+        return
+    if str(known_data.get("_recipe_builder_meal_type") or "") not in {
+        "lunch",
+        "dinner",
+    }:
+        update_conversation(
+            chat_id=chat_id,
+            current_step="recipe_import_meal_type",
+            known_data=known_data,
+            missing_fields=["meal_type"],
+        )
+        send_telegram_msg(
+            "Should this imported recipe be for lunch or dinner?\n\n"
+            "1. Lunch\n2. Dinner",
+            chat_id=chat_id,
+        )
+        return
+    if not known_data.get("_recipe_builder_yield"):
+        update_conversation(
+            chat_id=chat_id,
+            current_step="recipe_import_yield",
+            known_data=known_data,
+            missing_fields=["yield_servings"],
+        )
+        send_telegram_msg(
+            "How many servings does the entire imported recipe make?",
+            chat_id=chat_id,
+        )
+        return
+    if not list(known_data.get("_recipe_builder_steps") or []):
+        update_conversation(
+            chat_id=chat_id,
+            current_step="recipe_import_preparation",
+            known_data=known_data,
+            missing_fields=["preparation_steps"],
+        )
+        send_telegram_msg(
+            "I couldn't find complete preparation directions. Enter the "
+            "steps, one per line.",
+            chat_id=chat_id,
+        )
+        return
+    resolve_recipe_import_ingredients(chat_id=chat_id, known_data=known_data)
+
+
+def start_recipe_import_draft(
+    *,
+    chat_id: int,
+    draft: dict,
+) -> None:
+    if not draft.get("readable") or not draft.get("ingredients"):
+        send_telegram_msg(
+            "I couldn't extract a reliable recipe from that. Try pasted "
+            "recipe text or a clearer photo showing the full ingredient "
+            "list. Nothing was saved.",
+            chat_id=chat_id,
+        )
+        return
+    meal_type = str(draft.get("meal_type") or "").lower()
+    if meal_type not in {"lunch", "dinner"}:
+        meal_type = None
+    data = {
+        "_recipe_import_active": True,
+        "_recipe_builder_name": draft.get("recipe_name"),
+        "_recipe_builder_existing_id": None,
+        "_recipe_builder_meal_type": meal_type,
+        "_recipe_builder_yield": draft.get("yield_servings"),
+        "_recipe_builder_ingredients": [],
+        "_recipe_builder_summary": str(draft.get("summary") or ""),
+        "_recipe_builder_steps": list(draft.get("preparation_steps") or []),
+        "_recipe_import_source_ingredients": list(
+            draft.get("ingredients") or []
+        ),
+        "_recipe_import_pending": [],
+        "_recipe_import_excluded": [],
+        "_recipe_import_created_food_ids": [],
+    }
+    advance_recipe_import_metadata(chat_id=chat_id, known_data=data)
+
+
 def format_recipe_builder_review(known_data: dict) -> str:
     ingredients = list(
         known_data.get("_recipe_builder_ingredients") or []
@@ -3816,6 +4053,10 @@ def format_recipe_builder_review(known_data: dict) -> str:
             f"- {ingredient.get('amount_description')} "
             f"{ingredient.get('name')}"
         )
+    excluded = list(known_data.get("_recipe_import_excluded") or [])
+    if excluded:
+        lines.extend(["", "Excluded from nutrition with your approval:"])
+        lines.extend(f"- {item}" for item in excluded)
     lines.extend([
         "",
         "Entire recipe:",
@@ -6331,6 +6572,8 @@ def process_telegram_update(update):
         expected_photo_steps = {
             "await_menu_photo",
             "await_food_photo",
+            "await_recipe_photo",
+            "recipe_import_input",
             "await_barcode_photo",
             "await_barcode_number",
             "barcode_teach_label_photo",
@@ -6364,6 +6607,7 @@ def process_telegram_update(update):
                 "menu": "await_menu_photo",
                 "barcode": "await_barcode_photo",
                 "pantry_barcode": "await_barcode_photo",
+                "recipe": "await_recipe_photo",
             }[caption_intent]
             start_conversation(
                 chat_id=chat_id,
@@ -6402,6 +6646,11 @@ def process_telegram_update(update):
             )
         )
 
+        recipe_photo = photo_step in {
+            "await_recipe_photo",
+            "recipe_import_input",
+        }
+
         if label_photo:
             progress_message = (
                 "I'm reading the Nutrition Facts label. "
@@ -6411,6 +6660,11 @@ def process_telegram_update(update):
             progress_message = (
                 "I'm reading the barcode and checking the exact "
                 "product in our food databases. This may take a moment."
+            )
+        elif recipe_photo:
+            progress_message = (
+                "I'm reading the recipe and organizing its ingredients. "
+                "This may take a moment."
             )
         elif food_photo:
             progress_message = (
@@ -6557,6 +6811,17 @@ def process_telegram_update(update):
                             "4. Cancel"
                         )
 
+            elif recipe_photo:
+                result = parse_recipe_photo(
+                    image_bytes,
+                    mime_type=mime_type,
+                    user_context=caption,
+                )
+                start_recipe_import_draft(
+                    chat_id=chat_id,
+                    draft=result,
+                )
+                return
             elif food_photo:
                 result = analyze_food_photo(
                     image_bytes,
@@ -6618,6 +6883,8 @@ def process_telegram_update(update):
                     if label_photo
                     else "Barcode"
                     if barcode_photo
+                    else "Recipe"
+                    if recipe_photo
                     else "Food"
                     if food_photo
                     else "Menu"
@@ -6641,6 +6908,12 @@ def process_telegram_update(update):
                     "I couldn't read that barcode photo. Try a "
                     "closer picture with the entire barcode in "
                     "focus, or type the number beneath the bars."
+                )
+            elif recipe_photo:
+                error_message = (
+                    "I couldn't read that recipe photo reliably. Try a "
+                    "closer picture showing the full ingredient list, or "
+                    "paste the recipe text. Nothing was saved."
                 )
             elif food_photo:
                 error_message = (
@@ -9020,7 +9293,14 @@ def process_telegram_update(update):
                 "scan into pantry",
             }:
                 intent = "pantry_barcode"
-            elif lowered in {"5", "cancel"}:
+            elif lowered in {
+                "5",
+                "import a recipe",
+                "import recipe",
+                "read recipe",
+            }:
+                intent = "recipe"
+            elif lowered in {"6", "cancel"}:
                 cancel_conversation(chat_id)
                 send_telegram_msg(
                     "Photo cancelled. Nothing was saved or logged.",
@@ -9057,6 +9337,7 @@ def process_telegram_update(update):
                 "menu": "await_menu_photo",
                 "barcode": "await_barcode_photo",
                 "pantry_barcode": "await_barcode_photo",
+                "recipe": "await_recipe_photo",
             }[intent]
             update_conversation(
                 chat_id=chat_id,
@@ -10006,7 +10287,30 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"3", "edit", "edit saved recipe"}:
+            if lowered in {
+                "3",
+                "import",
+                "import recipe",
+                "import a recipe",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_input",
+                    known_data={},
+                    missing_fields=["recipe_text_or_photo"],
+                )
+                send_telegram_msg(
+                    "Recipe Import\n\nPaste the complete recipe text, or "
+                    "send a clear photo showing the recipe name, full "
+                    "ingredient list, yield, and preparation.\n\n"
+                    "Nutrition will be calculated only from matched Saved "
+                    "Foods, and nothing will be saved or logged without "
+                    "your confirmation.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {"4", "edit", "edit saved recipe"}:
                 recipes = list_saved_recipes()
                 if not recipes:
                     send_telegram_msg(
@@ -10034,7 +10338,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"4", "delete", "delete saved recipe"}:
+            if lowered in {"5", "delete", "delete saved recipe"}:
                 recipes = list_saved_recipes()
                 if not recipes:
                     send_telegram_msg(
@@ -10062,7 +10366,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"5", "back"}:
+            if lowered in {"6", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -10078,6 +10382,407 @@ def process_telegram_update(update):
             send_telegram_msg(
                 healthcoach_saved_recipes_menu_text(),
                 chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_import_input":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_recipes",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_recipes_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                "I'm reading the recipe and organizing its ingredients. "
+                "This may take a moment.",
+                chat_id=chat_id,
+            )
+            try:
+                draft = parse_recipe_text(text)
+            except Exception:
+                logging.exception("Recipe text import failed")
+                send_telegram_msg(
+                    "I couldn't extract that recipe reliably. Paste the "
+                    "complete recipe again, or send a clear recipe photo. "
+                    "Nothing was saved.",
+                    chat_id=chat_id,
+                )
+                return
+            start_recipe_import_draft(chat_id=chat_id, draft=draft)
+            return
+
+        if current_step == "recipe_import_name":
+            name = text.strip()
+            if len(name) < 2:
+                send_telegram_msg(
+                    "Enter a recipe name with at least two characters.",
+                    chat_id=chat_id,
+                )
+                return
+            updated = dict(known_data)
+            updated["_recipe_builder_name"] = name
+            advance_recipe_import_metadata(chat_id=chat_id, known_data=updated)
+            return
+
+        if current_step == "recipe_import_meal_type":
+            meal_type = {
+                "1": "lunch",
+                "lunch": "lunch",
+                "2": "dinner",
+                "dinner": "dinner",
+            }.get(lowered)
+            if meal_type is None:
+                send_telegram_msg(
+                    "Choose Lunch or Dinner.",
+                    chat_id=chat_id,
+                )
+                return
+            updated = dict(known_data)
+            updated["_recipe_builder_meal_type"] = meal_type
+            advance_recipe_import_metadata(chat_id=chat_id, known_data=updated)
+            return
+
+        if current_step == "recipe_import_yield":
+            try:
+                yield_servings = float(text.strip())
+            except (TypeError, ValueError):
+                yield_servings = 0
+            if yield_servings <= 0 or yield_servings > 100:
+                send_telegram_msg(
+                    "Enter a number greater than 0 and no more than 100.",
+                    chat_id=chat_id,
+                )
+                return
+            updated = dict(known_data)
+            updated["_recipe_builder_yield"] = yield_servings
+            advance_recipe_import_metadata(chat_id=chat_id, known_data=updated)
+            return
+
+        if current_step == "recipe_import_preparation":
+            try:
+                steps = parse_saved_recipe_steps(text)
+            except ValueError as exc:
+                send_telegram_msg(str(exc), chat_id=chat_id)
+                return
+            updated = dict(known_data)
+            updated["_recipe_builder_steps"] = steps
+            advance_recipe_import_metadata(chat_id=chat_id, known_data=updated)
+            return
+
+        if current_step == "recipe_import_ingredient":
+            pending = list(known_data.get("_recipe_import_pending") or [])
+            if not pending:
+                continue_recipe_import_resolution(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                )
+                return
+            current = dict(pending[0])
+
+            if lowered in {"exclude", "exclude ingredient", "skip"}:
+                if not (current.get("optional") or current.get("trace_only")):
+                    send_telegram_msg(
+                        "This is a major ingredient, so it cannot be "
+                        "excluded from recipe nutrition. Match it to a "
+                        "Saved Food or reply Add new saved food.",
+                        chat_id=chat_id,
+                    )
+                    return
+                excluded = list(
+                    known_data.get("_recipe_import_excluded") or []
+                )
+                excluded.append(
+                    " ".join(
+                        part for part in (
+                            str(current.get("amount_description") or ""),
+                            str(current.get("ingredient_name") or ""),
+                        ) if part
+                    )
+                )
+                updated = dict(known_data)
+                updated["_recipe_import_excluded"] = excluded
+                updated["_recipe_import_pending"] = pending[1:]
+                continue_recipe_import_resolution(
+                    chat_id=chat_id,
+                    known_data=updated,
+                )
+                return
+
+            if lowered in {"include", "include ingredient"}:
+                selected_food_id = current.get("candidate_food_id")
+                if not selected_food_id:
+                    send_telegram_msg(
+                        "First type the exact Saved Food name, or reply "
+                        "Add new saved food.",
+                        chat_id=chat_id,
+                    )
+                    return
+                amount_description = str(
+                    current.get("amount_description") or ""
+                )
+                food = None
+            elif lowered in {
+                "add new saved food",
+                "new saved food",
+                "add saved food",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_food_add_name",
+                    known_data={
+                        **known_data,
+                        "_recipe_builder_return": True,
+                        "_recipe_import_return": True,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "What should this new Saved Food ingredient be called?",
+                    chat_id=chat_id,
+                )
+                return
+            elif lowered in {
+                "try verified lookup",
+                "verified lookup",
+                "look up",
+                "lookup",
+            }:
+                send_telegram_msg(
+                    "I'm checking for one exact verified nutrition match. "
+                    "This may take a moment.",
+                    chat_id=chat_id,
+                )
+                try:
+                    provider_result = lookup_official_nutrition(
+                        restaurant=None,
+                        food_name=str(
+                            current.get("ingredient_name") or ""
+                        ),
+                        size=str(
+                            current.get("amount_description") or ""
+                        ),
+                        brand=current.get("brand"),
+                    )
+                except Exception:
+                    logging.exception("Recipe ingredient lookup failed")
+                    provider_result = {"found": False}
+                nutrition = dict(provider_result.get("nutrition") or {})
+                provider_food = dict(provider_result.get("food") or {})
+                required_nutrients = (
+                    "calories",
+                    "protein_g",
+                    "carbohydrates_g",
+                    "fat_g",
+                    "fiber_g",
+                    "sugar_g",
+                    "sodium_mg",
+                )
+                if (
+                    not provider_result.get("found")
+                    or any(nutrition.get(field) is None for field in required_nutrients)
+                ):
+                    send_telegram_msg(
+                        "I couldn't find one complete, exact verified match. "
+                        "No nutrition was saved. Type an existing Saved Food "
+                        "name or reply Add new saved food.",
+                        chat_id=chat_id,
+                    )
+                    return
+                try:
+                    ingredient_serving_multiplier(
+                        amount_description=str(
+                            current.get("amount_description") or ""
+                        ),
+                        serving_amount=float(provider_food["serving_amount"]),
+                        serving_unit=str(provider_food["serving_unit"]),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    send_telegram_msg(
+                        "Verified nutrition was found, but its serving cannot "
+                        f"be safely converted to the recipe amount: {exc}\n\n"
+                        "Nothing was saved. Add a Saved Food with a compatible "
+                        "serving or choose another existing Saved Food.",
+                        chat_id=chat_id,
+                    )
+                    return
+                updated = dict(known_data)
+                updated["_recipe_import_verified_result"] = provider_result
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_verified_confirmation",
+                    known_data=updated,
+                    missing_fields=[],
+                )
+                source = str(
+                    (provider_result.get("verification") or {}).get("source")
+                    or "verified source"
+                )
+                send_telegram_msg(
+                    "Verified ingredient found:\n\n"
+                    f"Food: {provider_food.get('canonical_name')}\n"
+                    f"Serving: {provider_food.get('serving_description')}\n"
+                    f"Calories: {format_display_number(float(nutrition['calories']), decimals=0)}\n"
+                    f"Protein: {format_display_number(float(nutrition['protein_g']))} g\n"
+                    f"Source: {source}\n\n"
+                    "Save this as a Saved Food and use it in the recipe?\n\n"
+                    "1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+            elif lowered.startswith("amount:"):
+                selected_food_id = current.get("candidate_food_id")
+                if not selected_food_id:
+                    send_telegram_msg(
+                        "Choose an existing Saved Food first by typing its "
+                        "exact name.",
+                        chat_id=chat_id,
+                    )
+                    return
+                amount_description = text.split(":", 1)[1].strip()
+                food = None
+            else:
+                food = find_recipe_ingredient_food(text)
+                if food is None:
+                    send_telegram_msg(
+                        format_recipe_import_missing(current),
+                        chat_id=chat_id,
+                    )
+                    return
+                selected_food_id = int(food["food_id"])
+                amount_description = str(
+                    current.get("amount_description") or ""
+                )
+
+            try:
+                ingredient = prepare_recipe_ingredient(
+                    food_id=int(selected_food_id),
+                    amount_description=amount_description,
+                )
+            except (TypeError, ValueError) as exc:
+                current["candidate_food_id"] = int(selected_food_id)
+                if food is not None:
+                    current["candidate_food_name"] = str(
+                        food.get("canonical_name") or ""
+                    )
+                current["conversion_error"] = str(exc)
+                updated = dict(known_data)
+                updated["_recipe_import_pending"] = [current, *pending[1:]]
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_ingredient",
+                    known_data=updated,
+                    missing_fields=["recipe_ingredient_amount"],
+                )
+                send_telegram_msg(
+                    f"{exc}\n\n" + format_recipe_import_missing(current),
+                    chat_id=chat_id,
+                )
+                return
+
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            ingredients.append(ingredient)
+            updated = dict(known_data)
+            updated["_recipe_builder_ingredients"] = ingredients
+            updated["_recipe_import_pending"] = pending[1:]
+            continue_recipe_import_resolution(
+                chat_id=chat_id,
+                known_data=updated,
+            )
+            return
+
+        if current_step == "recipe_import_verified_confirmation":
+            if lowered in {"2", "no"}:
+                updated = dict(known_data)
+                updated.pop("_recipe_import_verified_result", None)
+                continue_recipe_import_resolution(
+                    chat_id=chat_id,
+                    known_data=updated,
+                )
+                return
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg(
+                    "Save this verified ingredient?\n\n1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+            pending = list(known_data.get("_recipe_import_pending") or [])
+            provider_result = dict(
+                known_data.get("_recipe_import_verified_result") or {}
+            )
+            if not pending or not provider_result.get("found"):
+                send_telegram_msg(
+                    "That verified result expired. Please restart Recipe "
+                    "Import. Nothing was saved.",
+                    chat_id=chat_id,
+                )
+                return
+            provider_food = dict(provider_result.get("food") or {})
+            nutrition = dict(provider_result.get("nutrition") or {})
+            verification = dict(provider_result.get("verification") or {})
+            try:
+                saved = add_food_with_nutrition(
+                    canonical_name=str(provider_food["canonical_name"]),
+                    serving_description=str(
+                        provider_food["serving_description"]
+                    ),
+                    serving_amount=float(provider_food["serving_amount"]),
+                    serving_unit=str(provider_food["serving_unit"]),
+                    verification_status="verified",
+                    verification_source=str(
+                        verification.get("source") or "verified_lookup"
+                    ),
+                    source_item_id=verification.get("source_item_id"),
+                    source_url=verification.get("source_url"),
+                    calories=float(nutrition["calories"]),
+                    protein_g=float(nutrition["protein_g"]),
+                    carbohydrates_g=float(nutrition["carbohydrates_g"]),
+                    fat_g=float(nutrition["fat_g"]),
+                    fiber_g=float(nutrition["fiber_g"]),
+                    sugar_g=float(nutrition["sugar_g"]),
+                    sodium_mg=float(nutrition["sodium_mg"]),
+                    brand=provider_food.get("brand"),
+                    food_type="food",
+                )
+                food = dict(saved["food"])
+                ingredient = prepare_recipe_ingredient(
+                    food_id=int(food["food_id"]),
+                    amount_description=str(
+                        pending[0].get("amount_description") or ""
+                    ),
+                )
+            except Exception:
+                logging.exception("Could not save verified recipe ingredient")
+                send_telegram_msg(
+                    "I couldn't save that verified ingredient safely. "
+                    "Nothing was added to the recipe.",
+                    chat_id=chat_id,
+                )
+                return
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            ingredients.append(ingredient)
+            created_ids = list(
+                known_data.get("_recipe_import_created_food_ids") or []
+            )
+            if saved.get("created"):
+                created_ids.append(int(food["food_id"]))
+            updated = dict(known_data)
+            updated.pop("_recipe_import_verified_result", None)
+            updated["_recipe_builder_ingredients"] = ingredients
+            updated["_recipe_import_pending"] = pending[1:]
+            updated["_recipe_import_created_food_ids"] = created_ids
+            continue_recipe_import_resolution(
+                chat_id=chat_id,
+                known_data=updated,
             )
             return
 
@@ -10528,6 +11233,9 @@ def process_telegram_update(update):
                         summary=str(
                             known_data.get("_recipe_builder_summary") or ""
                         ),
+                        excluded_ingredients=list(
+                            known_data.get("_recipe_import_excluded") or []
+                        ),
                     )
             except (TypeError, ValueError) as exc:
                 send_telegram_msg(
@@ -10553,6 +11261,26 @@ def process_telegram_update(update):
                     chat_id=chat_id,
                 )
                 return
+            created_food_ids = list(
+                known_data.get("_recipe_import_created_food_ids") or []
+            )
+            if known_data.get("_recipe_import_active") and created_food_ids:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_pantry_offer",
+                    known_data={
+                        "saved_recipe_id": int(recipe["saved_recipe_id"]),
+                        "_recipe_import_created_food_ids": created_food_ids,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Saved Recipe created. Nothing was logged.\n\n"
+                    "Add the new Saved Food ingredients created during "
+                    "this import to My Pantry?\n\n1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
             update_conversation(
                 chat_id=chat_id,
                 current_step="saved_recipe_details",
@@ -10571,6 +11299,65 @@ def process_telegram_update(update):
                     else "Saved Recipe created. Nothing was logged.\n\n"
                 )
                 + format_saved_recipe_details(recipe),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_import_pantry_offer":
+            if lowered not in {"1", "yes", "2", "no"}:
+                send_telegram_msg(
+                    "Add the newly created Saved Foods to My Pantry?\n\n"
+                    "1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+            added = 0
+            if lowered in {"1", "yes"}:
+                foods_by_id = {
+                    int(food["food_id"]): food
+                    for food in list_recipe_ingredient_foods()
+                }
+                for food_id in list(
+                    known_data.get("_recipe_import_created_food_ids") or []
+                ):
+                    food = foods_by_id.get(int(food_id))
+                    if food is None:
+                        continue
+                    result = add_pantry_item(
+                        display_name=str(food["canonical_name"]),
+                        food_id=int(food_id),
+                        source="saved_food",
+                    )
+                    if result.get("created"):
+                        added += 1
+            recipe = get_saved_recipe(
+                int(known_data.get("saved_recipe_id") or 0)
+            )
+            if recipe is None:
+                cancel_conversation(chat_id)
+                send_telegram_msg(
+                    "The recipe was saved, but I couldn't reopen its "
+                    "details. Nothing was logged.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_recipe_details",
+                known_data={
+                    "saved_recipe_id": int(recipe["saved_recipe_id"]),
+                    "saved_recipe_servings": None,
+                    "saved_recipe_meal": None,
+                },
+                missing_fields=[],
+            )
+            pantry_note = (
+                f"Added {added} new ingredient(s) to My Pantry.\n\n"
+                if lowered in {"1", "yes"}
+                else "My Pantry was not changed.\n\n"
+            )
+            send_telegram_msg(
+                pantry_note + format_saved_recipe_details(recipe),
                 chat_id=chat_id,
             )
             return
@@ -12407,6 +13194,19 @@ def process_telegram_update(update):
 
         if current_step == "saved_food_add_confirmation":
             if lowered in {"2", "no"}:
+                if known_data.get("_recipe_import_return"):
+                    updated = dict(known_data)
+                    updated["_recipe_builder_return"] = False
+                    updated["_recipe_import_return"] = False
+                    send_telegram_msg(
+                        "No Saved Food was added.",
+                        chat_id=chat_id,
+                    )
+                    continue_recipe_import_resolution(
+                        chat_id=chat_id,
+                        known_data=updated,
+                    )
+                    return
                 if known_data.get("_recipe_builder_return"):
                     send_telegram_msg(
                         "No Saved Food was added.",
@@ -12495,6 +13295,71 @@ def process_telegram_update(update):
 
             food = result["food"]
             created = bool(result.get("created"))
+            if known_data.get("_recipe_import_return"):
+                pending = list(
+                    known_data.get("_recipe_import_pending") or []
+                )
+                if not pending:
+                    send_telegram_msg(
+                        "The imported ingredient expired. Please restart "
+                        "Recipe Import.",
+                        chat_id=chat_id,
+                    )
+                    return
+                current = dict(pending[0])
+                try:
+                    ingredient = prepare_recipe_ingredient(
+                        food_id=int(food["food_id"]),
+                        amount_description=str(
+                            current.get("amount_description") or ""
+                        ),
+                    )
+                except (TypeError, ValueError) as exc:
+                    current["candidate_food_id"] = int(food["food_id"])
+                    current["candidate_food_name"] = str(
+                        food.get("canonical_name") or ""
+                    )
+                    current["conversion_error"] = str(exc)
+                    updated = dict(known_data)
+                    updated["_recipe_builder_return"] = False
+                    updated["_recipe_import_return"] = False
+                    updated["_recipe_import_pending"] = [
+                        current,
+                        *pending[1:],
+                    ]
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="recipe_import_ingredient",
+                        known_data=updated,
+                        missing_fields=["recipe_ingredient_amount"],
+                    )
+                    send_telegram_msg(
+                        "Saved the new ingredient, but the imported amount "
+                        f"still needs clarification.\n\n{exc}\n\n"
+                        + format_recipe_import_missing(current),
+                        chat_id=chat_id,
+                    )
+                    return
+                ingredients = list(
+                    known_data.get("_recipe_builder_ingredients") or []
+                )
+                ingredients.append(ingredient)
+                created_ids = list(
+                    known_data.get("_recipe_import_created_food_ids") or []
+                )
+                if created:
+                    created_ids.append(int(food["food_id"]))
+                updated = dict(known_data)
+                updated["_recipe_builder_return"] = False
+                updated["_recipe_import_return"] = False
+                updated["_recipe_builder_ingredients"] = ingredients
+                updated["_recipe_import_pending"] = pending[1:]
+                updated["_recipe_import_created_food_ids"] = created_ids
+                continue_recipe_import_resolution(
+                    chat_id=chat_id,
+                    known_data=updated,
+                )
+                return
             if known_data.get("_recipe_builder_return"):
                 add_pantry_item(
                     display_name=str(food.get("canonical_name") or "").strip(),

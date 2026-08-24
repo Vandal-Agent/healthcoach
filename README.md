@@ -23,6 +23,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   numbered, paginated My Pantry chooser backed by version-linked Saved Food
   ingredients, explicit amounts, serving yields, calculated per-serving
   nutrition, preparation, and confirmation
+- Imports pasted recipe text or recipe photos into the same review-first,
+  version-linked Recipe Builder while blocking unresolved major ingredients
+  and documenting any user-approved trace exclusions
 - Edits or deletes Saved Recipes without rewriting previously logged meals
 - Renames, updates, or removes Saved Foods while preserving food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the

@@ -33,9 +33,61 @@ class PhotoIntentTests(unittest.TestCase):
         self.assertIn("Read a restaurant menu", message)
         self.assertIn("Scan a product barcode", message)
         self.assertIn("My Pantry", message)
+        self.assertIn("Import a recipe", message)
         self.assertIn(
             ["Add scanned product to Pantry"],
             keyboard["keyboard"],
+        )
+
+    def test_recipe_caption_routes_photo_to_recipe_import(self) -> None:
+        draft = {
+            "readable": True,
+            "recipe_name": None,
+            "meal_type": None,
+            "yield_servings": None,
+            "summary": "",
+            "ingredients": [{
+                "ingredient_name": "chicken",
+                "amount_description": "1 lb",
+                "brand": None,
+                "optional": False,
+                "trace_only": False,
+            }],
+            "preparation_steps": ["Cook."],
+        }
+        routed = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "await_recipe_photo",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                side_effect=[None, routed],
+            ),
+            patch.object(app, "start_conversation"),
+            patch.object(
+                app,
+                "download_telegram_photo",
+                return_value=(b"photo", "image/jpeg"),
+            ),
+            patch.object(app, "parse_recipe_photo", return_value=draft) as parse,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg"),
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "photo": [{"file_id": "recipe-photo"}],
+                    "caption": "Import this recipe",
+                }
+            })
+
+        parse.assert_called_once()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_import_name",
         )
 
     def test_unprompted_photo_opens_chooser_without_analysis(self) -> None:

@@ -408,6 +408,24 @@ Supported workflow:
 
 - Save a Pantry meal idea only after explicit confirmation.
 - Create a recipe directly from the Saved Recipes menu using Recipe Builder.
+- Import a recipe from pasted text or a clear recipe photo. Gemini extracts
+  only the name, yield, ingredient amounts, and preparation supported by the
+  supplied source; it never supplies nutrition for an imported ingredient.
+- Route an unprompted Telegram photo to Recipe Import when the user chooses
+  that purpose in the universal photo chooser.
+- Match imported ingredients to existing nutrition-ready Saved Foods before
+  calculation. Stop on every unresolved major ingredient instead of omitting,
+  estimating, or treating it as zero.
+- Permit an explicitly optional ingredient, tiny spice, dried herb, or garnish
+  to be excluded only after the user confirms that choice. Preserve the
+  exclusion in the review and Saved Recipe estimate note.
+- Let the user create a missing Saved Food through the existing complete-label
+  workflow, then return to the unresolved imported ingredient. New Saved Foods
+  are offered for My Pantry separately after the recipe is saved; Recipe
+  Import never changes My Pantry automatically.
+- Use the same whole-recipe and per-serving deterministic review, final save
+  confirmation, immutable ingredient Nutrition Version links, and no-auto-log
+  rules for imported and manually built recipes.
 - Ask for the recipe name, lunch or dinner type, total serving yield,
   ingredients, optional summary, preparation steps, and final confirmation.
 - Select each Recipe Builder ingredient primarily from a numbered, paginated
