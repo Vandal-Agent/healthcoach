@@ -16,6 +16,7 @@ from food.library import (
     add_food_with_nutrition,
     add_user_nutrition_version,
 )
+from food.pantry import list_pantry_items
 from food.resolver import is_trusted_saved_food, resolve_food
 
 
@@ -461,6 +462,30 @@ def list_recipe_ingredient_foods() -> list[dict[str, Any]]:
         for row in rows
         if is_trusted_saved_food(dict(row))
     ]
+
+
+def list_recipe_pantry_foods() -> list[dict[str, Any]]:
+    """List Pantry items and whether each is ready for Recipe Builder."""
+    results: list[dict[str, Any]] = []
+
+    for pantry_item in list_pantry_items():
+        item = dict(pantry_item)
+        missing_nutrients = [
+            field
+            for field in NUTRIENT_FIELDS
+            if item.get(field) is None
+        ]
+        nutrition_ready = bool(
+            item.get("food_id") is not None
+            and item.get("food_type") != "recipe"
+            and is_trusted_saved_food(item)
+            and not missing_nutrients
+        )
+        item["missing_nutrients"] = missing_nutrients
+        item["nutrition_ready"] = nutrition_ready
+        results.append(item)
+
+    return results
 
 
 def find_recipe_ingredient_food(name: str) -> dict[str, Any] | None:

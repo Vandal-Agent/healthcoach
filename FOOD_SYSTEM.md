@@ -410,9 +410,14 @@ Supported workflow:
 - Create a recipe directly from the Saved Recipes menu using Recipe Builder.
 - Ask for the recipe name, lunch or dinner type, total serving yield,
   ingredients, optional summary, preparation steps, and final confirmation.
-- Select each Recipe Builder ingredient from a trusted Saved Food or create a
-  new Saved Food before continuing. Free-text ingredients without saved
-  nutrition are not silently estimated.
+- Select each Recipe Builder ingredient primarily from a numbered, paginated
+  My Pantry list. Only Pantry items linked to a trusted Saved Food with all
+  seven nutrition fields are selectable for automatic calculation.
+- Report how many other Pantry items still need saved nutrition instead of
+  silently estimating or treating missing nutrients as zero.
+- Allow an existing Saved Food name to be typed when it is not currently in
+  the Pantry, or create a new Saved Food before continuing. A Saved Food
+  created from Recipe Builder is linked into My Pantry for future selection.
 - Require an explicit ingredient amount such as `1 serving`, `40 g`, `3 oz`,
   or `2 slices`. Convert only compatible units; ask for a different amount
   instead of guessing conversions such as cups to grams.

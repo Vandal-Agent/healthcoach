@@ -116,6 +116,39 @@ class SavedRecipeTests(unittest.TestCase):
         self.assertIn("yield_servings", columns)
         self.assertIn("saved_recipe_ingredients", result["tables"])
 
+    def test_recipe_pantry_marks_only_complete_linked_food_ready(self) -> None:
+        complete = {
+            "pantry_item_id": 1,
+            "display_name": "Chicken",
+            "food_id": 10,
+            "food_type": "food",
+            "verification_status": "verified",
+            "verification_source": "user_package_label",
+            "calories": 120,
+            "protein_g": 22,
+            "carbohydrates_g": 0,
+            "fat_g": 3,
+            "fiber_g": 0,
+            "sugar_g": 0,
+            "sodium_mg": 50,
+        }
+        unlinked = {
+            "pantry_item_id": 2,
+            "display_name": "Onion",
+            "food_id": None,
+        }
+
+        with patch.object(
+            recipes,
+            "list_pantry_items",
+            return_value=[complete, unlinked],
+        ):
+            items = recipes.list_recipe_pantry_foods()
+
+        self.assertTrue(items[0]["nutrition_ready"])
+        self.assertFalse(items[1]["nutrition_ready"])
+        self.assertIn("calories", items[1]["missing_nutrients"])
+
     def test_version_nine_database_adds_heart_health_fields(self) -> None:
         with database.get_connection(self.database_path) as connection:
             connection.execute(

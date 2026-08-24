@@ -55,6 +55,15 @@ BUILDER_INGREDIENT = {
 }
 
 
+def pantry_food(food_id: int) -> dict:
+    return {
+        "food_id": food_id,
+        "canonical_name": f"Pantry Food {food_id}",
+        "serving_description": "1 serving",
+        "nutrition_ready": True,
+    }
+
+
 class SavedRecipeMenuTests(unittest.TestCase):
     def test_food_menu_routes_to_saved_recipes(self) -> None:
         conversation = {
@@ -193,6 +202,91 @@ class SavedRecipeMenuTests(unittest.TestCase):
             "recipe_builder_name",
         )
         self.assertIn("What should this recipe be called", send.call_args.args[0])
+
+    def test_yield_opens_first_numbered_pantry_page(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_yield",
+            "known_data": {"_recipe_builder_name": "Pantry Dinner"},
+        }
+        foods = [pantry_food(food_id) for food_id in range(1, 13)]
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "list_recipe_pantry_foods",
+                return_value=foods,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "10"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_ingredient_select",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["_recipe_builder_food_ids"],
+            list(range(1, 11)),
+        )
+        self.assertIn("Choose from My Pantry", send.call_args.args[0])
+        self.assertIn("Page 1 of 2", send.call_args.args[0])
+        self.assertNotIn("Pantry Food 11", send.call_args.args[0])
+
+    def test_pantry_next_shows_second_page(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_ingredient_select",
+            "known_data": {
+                "_recipe_builder_pantry_page": 1,
+                "_recipe_builder_pantry_total_pages": 2,
+            },
+        }
+        foods = [pantry_food(food_id) for food_id in range(1, 13)]
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "list_recipe_pantry_foods",
+                return_value=foods,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Next"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["_recipe_builder_food_ids"],
+            [11, 12],
+        )
+        self.assertIn("Page 2 of 2", send.call_args.args[0])
+        self.assertIn("Pantry Food 11", send.call_args.args[0])
+
+    def test_pantry_chooser_keyboard_has_numbers_and_navigation(self) -> None:
+        message = app.format_recipe_builder_food_choices(
+            [pantry_food(1), pantry_food(2)],
+            page=1,
+            total_pages=2,
+            nutrition_needed_count=3,
+        )
+        keyboard = app.menu_reply_markup(message)
+
+        self.assertIn(["1", "2"], keyboard["keyboard"])
+        self.assertIn(["Previous", "Next"], keyboard["keyboard"])
+        self.assertIn("3 other Pantry item(s) need", message)
 
     def test_builder_adds_calculated_ingredient(self) -> None:
         conversation = {
