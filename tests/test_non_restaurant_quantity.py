@@ -115,6 +115,45 @@ def load_packaged_resolver():
 
 
 class FluidOunceQuantityTests(unittest.TestCase):
+    def test_separate_quantity_and_ounce_unit_scale_normally(self) -> None:
+        resolver = load_packaged_resolver()
+
+        result = resolver(
+            food_id=26,
+            quantity=4,
+            quantity_description="ounces",
+            serving_amount=4,
+            serving_unit="ounces",
+        )
+
+        self.assertAlmostEqual(result, 1.0)
+
+    def test_separate_quantity_and_gram_unit_scale_normally(self) -> None:
+        resolver = load_packaged_resolver()
+
+        result = resolver(
+            food_id=26,
+            quantity=113,
+            quantity_description="grams",
+            serving_amount=113,
+            serving_unit="grams",
+        )
+
+        self.assertAlmostEqual(result, 1.0)
+
+    def test_separate_quantity_and_serving_unit_scale_normally(self) -> None:
+        resolver = load_packaged_resolver()
+
+        result = resolver(
+            food_id=26,
+            quantity=1,
+            quantity_description="serving",
+            serving_amount=4,
+            serving_unit="ounces",
+        )
+
+        self.assertAlmostEqual(result, 1.0)
+
     def test_bottle_size_routes_as_fluid_ounces(self) -> None:
         calls = []
 

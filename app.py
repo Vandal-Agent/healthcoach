@@ -2609,6 +2609,14 @@ def resolve_packaged_serving_multiplier(
         description,
     )
 
+    unit_only_match = re.fullmatch(
+        r"(?:servings?|g|gram|grams|grm|oz|ounce|ounces)",
+        description,
+    )
+
+    if unit_only_match and quantity is not None:
+        description = f"{float(quantity):g} {description}"
+
     if not description:
         raise ValueError(
             "A packaged-food amount is required."
