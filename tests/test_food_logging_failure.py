@@ -5,10 +5,79 @@ from unittest.mock import patch
 with patch("logging.basicConfig"):
     import app
 
+from food.interpreter import FoodInterpretation
+
 app.CHAT_ID = None
 
 
 class FoodLoggingFailureTests(unittest.TestCase):
+    def test_saved_unbranded_food_converts_ounces_to_one_serving(self) -> None:
+        interpretation = FoodInterpretation(
+            is_food_logging_request=True,
+            food_name="Beef steak sirloin",
+            quantity=4,
+            quantity_description="ounces",
+            meal_category="breakfast",
+            missing_fields=[],
+            assumptions=[],
+            confidence=0.99,
+        )
+        resolution = {
+            "found": True,
+            "food": {
+                "food_id": 61,
+                "canonical_name": "Beef steak sirloin",
+                "restaurant": None,
+                "brand": None,
+                "serving_amount": 4,
+                "serving_unit": "ounces",
+                "verification_source": "user_package_label",
+            },
+            "nutrition": {
+                "calories": 220,
+                "protein_g": 23,
+            },
+        }
+
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=None,
+            ),
+            patch.object(
+                app,
+                "interpret_food_message",
+                return_value=interpretation,
+            ),
+            patch.object(
+                app,
+                "resolve_food",
+                return_value=resolution,
+            ),
+            patch.object(app, "start_conversation") as start,
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "message_id": 51,
+                    "text": (
+                        "I had 4 ounces of Beef steak sirloin "
+                        "for breakfast"
+                    ),
+                }
+            })
+
+        pending = start.call_args.kwargs[
+            "known_data"
+        ]["_pending_components"]
+        self.assertEqual(pending[0]["quantity"], 1.0)
+        response = send.call_args.args[0]
+        self.assertIn("220 calories", response)
+        self.assertIn("23 g", response)
+
     def test_failed_confirmation_is_closed_and_explained(self) -> None:
         conversation = {
             "conversation_type": "food_interpretation",

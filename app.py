@@ -17955,17 +17955,15 @@ def process_telegram_update(update):
                     )
 
                     try:
-                        if (
-                            interpretation.brand
-                            and not interpretation.restaurant
-                        ):
+                        if not interpretation.restaurant:
                             quantity = (
-                                resolve_packaged_serving_multiplier(
+                                resolve_non_restaurant_quantity(
                                     food_id=saved_food["food_id"],
                                     quantity=interpretation.quantity,
                                     quantity_description=(
                                         interpretation.quantity_description
                                     ),
+                                    size=interpretation.size,
                                     serving_amount=saved_food.get(
                                         "serving_amount"
                                     ),
