@@ -166,7 +166,7 @@ class SavedRecipeTests(unittest.TestCase):
                 "DROP COLUMN heart_healthy_pick"
             )
             connection.execute(
-                "DELETE FROM schema_version WHERE version IN (10, 11)"
+                "DELETE FROM schema_version WHERE version >= 10"
             )
             connection.commit()
 
@@ -619,7 +619,7 @@ class SavedRecipeTests(unittest.TestCase):
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE saved_recipes")
             connection.execute(
-                "DELETE FROM schema_version WHERE version IN (7, 8)"
+                "DELETE FROM schema_version WHERE version >= 7"
             )
             connection.commit()
 
@@ -638,13 +638,16 @@ class SavedRecipeTests(unittest.TestCase):
                 "ALTER TABLE saved_recipes DROP COLUMN yield_servings"
             )
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 11"
+                "DELETE FROM schema_version WHERE version >= 11"
             )
             connection.commit()
 
         result = database.initialize_database()
 
-        self.assertEqual(result["schema_version"]["version"], 11)
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
         self.assertIn("saved_recipe_ingredients", result["tables"])
         with database.get_connection(self.database_path) as connection:
             columns = {

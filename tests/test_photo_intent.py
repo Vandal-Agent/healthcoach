@@ -33,9 +33,14 @@ class PhotoIntentTests(unittest.TestCase):
         self.assertIn("Read a restaurant menu", message)
         self.assertIn("Scan a product barcode", message)
         self.assertIn("My Pantry", message)
+        self.assertIn("Add visible items to My Pantry", message)
         self.assertIn("Import a recipe", message)
         self.assertIn(
             ["Add scanned product to Pantry"],
+            keyboard["keyboard"],
+        )
+        self.assertIn(
+            ["Add visible items to Pantry"],
             keyboard["keyboard"],
         )
 
@@ -359,6 +364,60 @@ class PhotoIntentTests(unittest.TestCase):
         self.assertTrue(
             update.call_args_list[0]
             .kwargs["known_data"]["pantry_scan_mode"]
+        )
+
+    def test_chooser_can_route_photo_to_pantry_shelf_review(self) -> None:
+        chooser = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "photo_intent",
+            "known_data": {
+                "photo_file_id": "photo-4",
+                "photo_caption": "",
+            },
+        }
+        routed = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "await_pantry_photo",
+            "known_data": {"pantry_photo_names": []},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                side_effect=[chooser, routed],
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(
+                app,
+                "download_telegram_photo",
+                return_value=(b"photo", "image/jpeg"),
+            ),
+            patch.object(
+                app,
+                "analyze_pantry_photo",
+                return_value={
+                    "readable": True,
+                    "items": [{"display_name": "Black Beans"}],
+                    "notes": [],
+                },
+            ) as analyze,
+            patch.object(app, "send_telegram_msg"),
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Add visible items to Pantry",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args_list[0].kwargs["current_step"],
+            "await_pantry_photo",
+        )
+        analyze.assert_called_once_with(
+            b"photo",
+            mime_type="image/jpeg",
+            user_context="",
         )
 
 

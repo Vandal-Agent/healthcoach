@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 11
+SCHEMA_VERSION: Final[int] = 12
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -457,7 +457,8 @@ def create_schema(connection: sqlite3.Connection) -> None:
                     source IN (
                         'manual',
                         'barcode',
-                        'saved_food'
+                        'saved_food',
+                        'shelf_photo'
                     )
                 ),
             barcode_text TEXT,
@@ -630,8 +631,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=11,
         description="Add reproducible Recipe Builder ingredients",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Allow reviewed shelf-photo Pantry items",
     )
 
 
@@ -790,7 +797,8 @@ def create_pantry_schema(
                     source IN (
                         'manual',
                         'barcode',
-                        'saved_food'
+                        'saved_food',
+                        'shelf_photo'
                     )
                 ),
             barcode_text TEXT,
@@ -1237,6 +1245,56 @@ def migrate_version_10_to_11(
     )
 
 
+def migrate_version_11_to_12(
+    connection: sqlite3.Connection,
+) -> None:
+    """Allow reviewed shelf-photo items while preserving the Pantry."""
+    if not table_exists(connection, "pantry_items"):
+        create_pantry_schema(connection)
+    else:
+        connection.execute(
+            "DROP INDEX IF EXISTS idx_pantry_items_food_id"
+        )
+        connection.execute(
+            "DROP INDEX IF EXISTS idx_pantry_items_display_name"
+        )
+        connection.execute(
+            "ALTER TABLE pantry_items RENAME TO pantry_items_version_11"
+        )
+        create_pantry_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO pantry_items (
+                pantry_item_id,
+                display_name,
+                normalized_name,
+                food_id,
+                source,
+                barcode_text,
+                created_at,
+                updated_at
+            )
+            SELECT
+                pantry_item_id,
+                display_name,
+                normalized_name,
+                food_id,
+                source,
+                barcode_text,
+                created_at,
+                updated_at
+            FROM pantry_items_version_11
+            """
+        )
+        connection.execute("DROP TABLE pantry_items_version_11")
+
+    record_schema_version(
+        connection,
+        version=12,
+        description="Allow reviewed shelf-photo Pantry items",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1286,6 +1344,10 @@ def apply_migrations(
     if version < 11:
         migrate_version_10_to_11(connection)
         version = 11
+
+    if version < 12:
+        migrate_version_11_to_12(connection)
+        version = 12
 
     if version > SCHEMA_VERSION:
         raise RuntimeError(

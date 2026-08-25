@@ -76,6 +76,11 @@ from food.pantry_advisor import (
     generate_smart_pantry_swaps,
     scale_pantry_meal_nutrition,
 )
+from food.pantry_photo import (
+    MAX_PANTRY_PHOTO_SESSION_ITEMS,
+    analyze_pantry_photo,
+    merge_pantry_photo_names,
+)
 from food.shopping import (
     add_shopping_item,
     add_shopping_items,
@@ -634,6 +639,7 @@ def menu_reply_markup(message):
             ["Read restaurant menu"],
             ["Scan product barcode"],
             ["Add scanned product to Pantry"],
+            ["Add visible items to Pantry"],
             ["Import a recipe"],
             ["Cancel"],
         ]
@@ -643,6 +649,7 @@ def menu_reply_markup(message):
         or "Send a clear photo of the actual meal." in message
         or "Send a clear photo of a product barcode." in message
         or "Send a clear photo of the Nutrition Facts label." in message
+        or "Send a clear photo of one Pantry shelf." in message
         or "Type the barcode number printed beneath the bars." in message
     ):
         rows = [["Back", "Cancel"]]
@@ -667,11 +674,33 @@ def menu_reply_markup(message):
         rows = [
             ["View pantry", "Add items manually"],
             ["Scan product into Pantry"],
+            ["Add items from shelf photo"],
             ["Get meal ideas", "Smart Pantry swaps"],
             ["Shopping list"],
             ["Remove pantry item", "Clear pantry"],
             ["Back", "Cancel"],
         ]
+    elif message.startswith("Pantry Shelf Photo — Items Found"):
+        rows = [
+            ["Add another photo", "Review items"],
+            ["Cancel"],
+        ]
+        one_time = True
+    elif message.startswith("Pantry Shelf Photo — Review"):
+        rows = [
+            ["Add all to Pantry"],
+            ["Remove an item", "Add another photo"],
+            ["Cancel"],
+        ]
+        one_time = True
+    elif message.startswith("Pantry Shelf Photo — Remove Item"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index : index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        rows.append(["Back", "Cancel"])
+        one_time = True
     elif "Smart Pantry Swaps\n\n" in message:
         choices = re.findall(r"(?m)^(\d+)\. Replace:", message)
         add_choices = [f"Add {choice}" for choice in choices]
@@ -3355,8 +3384,9 @@ def healthcoach_photo_intent_text() -> str:
         "2. Read a restaurant menu\n"
         "3. Scan a product barcode\n"
         "4. Add a scanned product to My Pantry\n"
-        "5. Import a recipe\n"
-        "6. Cancel\n\n"
+        "5. Add visible items to My Pantry\n"
+        "6. Import a recipe\n"
+        "7. Cancel\n\n"
         "Nothing will be saved or logged without your confirmation."
     )
 
@@ -3376,8 +3406,20 @@ def photo_intent_from_caption(caption: str | None) -> str | None:
     if is_food_photo_request(lowered):
         return "meal"
 
+    if "pantry" in lowered and any(
+        phrase in lowered
+        for phrase in (
+            "shelf",
+            "cupboard",
+            "visible items",
+            "add items",
+            "what i have",
+        )
+    ):
+        return "pantry_photo"
+
     if "pantry" in lowered and (
-        "barcode" in lowered or "scan" in lowered
+        "barcode" in lowered or "scan product" in lowered
     ):
         return "pantry_barcode"
 
@@ -4608,12 +4650,13 @@ def healthcoach_pantry_menu_text() -> str:
         "1. View pantry\n"
         "2. Add items manually\n"
         "3. Scan product into Pantry\n"
-        "4. Get meal ideas\n"
-        "5. Smart Pantry swaps\n"
-        "6. Shopping list\n"
-        "7. Remove pantry item\n"
-        "8. Clear pantry\n"
-        "9. Back\n\n"
+        "4. Add items from shelf photo\n"
+        "5. Get meal ideas\n"
+        "6. Smart Pantry swaps\n"
+        "7. Shopping list\n"
+        "8. Remove pantry item\n"
+        "9. Clear pantry\n"
+        "10. Back\n\n"
         "Pantry items stay available until you remove or clear "
         "them. Quantities are not tracked."
     )
@@ -5020,6 +5063,8 @@ def format_pantry_items(items: list[dict]) -> str:
         source_note = (
             " — scanned product"
             if item.get("source") == "barcode"
+            else " — shelf photo"
+            if item.get("source") == "shelf_photo"
             else ""
         )
         lines.append(f"{index}. {name}{source_note}")
@@ -5030,6 +5075,70 @@ def format_pantry_items(items: list[dict]) -> str:
         "",
         "Reply Back to return or Cancel to close.",
     ])
+    return "\n".join(lines)
+
+
+def format_pantry_photo_result(
+    detected_names: list[str],
+    pending_names: list[str],
+) -> str:
+    """Show what one photo added to the pending, unsaved review."""
+    lines = ["Pantry Shelf Photo — Items Found", ""]
+    if detected_names:
+        lines.extend(["Clearly visible in this photo:"])
+        lines.extend(f"- {name}" for name in detected_names)
+    else:
+        lines.append(
+            "No new distinct items were added from this photo. They may "
+            "already be in the pending review."
+        )
+    lines.extend([
+        "",
+        f"Pending review: {len(pending_names)} item(s)",
+        "Nothing has been added to My Pantry yet.",
+        "",
+        "Reply Add another photo, Review items, or Cancel.",
+    ])
+    return "\n".join(lines)
+
+
+def format_pantry_photo_review(names: list[str]) -> str:
+    """Show the complete deduplicated shelf-photo list before insertion."""
+    lines = [
+        "Pantry Shelf Photo — Review",
+        "",
+        "These visible items are ready to add:",
+        "",
+    ]
+    lines.extend(
+        f"{index}. {name}"
+        for index, name in enumerate(names, start=1)
+    )
+    lines.extend([
+        "",
+        "Duplicates already in My Pantry will not be added twice.",
+        "Photo names are presence-only and do not create nutrition data.",
+        "Nothing has been added yet.",
+        "",
+        "Reply Add all to Pantry, Remove an item, Add another photo, or "
+        "Cancel.",
+    ])
+    return "\n".join(lines)
+
+
+def format_pantry_photo_remove_choices(names: list[str]) -> str:
+    """Show pending photo items that may be removed before confirmation."""
+    lines = [
+        "Pantry Shelf Photo — Remove Item",
+        "",
+        "Choose an item to remove from this pending review:",
+        "",
+    ]
+    lines.extend(
+        f"{index}. {name}"
+        for index, name in enumerate(names, start=1)
+    )
+    lines.extend(["", "Reply Back to return without removing anything."])
     return "\n".join(lines)
 
 
@@ -7028,6 +7137,10 @@ def process_telegram_update(update):
         expected_photo_steps = {
             "await_menu_photo",
             "await_food_photo",
+            "await_pantry_photo",
+            "pantry_photo_result",
+            "pantry_photo_review",
+            "pantry_photo_remove",
             "await_recipe_photo",
             "recipe_import_input",
             "await_barcode_photo",
@@ -7063,6 +7176,7 @@ def process_telegram_update(update):
                 "menu": "await_menu_photo",
                 "barcode": "await_barcode_photo",
                 "pantry_barcode": "await_barcode_photo",
+                "pantry_photo": "await_pantry_photo",
                 "recipe": "await_recipe_photo",
             }[caption_intent]
             start_conversation(
@@ -7072,6 +7186,9 @@ def process_telegram_update(update):
                 known_data={
                     "pantry_scan_mode": (
                         caption_intent == "pantry_barcode"
+                    ),
+                    "pantry_photo_names": (
+                        [] if caption_intent == "pantry_photo" else None
                     ),
                 },
                 missing_fields=[],
@@ -7107,6 +7224,13 @@ def process_telegram_update(update):
             "recipe_import_input",
         }
 
+        pantry_photo = photo_step in {
+            "await_pantry_photo",
+            "pantry_photo_result",
+            "pantry_photo_review",
+            "pantry_photo_remove",
+        }
+
         if label_photo:
             progress_message = (
                 "I'm reading the Nutrition Facts label. "
@@ -7120,6 +7244,11 @@ def process_telegram_update(update):
         elif recipe_photo:
             progress_message = (
                 "I'm reading the recipe and organizing its ingredients. "
+                "This may take a moment."
+            )
+        elif pantry_photo:
+            progress_message = (
+                "I'm checking the photo for clearly visible Pantry items. "
                 "This may take a moment."
             )
         elif food_photo:
@@ -7278,6 +7407,56 @@ def process_telegram_update(update):
                     draft=result,
                 )
                 return
+            elif pantry_photo:
+                result = analyze_pantry_photo(
+                    image_bytes,
+                    mime_type=mime_type,
+                    user_context=caption,
+                )
+                existing_names = list(
+                    (photo_conversation or {}).get("known_data", {}).get(
+                        "pantry_photo_names"
+                    )
+                    or []
+                )
+                detected_names = [
+                    str(item.get("display_name") or "").strip()
+                    for item in result.get("items") or []
+                    if str(item.get("display_name") or "").strip()
+                ]
+                if not result.get("readable") or not detected_names:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="await_pantry_photo",
+                        known_data={
+                            "pantry_photo_names": existing_names,
+                        },
+                        missing_fields=["pantry_photo"],
+                    )
+                    response_message = (
+                        "I couldn't identify any Pantry items clearly "
+                        "enough to add from that photo.\n\n"
+                        "Try a closer, well-lit photo with package fronts "
+                        "facing the camera. Nothing was added."
+                    )
+                else:
+                    combined_names = merge_pantry_photo_names(
+                        existing_names,
+                        detected_names,
+                    )
+                    new_names = combined_names[len(existing_names) :]
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="pantry_photo_result",
+                        known_data={
+                            "pantry_photo_names": combined_names,
+                        },
+                        missing_fields=[],
+                    )
+                    response_message = format_pantry_photo_result(
+                        new_names,
+                        combined_names,
+                    )
             elif food_photo:
                 result = analyze_food_photo(
                     image_bytes,
@@ -7341,6 +7520,8 @@ def process_telegram_update(update):
                     if barcode_photo
                     else "Recipe"
                     if recipe_photo
+                    else "Pantry"
+                    if pantry_photo
                     else "Food"
                     if food_photo
                     else "Menu"
@@ -7370,6 +7551,24 @@ def process_telegram_update(update):
                     "I couldn't read that recipe photo reliably. Try a "
                     "closer picture showing the full ingredient list, or "
                     "paste the recipe text. Nothing was saved."
+                )
+            elif pantry_photo:
+                pending_names = list(
+                    (photo_conversation or {}).get("known_data", {}).get(
+                        "pantry_photo_names"
+                    )
+                    or []
+                )
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_pantry_photo",
+                    known_data={"pantry_photo_names": pending_names},
+                    missing_fields=["pantry_photo"],
+                )
+                error_message = (
+                    "I couldn't analyze that Pantry photo. Try a closer, "
+                    "well-lit picture with package fronts visible. Nothing "
+                    "was added."
                 )
             elif food_photo:
                 error_message = (
@@ -8244,6 +8443,30 @@ def process_telegram_update(update):
 
             if lowered in {
                 "4",
+                "add items from shelf photo",
+                "add shelf photo",
+                "pantry shelf photo",
+                "shelf photo",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_pantry_photo",
+                    known_data={"pantry_photo_names": []},
+                    missing_fields=["pantry_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of one Pantry shelf.\n\n"
+                    "Face package fronts toward the camera when possible. "
+                    "HealthCoach will identify only clearly visible foods "
+                    "and let you review everything before adding it.\n\n"
+                    "You can combine more than one photo before confirming. "
+                    "Quantities and nutrition are not inferred.",
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "5",
                 "get meal ideas",
                 "meal ideas",
                 "pantry meal ideas",
@@ -8275,7 +8498,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "5",
+                "6",
                 "smart pantry swaps",
                 "smart pantry swap",
                 "pantry swaps",
@@ -8285,7 +8508,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "6",
+                "7",
                 "shopping list",
                 "my shopping list",
             }:
@@ -8302,7 +8525,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "7",
+                "8",
                 "remove",
                 "remove pantry item",
             }:
@@ -8332,7 +8555,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "clear",
                 "clear pantry",
             }:
@@ -8362,7 +8585,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"9", "back"}:
+            if lowered in {"10", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -8379,6 +8602,236 @@ def process_telegram_update(update):
                 healthcoach_pantry_menu_text(),
                 chat_id=chat_id,
             )
+            return
+
+        if current_step == "await_pantry_photo":
+            if lowered == "back":
+                pending_names = list(
+                    known_data.get("pantry_photo_names") or []
+                )
+                if pending_names:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="pantry_photo_review",
+                        known_data={
+                            "pantry_photo_names": pending_names,
+                        },
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        format_pantry_photo_review(pending_names),
+                        chat_id=chat_id,
+                    )
+                else:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="pantry",
+                        known_data={"pantry_photo_names": []},
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        healthcoach_pantry_menu_text(),
+                        chat_id=chat_id,
+                    )
+                return
+            send_telegram_msg(
+                "Send a clear photo of one Pantry shelf, or reply Back.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_photo_result":
+            names = list(known_data.get("pantry_photo_names") or [])
+            if lowered in {"add another", "add another photo", "another"}:
+                if len(names) >= MAX_PANTRY_PHOTO_SESSION_ITEMS:
+                    send_telegram_msg(
+                        "This review already has 30 distinct items. Review "
+                        "and add them before starting another photo batch.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_pantry_photo",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=["pantry_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of another Pantry shelf. The new "
+                    "items will be combined with your pending review.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"review", "review items"}:
+                if not names:
+                    send_telegram_msg(
+                        "No Pantry items are pending. Send another clear "
+                        "shelf photo or reply Cancel.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_photo_review",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_photo_review(names),
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                format_pantry_photo_result([], names),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_photo_review":
+            names = list(known_data.get("pantry_photo_names") or [])
+            if lowered in {"add another", "add another photo", "another"}:
+                if len(names) >= MAX_PANTRY_PHOTO_SESSION_ITEMS:
+                    send_telegram_msg(
+                        "This review already has 30 distinct items. Add or "
+                        "remove some before starting another photo batch.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_pantry_photo",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=["pantry_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of another Pantry shelf. The new "
+                    "items will be combined with this review.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"remove", "remove item", "remove an item"}:
+                if not names:
+                    send_telegram_msg(
+                        "No pending items can be removed.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_photo_remove",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_photo_remove_choices(names),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {
+                "add",
+                "add all",
+                "add all to pantry",
+                "add to pantry",
+            }:
+                if not names:
+                    send_telegram_msg(
+                        "No Pantry items are pending.",
+                        chat_id=chat_id,
+                    )
+                    return
+                try:
+                    result = add_pantry_items(
+                        names,
+                        source="shelf_photo",
+                    )
+                except Exception:
+                    logging.exception(
+                        "Could not add shelf-photo Pantry items"
+                    )
+                    send_telegram_msg(
+                        "I couldn't add those Pantry items. Nothing was "
+                        "changed.",
+                        chat_id=chat_id,
+                    )
+                    return
+                created_count = len(result["created"])
+                existing_count = len(result["existing"])
+                summary = (
+                    f"Added {created_count} shelf-photo item(s) to My Pantry."
+                )
+                if existing_count:
+                    summary += (
+                        f" {existing_count} item(s) were already there."
+                    )
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={"pantry_photo_names": []},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    summary
+                    + "\n\nPhoto names are presence-only; no nutrition "
+                    "was invented or logged.\n\n"
+                    + healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                format_pantry_photo_review(names),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_photo_remove":
+            names = list(known_data.get("pantry_photo_names") or [])
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_photo_review",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_photo_review(names),
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                selected_index = int(text.strip()) - 1
+            except (TypeError, ValueError):
+                selected_index = -1
+            if selected_index < 0 or selected_index >= len(names):
+                send_telegram_msg(
+                    format_pantry_photo_remove_choices(names),
+                    chat_id=chat_id,
+                )
+                return
+            removed_name = names.pop(selected_index)
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_photo_review",
+                known_data={"pantry_photo_names": names},
+                missing_fields=[],
+            )
+            if names:
+                send_telegram_msg(
+                    f"Removed {removed_name} from the pending review.\n\n"
+                    + format_pantry_photo_review(names),
+                    chat_id=chat_id,
+                )
+            else:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_pantry_photo",
+                    known_data={"pantry_photo_names": []},
+                    missing_fields=["pantry_photo"],
+                )
+                send_telegram_msg(
+                    f"Removed {removed_name}. No items remain pending.\n\n"
+                    "Send another clear Pantry shelf photo or reply Back.",
+                    chat_id=chat_id,
+                )
             return
 
         if current_step == "pantry_swaps":
@@ -9765,12 +10218,20 @@ def process_telegram_update(update):
                 intent = "pantry_barcode"
             elif lowered in {
                 "5",
+                "add visible items to pantry",
+                "add visible items to my pantry",
+                "add pantry shelf",
+                "pantry shelf photo",
+            }:
+                intent = "pantry_photo"
+            elif lowered in {
+                "6",
                 "import a recipe",
                 "import recipe",
                 "read recipe",
             }:
                 intent = "recipe"
-            elif lowered in {"6", "cancel"}:
+            elif lowered in {"7", "cancel"}:
                 cancel_conversation(chat_id)
                 send_telegram_msg(
                     "Photo cancelled. Nothing was saved or logged.",
@@ -9807,6 +10268,7 @@ def process_telegram_update(update):
                 "menu": "await_menu_photo",
                 "barcode": "await_barcode_photo",
                 "pantry_barcode": "await_barcode_photo",
+                "pantry_photo": "await_pantry_photo",
                 "recipe": "await_recipe_photo",
             }[intent]
             update_conversation(
@@ -9815,6 +10277,9 @@ def process_telegram_update(update):
                 known_data={
                     "pantry_scan_mode": (
                         intent == "pantry_barcode"
+                    ),
+                    "pantry_photo_names": (
+                        [] if intent == "pantry_photo" else None
                     ),
                 },
                 missing_fields=[],

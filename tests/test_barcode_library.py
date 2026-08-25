@@ -74,7 +74,7 @@ class BarcodeLibraryTests(unittest.TestCase):
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE barcode_mappings")
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 5"
+                "DELETE FROM schema_version WHERE version >= 5"
             )
             connection.commit()
 

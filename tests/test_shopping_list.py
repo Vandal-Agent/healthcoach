@@ -61,7 +61,7 @@ class ShoppingListTests(unittest.TestCase):
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE shopping_list_items")
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 8"
+                "DELETE FROM schema_version WHERE version >= 8"
             )
             connection.commit()
 

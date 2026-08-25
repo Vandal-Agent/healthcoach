@@ -211,6 +211,7 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn("View pantry", message)
         self.assertIn("Add items manually", message)
         self.assertIn("Scan product into Pantry", message)
+        self.assertIn("Add items from shelf photo", message)
         self.assertIn("Get meal ideas", message)
         self.assertIn("Smart Pantry swaps", message)
         self.assertIn("Shopping list", message)
@@ -222,6 +223,10 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn(
             ["Scan product into Pantry"],
+            keyboard["keyboard"],
+        )
+        self.assertIn(
+            ["Add items from shelf photo"],
             keyboard["keyboard"],
         )
         self.assertIn(
@@ -584,6 +589,215 @@ class PantryMenuTests(unittest.TestCase):
             "Send a clear photo of a product barcode",
             send.call_args.args[0],
         )
+
+    def test_pantry_shelf_action_waits_for_photo(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Add items from shelf photo",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "await_pantry_photo",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["pantry_photo_names"],
+            [],
+        )
+        self.assertIn("one Pantry shelf", send.call_args.args[0])
+
+    def test_shelf_photo_accumulates_distinct_items_without_saving(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "await_pantry_photo",
+            "known_data": {"pantry_photo_names": ["Rice"]},
+        }
+        analysis = {
+            "readable": True,
+            "items": [
+                {"display_name": "rice"},
+                {"display_name": "Kroger Black Beans"},
+            ],
+            "notes": [],
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "download_telegram_photo",
+                return_value=(b"photo", "image/jpeg"),
+            ),
+            patch.object(
+                app,
+                "analyze_pantry_photo",
+                return_value=analysis,
+            ) as analyze,
+            patch.object(app, "add_pantry_items") as add_items,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "photo": [{"file_id": "shelf-photo"}],
+                }
+            })
+
+        analyze.assert_called_once_with(
+            b"photo",
+            mime_type="image/jpeg",
+            user_context="",
+        )
+        add_items.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_photo_result",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["pantry_photo_names"],
+            ["Rice", "Kroger Black Beans"],
+        )
+        self.assertIn("Kroger Black Beans", send.call_args.args[0])
+        self.assertIn("Nothing has been added", send.call_args.args[0])
+
+    def test_shelf_photo_error_preserves_pending_review(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "await_pantry_photo",
+            "known_data": {
+                "pantry_photo_names": ["Rice", "Black Beans"],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "download_telegram_photo",
+                return_value=(b"photo", "image/jpeg"),
+            ),
+            patch.object(
+                app,
+                "analyze_pantry_photo",
+                side_effect=RuntimeError("temporary analysis error"),
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "photo": [{"file_id": "shelf-photo"}],
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "await_pantry_photo",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["pantry_photo_names"],
+            ["Rice", "Black Beans"],
+        )
+        self.assertIn("Nothing was added", send.call_args.args[0])
+
+    def test_shelf_photo_review_can_remove_pending_item(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_photo_remove",
+            "known_data": {
+                "pantry_photo_names": ["Rice", "Black Beans"],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "2"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_photo_review",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["pantry_photo_names"],
+            ["Rice"],
+        )
+        self.assertIn("Removed Black Beans", send.call_args.args[0])
+
+    def test_shelf_photo_add_requires_explicit_review_confirmation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_photo_review",
+            "known_data": {
+                "pantry_photo_names": ["Rice", "Black Beans"],
+            },
+        }
+        result = {
+            "created": [{"display_name": "Rice"}],
+            "existing": [{"display_name": "Black Beans"}],
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "add_pantry_items",
+                return_value=result,
+            ) as add_items,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Add all to Pantry",
+                }
+            })
+
+        add_items.assert_called_once_with(
+            ["Rice", "Black Beans"],
+            source="shelf_photo",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry",
+        )
+        self.assertIn("Added 1 shelf-photo item", send.call_args.args[0])
+        self.assertIn("1 item(s) were already there", send.call_args.args[0])
 
     def test_photo_in_manual_add_opens_universal_chooser(self) -> None:
         conversation = {

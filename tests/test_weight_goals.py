@@ -57,7 +57,7 @@ class WeightGoalTests(unittest.TestCase):
             connection.execute("DROP TABLE weight_goal_calculations")
             connection.execute("DROP TABLE weight_goals")
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 9"
+                "DELETE FROM schema_version WHERE version >= 9"
             )
             connection.commit()
 

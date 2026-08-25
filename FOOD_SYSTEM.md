@@ -203,6 +203,7 @@ HealthCoach keeps that photo and asks what it should be used for:
 - Read a restaurant menu.
 - Scan a product barcode.
 - Scan a product barcode directly into My Pantry.
+- Add clearly visible shelf or cupboard items to My Pantry.
 
 The selected workflow reuses the original photo; the user does not need to
 send it again. Explicit captions such as "Estimate this meal" may continue
@@ -323,6 +324,16 @@ Supported workflow:
   natural-language list.
 - Select Scan product into Pantry before sending a barcode photo, then add
   the confirmed product using the Add to Pantry button.
+- Select Add items from shelf photo, send one or more shelf or cupboard
+  photos, and review the combined list of clearly visible foods before adding
+  anything. The review can remove individual detections, accept another photo,
+  or add all remaining items after explicit confirmation.
+- Reuse an unprompted Telegram photo for this workflow by choosing Add visible
+  items to Pantry in the Universal Photo Chooser.
+- Treat shelf-photo items as presence-only names. Do not infer package
+  nutrition, quantities, barcode values, or hidden products from the image.
+- Deduplicate detected names within the review and against existing Pantry
+  items. Limit each review session to 30 items.
 - Remove one Pantry item without deleting its Saved Food or Food Ledger
   history.
 - Clear the entire Pantry only after explicit confirmation.
@@ -344,6 +355,7 @@ Supported workflow:
   Shopping List using its numbered Add action.
 - Detect when a suitable suggested replacement is already in My Pantry and
   identify it instead of adding an unnecessary Shopping List item.
+
 - Request exactly three lunch or dinner ideas at a time.
 - Label exactly one of those three as the Heart-Healthy Pick and explain
   the specific food-pattern strengths behind the selection.
@@ -377,6 +389,10 @@ Pantry meal ideas do not reduce inventory quantities. They become Saved
 Recipes only after explicit confirmation.
 
 Duplicate names are matched case-insensitively and are not added twice.
+
+Food database schema version `12` expands the Pantry source constraint to
+include `shelf_photo`. Its migration rebuilds the constrained Pantry table
+while preserving every existing Pantry row and identifier.
 
 # Shopping List
 

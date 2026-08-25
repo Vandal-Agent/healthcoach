@@ -12,7 +12,7 @@ from food.database import (
 )
 
 
-PANTRY_SOURCES = {"manual", "barcode", "saved_food"}
+PANTRY_SOURCES = {"manual", "barcode", "saved_food", "shelf_photo"}
 MAX_PANTRY_ITEMS_PER_MESSAGE = 30
 
 
@@ -89,7 +89,7 @@ def add_pantry_item(
 
     if cleaned_source not in PANTRY_SOURCES:
         raise ValueError(
-            "source must be manual, barcode, or saved_food."
+            "source must be manual, barcode, saved_food, or shelf_photo."
         )
 
     cleaned_barcode = (
@@ -177,13 +177,17 @@ def add_pantry_item(
     return result
 
 
-def add_pantry_items(names: list[str]) -> dict[str, list[dict[str, Any]]]:
-    """Add multiple manual Pantry items and report new and existing rows."""
+def add_pantry_items(
+    names: list[str],
+    *,
+    source: str = "manual",
+) -> dict[str, list[dict[str, Any]]]:
+    """Add multiple Pantry items and report new and existing rows."""
     created: list[dict[str, Any]] = []
     existing: list[dict[str, Any]] = []
 
     for name in names:
-        item = add_pantry_item(display_name=name, source="manual")
+        item = add_pantry_item(display_name=name, source=source)
         if item.pop("created"):
             created.append(item)
         else:

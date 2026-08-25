@@ -80,7 +80,7 @@ class PantryTests(unittest.TestCase):
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE pantry_items")
             connection.execute(
-                "DELETE FROM schema_version WHERE version IN (6, 7, 8)"
+                "DELETE FROM schema_version WHERE version >= 6"
             )
             connection.commit()
 
@@ -116,6 +116,41 @@ class PantryTests(unittest.TestCase):
         self.assertEqual(
             [item["display_name"] for item in pantry.list_pantry_items()],
             ["Chicken breast", "Romaine", "Tomatoes"],
+        )
+
+    def test_bulk_items_can_record_shelf_photo_source(self) -> None:
+        result = pantry.add_pantry_items(
+            ["Black beans", "Rice"],
+            source="shelf_photo",
+        )
+
+        self.assertEqual(len(result["created"]), 2)
+        self.assertEqual(
+            {item["source"] for item in pantry.list_pantry_items()},
+            {"shelf_photo"},
+        )
+
+    def test_version_eleven_migration_preserves_pantry_items(self) -> None:
+        pantry.add_pantry_item(display_name="Rice", source="manual")
+        with database.get_connection(self.database_path) as connection:
+            connection.execute(
+                "DELETE FROM schema_version WHERE version = 12"
+            )
+            connection.commit()
+
+        result = database.initialize_database()
+        pantry.add_pantry_item(
+            display_name="Black beans",
+            source="shelf_photo",
+        )
+
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            [item["display_name"] for item in pantry.list_pantry_items()],
+            ["Black beans", "Rice"],
         )
 
     def test_scanned_item_keeps_food_and_active_nutrition_link(self) -> None:

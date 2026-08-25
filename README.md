@@ -19,6 +19,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   sleep, and weight context
 - Labels no more than one evidence-supported Heart-Healthy Pick in Pantry,
   cited online Restaurant, and visible menu-photo recommendations
+- Builds a reviewable, deduplicated Pantry list from one or more shelf photos;
+  detected items remain unsaved until explicit confirmation and do not invent
+  quantities or nutrition
 - Saves Pantry meal ideas as reusable recipes and builds new recipes from a
   numbered, paginated My Pantry chooser backed by version-linked Saved Food
   ingredients, explicit amounts, serving yields, calculated per-serving
