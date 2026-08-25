@@ -49,6 +49,9 @@ class RecipeImporterTests(unittest.TestCase):
         self.assertEqual(result["yield_servings"], 4)
         self.assertNotIn("calories", result)
         client.close.assert_called_once()
+        config = client.models.generate_content.call_args.kwargs["config"]
+        self.assertIsNone(config.response_schema)
+        self.assertEqual(config.response_mime_type, "application/json")
 
     def test_client_closes_when_text_request_fails(self) -> None:
         client = Mock()

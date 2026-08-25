@@ -103,24 +103,15 @@ def parse_recipe_text(recipe_text: str) -> dict[str, Any]:
     try:
         response = client.models.generate_content(
             model=MODEL_NAME,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(
-                            text=(
-                                RECIPE_EXTRACTION_RULES
-                                + "\n\nRecipe text:\n"
-                                + cleaned
-                            )
-                        )
-                    ],
-                )
-            ],
+            contents=(
+                RECIPE_EXTRACTION_RULES
+                + "\n\nReturn one JSON object using exactly the recipe "
+                "draft fields described above.\n\nRecipe text:\n"
+                + cleaned
+            ),
             config=types.GenerateContentConfig(
                 temperature=0,
                 response_mime_type="application/json",
-                response_schema=ImportedRecipeDraft,
             ),
         )
     finally:
@@ -146,27 +137,20 @@ def parse_recipe_photo(
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(
-                            text=(
-                                RECIPE_EXTRACTION_RULES
-                                + "\n\nUser context:\n"
-                                + (context or "None")
-                            )
-                        ),
-                        types.Part.from_bytes(
-                            data=image_bytes,
-                            mime_type=mime_type,
-                        ),
-                    ],
-                )
+                (
+                    RECIPE_EXTRACTION_RULES
+                    + "\n\nReturn one JSON object using exactly the recipe "
+                    "draft fields described above.\n\nUser context:\n"
+                    + (context or "None")
+                ),
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=mime_type,
+                ),
             ],
             config=types.GenerateContentConfig(
                 temperature=0,
                 response_mime_type="application/json",
-                response_schema=ImportedRecipeDraft,
             ),
         )
     finally:
