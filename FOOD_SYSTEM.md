@@ -435,6 +435,15 @@ Supported workflow:
 - The final review states that every ingredient amount is the total for the
   entire recipe, not the amount in each finished serving, and directs the user
   to change any placeholder or incorrect amount before saving.
+- Let the user open a numbered ingredient editor from the final review. The
+  user may correct a whole-recipe amount, replace its Saved Food, add a missing
+  ingredient, or remove an optional or manually added ingredient before save.
+  Required imported ingredients cannot be silently removed.
+- Preserve the exact selected ingredient Nutrition Version when only its
+  amount is corrected. Replacing the Saved Food is an explicit separate action.
+- When the imported source explicitly states calories or protein per finished
+  serving, show those values beside the Saved Food calculation as a comparison
+  check. Source claims never replace or alter calculated recipe nutrition.
 - Permit an explicitly optional ingredient, tiny spice, dried herb, or garnish
   to be excluded only after the user confirms that choice. Preserve the
   exclusion in the review and Saved Recipe estimate note.

@@ -973,6 +973,290 @@ class SavedRecipeMenuTests(unittest.TestCase):
         )
         self.assertIn("Per serving so far", send.call_args.args[0])
 
+    def test_change_ingredients_opens_numbered_review_editor(self) -> None:
+        second = {
+            **BUILDER_INGREDIENT,
+            "food_id": 13,
+            "nutrition_version_id": 22,
+            "name": "Black Beans",
+            "amount_description": "1 serving",
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_confirmation",
+            "known_data": {
+                "_recipe_builder_name": "Turkey Bowl",
+                "_recipe_builder_meal_type": "dinner",
+                "_recipe_builder_yield": 2,
+                "_recipe_builder_ingredients": [BUILDER_INGREDIENT, second],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Change ingredients",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_edit_select",
+        )
+        self.assertIn("1. 3 oz Browned Ground Turkey", send.call_args.args[0])
+        self.assertIn("2. 1 serving Black Beans", send.call_args.args[0])
+        self.assertIn(
+            ["1", "2"],
+            app.menu_reply_markup(send.call_args.args[0])["keyboard"],
+        )
+
+    def test_first_number_selects_first_review_ingredient(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_edit_select",
+            "known_data": {
+                "_recipe_builder_ingredients": [BUILDER_INGREDIENT],
+                "_recipe_builder_review_editing": True,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "1"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_edit_action",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["_recipe_builder_edit_index"],
+            0,
+        )
+        self.assertIn("Browned Ground Turkey", send.call_args.args[0])
+
+    def test_review_list_explicitly_clears_previous_selection(self) -> None:
+        known_data = {
+            "_recipe_builder_ingredients": [BUILDER_INGREDIENT],
+            "_recipe_builder_edit_index": 0,
+            "_recipe_builder_replace_index": 0,
+            "_recipe_builder_selected_food_id": 44,
+        }
+        with (
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg"),
+        ):
+            app.show_recipe_builder_edit_choices(
+                chat_id=123,
+                known_data=known_data,
+            )
+
+        updated = update.call_args.kwargs["known_data"]
+        self.assertIsNone(updated["_recipe_builder_edit_index"])
+        self.assertIsNone(updated["_recipe_builder_replace_index"])
+        self.assertIsNone(updated["_recipe_builder_selected_food_id"])
+
+    def test_review_amount_edit_keeps_exact_nutrition_version(self) -> None:
+        corrected = {
+            **BUILDER_INGREDIENT,
+            "amount_description": "6 oz",
+            "serving_multiplier": 2.0,
+            "nutrition": {
+                **BUILDER_INGREDIENT["nutrition"],
+                "calories": 340.0,
+            },
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_edit_amount",
+            "known_data": {
+                "_recipe_builder_ingredients": [BUILDER_INGREDIENT],
+                "_recipe_builder_edit_index": 0,
+                "_recipe_builder_review_editing": True,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "prepare_recipe_ingredient",
+                return_value=corrected,
+            ) as prepare,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "6 oz"}
+            })
+
+        self.assertEqual(prepare.call_args.kwargs["food_id"], 12)
+        self.assertEqual(prepare.call_args.kwargs["nutrition_version_id"], 21)
+        self.assertEqual(prepare.call_args.kwargs["amount_description"], "6 oz")
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_edit_select",
+        )
+        self.assertIn("1. 6 oz Browned Ground Turkey", send.call_args.args[0])
+
+    def test_review_saved_food_change_replaces_instead_of_appending(self) -> None:
+        replacement = {
+            **BUILDER_INGREDIENT,
+            "food_id": 44,
+            "nutrition_version_id": 55,
+            "name": "Lean Ground Beef",
+            "amount_description": "4 oz",
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_ingredient_amount",
+            "known_data": {
+                "_recipe_builder_ingredients": [BUILDER_INGREDIENT],
+                "_recipe_builder_edit_index": 0,
+                "_recipe_builder_replace_index": 0,
+                "_recipe_builder_review_editing": True,
+                "_recipe_builder_selected_food_id": 44,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "prepare_recipe_ingredient",
+                return_value=replacement,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg"),
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "4 oz"}
+            })
+
+        ingredients = update.call_args.kwargs["known_data"][
+            "_recipe_builder_ingredients"
+        ]
+        self.assertEqual(len(ingredients), 1)
+        self.assertEqual(ingredients[0]["name"], "Lean Ground Beef")
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_edit_select",
+        )
+
+    def test_required_imported_ingredient_cannot_be_removed_in_review(
+        self,
+    ) -> None:
+        required = {
+            **BUILDER_INGREDIENT,
+            "_recipe_import_source_label": "1 lb ground turkey",
+            "_recipe_import_optional": False,
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_edit_action",
+            "known_data": {
+                "_recipe_import_active": True,
+                "_recipe_builder_ingredients": [required],
+                "_recipe_builder_edit_index": 0,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Remove ingredient",
+                }
+            })
+
+        update.assert_not_called()
+        self.assertIn("required imported ingredient", send.call_args.args[0])
+
+    def test_optional_imported_ingredient_removal_is_recorded(self) -> None:
+        optional = {
+            **BUILDER_INGREDIENT,
+            "food_id": 13,
+            "name": "Parsley",
+            "_recipe_import_source_label": "parsley for garnish",
+            "_recipe_import_optional": True,
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_builder_edit_action",
+            "known_data": {
+                "_recipe_import_active": True,
+                "_recipe_builder_ingredients": [BUILDER_INGREDIENT, optional],
+                "_recipe_builder_edit_index": 1,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg"),
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Remove ingredient",
+                }
+            })
+
+        updated = update.call_args.kwargs["known_data"]
+        self.assertEqual(len(updated["_recipe_builder_ingredients"]), 1)
+        self.assertIn(
+            "parsley for garnish",
+            updated["_recipe_import_excluded"],
+        )
+
+    def test_review_compares_source_claims_without_replacing_calculation(
+        self,
+    ) -> None:
+        message = app.format_recipe_builder_review({
+            "_recipe_builder_name": "Burger Bowl",
+            "_recipe_builder_meal_type": "dinner",
+            "_recipe_builder_yield": 4,
+            "_recipe_builder_ingredients": [BUILDER_INGREDIENT],
+            "_recipe_import_claimed_calories": 400,
+            "_recipe_import_claimed_protein_g": 40,
+        })
+
+        self.assertIn("Source claims 400 calories per serving", message)
+        self.assertIn("Source claims 40 g protein per serving", message)
+        self.assertIn("comparison-only", message)
+        self.assertIn("Per serving:\nCalories: 42", message)
+
     def test_builder_confirmation_saves_without_logging(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",

@@ -471,6 +471,22 @@ def menu_reply_markup(message):
             ["Add new saved food"],
             ["Back", "Cancel"],
         ])
+    elif message.startswith("Recipe Builder — Edit Ingredients"):
+        numbered = [
+            match.group(1)
+            for line in message.splitlines()
+            if (match := re.match(r"^(\d+)\. ", line))
+        ]
+        rows = [numbered[index : index + 2] for index in range(0, len(numbered), 2)]
+        rows.extend([["Add ingredient"], ["Back to review", "Cancel"]])
+        one_time = True
+    elif message.startswith("Recipe Builder — Edit Ingredient\n\n"):
+        rows = [
+            ["Change amount", "Change Saved Food"],
+            ["Remove ingredient"],
+            ["Back", "Cancel"],
+        ]
+        one_time = True
     elif "Recipe Builder — Ingredients\n\n" in message:
         rows = [
             ["Add another ingredient", "Continue"],
@@ -3856,6 +3872,108 @@ def format_recipe_builder_ingredients(
     return "\n".join(lines)
 
 
+def format_recipe_builder_edit_choices(known_data: dict) -> str:
+    """Show numbered draft ingredients that can be corrected before save."""
+    ingredients = list(
+        known_data.get("_recipe_builder_ingredients") or []
+    )
+    lines = [
+        "Recipe Builder — Edit Ingredients",
+        "",
+        "Choose an ingredient to correct:",
+        "",
+    ]
+    for index, ingredient in enumerate(ingredients, start=1):
+        lines.append(
+            f"{index}. {ingredient.get('amount_description')} "
+            f"{ingredient.get('name')}"
+        )
+    lines.extend([
+        "",
+        "Reply with an ingredient number, Add ingredient, Back to review, "
+        "or Cancel.",
+    ])
+    return "\n".join(lines)
+
+
+def format_recipe_builder_edit_action(known_data: dict) -> str:
+    """Show the safe corrections available for one draft ingredient."""
+    ingredients = list(
+        known_data.get("_recipe_builder_ingredients") or []
+    )
+    index_value = known_data.get("_recipe_builder_edit_index")
+    index = int(index_value) if index_value is not None else -1
+    if index < 0 or index >= len(ingredients):
+        raise ValueError("That recipe ingredient is no longer available.")
+    ingredient = dict(ingredients[index])
+    lines = [
+        "Recipe Builder — Edit Ingredient",
+        "",
+        f"Ingredient: {ingredient.get('name')}",
+        f"Entire-recipe amount: {ingredient.get('amount_description')}",
+        f"Saved serving: {ingredient.get('serving_description') or 'not listed'}",
+        "",
+        "1. Change amount",
+        "2. Change Saved Food",
+    ]
+    if not (
+        known_data.get("_recipe_import_active")
+        and ingredient.get("_recipe_import_source_label")
+        and not ingredient.get("_recipe_import_optional")
+    ):
+        lines.append("3. Remove ingredient")
+    else:
+        lines.append(
+            "3. Remove ingredient — unavailable for a required imported "
+            "ingredient"
+        )
+    lines.extend(["4. Back", "", "Nothing has been changed yet."])
+    return "\n".join(lines)
+
+
+def show_recipe_builder_edit_choices(
+    *,
+    chat_id: int | str,
+    known_data: dict,
+) -> None:
+    """Return to the numbered correction list without changing nutrition."""
+    updated = dict(known_data)
+    # Conversation updates merge dictionaries, so explicitly clear transient
+    # selections instead of only removing them from this local copy.
+    updated["_recipe_builder_edit_index"] = None
+    updated["_recipe_builder_replace_index"] = None
+    updated["_recipe_builder_selected_food_id"] = None
+    updated["_recipe_builder_review_editing"] = True
+    update_conversation(
+        chat_id=chat_id,
+        current_step="recipe_builder_edit_select",
+        known_data=updated,
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_recipe_builder_edit_choices(updated),
+        chat_id=chat_id,
+    )
+
+
+def show_recipe_builder_edit_action(
+    *,
+    chat_id: int | str,
+    known_data: dict,
+) -> None:
+    """Return to one selected ingredient's correction menu."""
+    update_conversation(
+        chat_id=chat_id,
+        current_step="recipe_builder_edit_action",
+        known_data=known_data,
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_recipe_builder_edit_action(known_data),
+        chat_id=chat_id,
+    )
+
+
 def format_recipe_import_missing(ingredient: dict) -> str:
     name = str(ingredient.get("ingredient_name") or "ingredient")
     amount = str(ingredient.get("amount_description") or "").strip()
@@ -4162,6 +4280,28 @@ def continue_recipe_import_resolution(
     )
 
 
+def annotate_imported_recipe_ingredient(
+    ingredient: dict,
+    source: dict,
+) -> dict:
+    """Keep source optionality in the draft without persisting it as food data."""
+    annotated = dict(ingredient)
+    source_label = " ".join(
+        part
+        for part in (
+            str(source.get("amount_description") or "").strip(),
+            str(source.get("brand") or "").strip(),
+            str(source.get("ingredient_name") or "").strip(),
+        )
+        if part
+    )
+    annotated["_recipe_import_source_label"] = source_label
+    annotated["_recipe_import_optional"] = bool(
+        source.get("optional") or source.get("trace_only")
+    )
+    return annotated
+
+
 def resolve_recipe_import_ingredients(
     *,
     chat_id: int,
@@ -4186,11 +4326,14 @@ def resolve_recipe_import_ingredients(
         ):
             try:
                 resolved.append(
-                    prepare_recipe_ingredient(
-                        food_id=int(food["food_id"]),
-                        amount_description=str(
-                            item.get("amount_description") or ""
+                    annotate_imported_recipe_ingredient(
+                        prepare_recipe_ingredient(
+                            food_id=int(food["food_id"]),
+                            amount_description=str(
+                                item.get("amount_description") or ""
+                            ),
                         ),
+                        item,
                     )
                 )
                 continue
@@ -4287,6 +4430,12 @@ def start_recipe_import_draft(
         "_recipe_builder_existing_id": None,
         "_recipe_builder_meal_type": meal_type,
         "_recipe_builder_yield": draft.get("yield_servings"),
+        "_recipe_import_claimed_calories": draft.get(
+            "claimed_calories_per_serving"
+        ),
+        "_recipe_import_claimed_protein_g": draft.get(
+            "claimed_protein_g_per_serving"
+        ),
         "_recipe_builder_ingredients": [],
         "_recipe_builder_summary": str(draft.get("summary") or ""),
         "_recipe_builder_steps": list(draft.get("preparation_steps") or []),
@@ -4334,6 +4483,28 @@ def format_recipe_builder_review(known_data: dict) -> str:
     if excluded:
         lines.extend(["", "Excluded from nutrition with your approval:"])
         lines.extend(f"- {item}" for item in excluded)
+    claimed_calories = known_data.get("_recipe_import_claimed_calories")
+    claimed_protein = known_data.get("_recipe_import_claimed_protein_g")
+    if claimed_calories is not None or claimed_protein is not None:
+        lines.extend(["", "Source nutrition comparison:"])
+        if claimed_calories is not None:
+            lines.append(
+                "- Source claims "
+                f"{format_display_number(float(claimed_calories), decimals=0)} "
+                "calories per serving; Saved Food calculation is "
+                f"{format_display_number(per_serving['calories'], decimals=0)}."
+            )
+        if claimed_protein is not None:
+            lines.append(
+                "- Source claims "
+                f"{format_display_number(float(claimed_protein))} g protein "
+                "per serving; Saved Food calculation is "
+                f"{format_display_number(per_serving['protein_g'])} g."
+            )
+        lines.append(
+            "Source claims are comparison-only and never replace the Saved "
+            "Food calculation. Review differences before saving."
+        )
     lines.extend([
         "",
         "Important: every ingredient amount above is the total used in the "
@@ -11031,7 +11202,9 @@ def process_telegram_update(update):
             ingredients = list(
                 known_data.get("_recipe_builder_ingredients") or []
             )
-            ingredients.append(ingredient)
+            ingredients.append(
+                annotate_imported_recipe_ingredient(ingredient, current)
+            )
             updated = dict(known_data)
             updated["_recipe_builder_ingredients"] = ingredients
             updated["_recipe_import_pending"] = pending[1:]
@@ -11111,7 +11284,9 @@ def process_telegram_update(update):
             ingredients = list(
                 known_data.get("_recipe_builder_ingredients") or []
             )
-            ingredients.append(ingredient)
+            ingredients.append(
+                annotate_imported_recipe_ingredient(ingredient, current)
+            )
             updated["_recipe_builder_ingredients"] = ingredients
             updated["_recipe_import_pending"] = pending[1:]
             continue_recipe_import_resolution(
@@ -11266,7 +11441,9 @@ def process_telegram_update(update):
             ingredients = list(
                 known_data.get("_recipe_builder_ingredients") or []
             )
-            ingredients.append(ingredient)
+            ingredients.append(
+                annotate_imported_recipe_ingredient(ingredient, current)
+            )
             created_ids = list(
                 known_data.get("_recipe_import_created_food_ids") or []
             )
@@ -11350,11 +11527,203 @@ def process_telegram_update(update):
             show_recipe_builder_pantry_choices(chat_id=chat_id)
             return
 
+        if current_step == "recipe_builder_edit_select":
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            if lowered in {"back", "back to review", "review"}:
+                updated = dict(known_data)
+                updated["_recipe_builder_edit_index"] = None
+                updated["_recipe_builder_replace_index"] = None
+                updated["_recipe_builder_selected_food_id"] = None
+                updated["_recipe_builder_review_editing"] = False
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_confirmation",
+                    known_data=updated,
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_recipe_builder_review(updated),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"add", "add ingredient", "add another ingredient"}:
+                updated = dict(known_data)
+                updated["_recipe_builder_review_editing"] = True
+                updated["_recipe_builder_replace_index"] = None
+                updated["_recipe_builder_selected_food_id"] = None
+                update_conversation(
+                    chat_id=chat_id,
+                    known_data=updated,
+                    missing_fields=["ingredient"],
+                )
+                show_recipe_builder_pantry_choices(chat_id=chat_id)
+                return
+            try:
+                selected_index = int(text.strip()) - 1
+            except (TypeError, ValueError):
+                selected_index = -1
+            if selected_index < 0 or selected_index >= len(ingredients):
+                send_telegram_msg(
+                    format_recipe_builder_edit_choices(known_data),
+                    chat_id=chat_id,
+                )
+                return
+            updated = dict(known_data)
+            updated["_recipe_builder_edit_index"] = selected_index
+            show_recipe_builder_edit_action(
+                chat_id=chat_id,
+                known_data=updated,
+            )
+            return
+
+        if current_step == "recipe_builder_edit_action":
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            index_value = known_data.get("_recipe_builder_edit_index")
+            index = int(index_value) if index_value is not None else -1
+            if index < 0 or index >= len(ingredients):
+                show_recipe_builder_edit_choices(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                )
+                return
+            ingredient = dict(ingredients[index])
+            if lowered in {"4", "back"}:
+                show_recipe_builder_edit_choices(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                )
+                return
+            if lowered in {"1", "change amount", "amount"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_builder_edit_amount",
+                    missing_fields=["ingredient_amount"],
+                )
+                send_telegram_msg(
+                    "Enter the corrected amount used in the entire recipe.\n\n"
+                    f"Current: {ingredient.get('amount_description')}\n"
+                    f"Saved serving: "
+                    f"{ingredient.get('serving_description') or 'not listed'}\n\n"
+                    "Examples: 1 serving, 40 g, 3 oz, or 2 slices.\n"
+                    "Reply Back to keep the current amount.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"2", "change saved food", "saved food"}:
+                updated = dict(known_data)
+                updated["_recipe_builder_replace_index"] = index
+                updated["_recipe_builder_review_editing"] = True
+                update_conversation(
+                    chat_id=chat_id,
+                    known_data=updated,
+                    missing_fields=["ingredient"],
+                )
+                show_recipe_builder_pantry_choices(chat_id=chat_id)
+                return
+            if lowered in {"3", "remove", "remove ingredient"}:
+                if (
+                    known_data.get("_recipe_import_active")
+                    and ingredient.get("_recipe_import_source_label")
+                    and not ingredient.get("_recipe_import_optional")
+                ):
+                    send_telegram_msg(
+                        "A required imported ingredient cannot be removed. "
+                        "Change its amount or Saved Food instead.",
+                        chat_id=chat_id,
+                    )
+                    return
+                if len(ingredients) <= 1:
+                    send_telegram_msg(
+                        "A recipe must keep at least one ingredient.",
+                        chat_id=chat_id,
+                    )
+                    return
+                removed = ingredients.pop(index)
+                updated = dict(known_data)
+                updated["_recipe_builder_ingredients"] = ingredients
+                if removed.get("_recipe_import_source_label"):
+                    excluded = list(
+                        updated.get("_recipe_import_excluded") or []
+                    )
+                    excluded.append(str(removed["_recipe_import_source_label"]))
+                    updated["_recipe_import_excluded"] = excluded
+                show_recipe_builder_edit_choices(
+                    chat_id=chat_id,
+                    known_data=updated,
+                )
+                return
+            send_telegram_msg(
+                format_recipe_builder_edit_action(known_data),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "recipe_builder_edit_amount":
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            index_value = known_data.get("_recipe_builder_edit_index")
+            index = int(index_value) if index_value is not None else -1
+            if index < 0 or index >= len(ingredients):
+                show_recipe_builder_edit_choices(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                )
+                return
+            if lowered == "back":
+                show_recipe_builder_edit_action(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                )
+                return
+            previous = dict(ingredients[index])
+            try:
+                corrected = prepare_recipe_ingredient(
+                    food_id=int(previous["food_id"]),
+                    nutrition_version_id=int(
+                        previous["nutrition_version_id"]
+                    ),
+                    amount_description=text,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                send_telegram_msg(str(exc), chat_id=chat_id)
+                return
+            for field in (
+                "_recipe_import_source_label",
+                "_recipe_import_optional",
+            ):
+                if field in previous:
+                    corrected[field] = previous[field]
+            ingredients[index] = corrected
+            updated = dict(known_data)
+            updated["_recipe_builder_ingredients"] = ingredients
+            show_recipe_builder_edit_choices(
+                chat_id=chat_id,
+                known_data=updated,
+            )
+            return
+
         if current_step in {
             "recipe_builder_ingredient_name",
             "recipe_builder_ingredient_select",
         }:
             if lowered == "back":
+                if known_data.get("_recipe_builder_review_editing"):
+                    if known_data.get("_recipe_builder_replace_index") is not None:
+                        show_recipe_builder_edit_action(
+                            chat_id=chat_id,
+                            known_data=known_data,
+                        )
+                    else:
+                        show_recipe_builder_edit_choices(
+                            chat_id=chat_id,
+                            known_data=known_data,
+                        )
+                    return
                 ingredients = list(
                     known_data.get("_recipe_builder_ingredients") or []
                 )
@@ -11496,6 +11865,18 @@ def process_telegram_update(update):
 
         if current_step == "recipe_builder_ingredient_amount":
             if lowered == "back":
+                if known_data.get("_recipe_builder_review_editing"):
+                    if known_data.get("_recipe_builder_replace_index") is not None:
+                        show_recipe_builder_edit_action(
+                            chat_id=chat_id,
+                            known_data=known_data,
+                        )
+                    else:
+                        show_recipe_builder_edit_choices(
+                            chat_id=chat_id,
+                            known_data=known_data,
+                        )
+                    return
                 update_conversation(
                     chat_id=chat_id,
                     known_data={"_recipe_builder_selected_food_id": None},
@@ -11523,10 +11904,37 @@ def process_telegram_update(update):
             ingredients = list(
                 known_data.get("_recipe_builder_ingredients") or []
             )
-            ingredients.append(ingredient)
+            replace_value = known_data.get("_recipe_builder_replace_index")
+            replace_index = (
+                int(replace_value) if replace_value is not None else None
+            )
+            if replace_index is not None:
+                if replace_index < 0 or replace_index >= len(ingredients):
+                    send_telegram_msg(
+                        "That ingredient is no longer available. Return to "
+                        "the review and choose it again.",
+                        chat_id=chat_id,
+                    )
+                    return
+                previous = dict(ingredients[replace_index])
+                for field in (
+                    "_recipe_import_source_label",
+                    "_recipe_import_optional",
+                ):
+                    if field in previous:
+                        ingredient[field] = previous[field]
+                ingredients[replace_index] = ingredient
+            else:
+                ingredients.append(ingredient)
             updated = dict(known_data)
             updated["_recipe_builder_ingredients"] = ingredients
             updated["_recipe_builder_selected_food_id"] = None
+            if known_data.get("_recipe_builder_review_editing"):
+                show_recipe_builder_edit_choices(
+                    chat_id=chat_id,
+                    known_data=updated,
+                )
+                return
             update_conversation(
                 chat_id=chat_id,
                 current_step="recipe_builder_ingredient_menu",
@@ -11656,14 +12064,9 @@ def process_telegram_update(update):
 
         if current_step == "recipe_builder_confirmation":
             if lowered in {"2", "back", "change ingredients"}:
-                update_conversation(
+                show_recipe_builder_edit_choices(
                     chat_id=chat_id,
-                    current_step="recipe_builder_ingredient_menu",
-                    missing_fields=[],
-                )
-                send_telegram_msg(
-                    format_recipe_builder_ingredients(known_data),
-                    chat_id=chat_id,
+                    known_data=known_data,
                 )
                 return
             if lowered not in {
@@ -13843,7 +14246,9 @@ def process_telegram_update(update):
                 ingredients = list(
                     known_data.get("_recipe_builder_ingredients") or []
                 )
-                ingredients.append(ingredient)
+                ingredients.append(
+                    annotate_imported_recipe_ingredient(ingredient, current)
+                )
                 created_ids = list(
                     known_data.get("_recipe_import_created_food_ids") or []
                 )

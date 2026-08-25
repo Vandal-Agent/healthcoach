@@ -577,16 +577,52 @@ def prepare_recipe_ingredient(
     *,
     food_id: int,
     amount_description: str,
+    nutrition_version_id: int | None = None,
 ) -> dict[str, Any]:
     """Freeze one Saved Food version and calculate its contribution."""
-    food = next(
-        (
-            item
-            for item in list_recipe_ingredient_foods()
-            if int(item["food_id"]) == int(food_id)
-        ),
-        None,
-    )
+    food = None
+    if nutrition_version_id is None:
+        food = next(
+            (
+                item
+                for item in list_recipe_ingredient_foods()
+                if int(item["food_id"]) == int(food_id)
+            ),
+            None,
+        )
+    else:
+        initialize_database()
+        with get_connection(DATABASE_PATH) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    foods.*,
+                    nutrition_versions.nutrition_version_id,
+                    nutrition_versions.version_number,
+                    nutrition_versions.calories,
+                    nutrition_versions.protein_g,
+                    nutrition_versions.carbohydrates_g,
+                    nutrition_versions.fat_g,
+                    nutrition_versions.fiber_g,
+                    nutrition_versions.sugar_g,
+                    nutrition_versions.sodium_mg,
+                    nutrition_versions.serving_amount AS version_serving_amount,
+                    nutrition_versions.serving_unit AS version_serving_unit
+                FROM foods
+                JOIN nutrition_versions
+                  ON nutrition_versions.food_id = foods.food_id
+                WHERE foods.food_id = ?
+                  AND nutrition_versions.nutrition_version_id = ?
+                LIMIT 1
+                """,
+                (int(food_id), int(nutrition_version_id)),
+            ).fetchone()
+        if row is not None:
+            food = dict(row)
+            food["serving_amount"] = food.pop("version_serving_amount")
+            food["serving_unit"] = food.pop("version_serving_unit")
+            if not is_trusted_saved_food(food):
+                food = None
     if food is None:
         raise ValueError("That trusted Saved Food is not available.")
 

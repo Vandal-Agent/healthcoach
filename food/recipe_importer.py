@@ -71,6 +71,8 @@ class ImportedRecipeDraft(BaseModel):
     # Gemini's response-schema adapter rejects Pydantic's
     # exclusiveMinimum keyword, so validate this range after parsing.
     yield_servings: float | None = None
+    claimed_calories_per_serving: float | None = None
+    claimed_protein_g_per_serving: float | None = None
     summary: str = ""
     ingredients: list[ImportedRecipeIngredient] = Field(
         default_factory=list,
@@ -88,7 +90,10 @@ Extract a recipe draft for HealthCoach.
 
 Strict rules:
 1. Transcribe only recipe information supported by the supplied text or photo.
-2. Never calculate, estimate, or return nutrition information.
+2. Never calculate or estimate nutrition. Extract claimed_calories_per_serving
+   and claimed_protein_g_per_serving only when the source explicitly states
+   those values for one finished serving; otherwise return null. These claims
+   are comparison-only and are never used to calculate recipe nutrition.
 3. Keep each ingredient amount exactly as written, including fractions and units.
 4. ingredient_name must exclude the numeric amount but retain meaningful form,
    such as raw, cooked, drained, shredded, or boneless skinless.
@@ -103,9 +108,10 @@ Strict rules:
     explicit user confirmation. Never mark oils, sauces, cheese, meat,
     grains, produce, sweeteners, or other substantial foods as trace-only.
 11. Set readable=false when a reliable ingredient list cannot be extracted.
-12. Return this exact JSON shape and no nutrition fields:
+12. Return this exact JSON shape and no other nutrition fields:
     {"readable": true, "recipe_name": null, "meal_type": null,
-    "yield_servings": null, "summary": "", "ingredients":
+    "yield_servings": null, "claimed_calories_per_serving": null,
+    "claimed_protein_g_per_serving": null, "summary": "", "ingredients":
     [{"ingredient_name": "", "amount_description": "", "brand": null,
     "optional": false, "trace_only": false}],
     "preparation_steps": [], "notes": []}
@@ -166,6 +172,12 @@ def _normalize_recipe_payload(value: Any) -> dict[str, Any]:
             if payload.get("yield_servings") is not None
             else payload.get("servings")
         ),
+        "claimed_calories_per_serving": payload.get(
+            "claimed_calories_per_serving"
+        ),
+        "claimed_protein_g_per_serving": payload.get(
+            "claimed_protein_g_per_serving"
+        ),
         "summary": str(payload.get("summary") or ""),
         "ingredients": normalized_ingredients,
         "preparation_steps": list(
@@ -201,6 +213,16 @@ def _decode_recipe_response(response: Any) -> dict[str, Any]:
         result.setdefault("notes", []).append(
             "The supplied recipe yield was outside the supported range."
         )
+    for field in (
+        "claimed_calories_per_serving",
+        "claimed_protein_g_per_serving",
+    ):
+        value = result.get(field)
+        if value is not None and float(value) < 0:
+            result[field] = None
+            result.setdefault("notes", []).append(
+                "A negative source nutrition claim was ignored."
+            )
     if result.get("readable") and not result.get("ingredients"):
         result["readable"] = False
         result.setdefault("notes", []).append(

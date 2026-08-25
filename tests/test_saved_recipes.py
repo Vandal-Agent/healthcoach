@@ -327,6 +327,47 @@ class SavedRecipeTests(unittest.TestCase):
             ingredient["nutrition_version_id"],
         )
 
+    def test_amount_correction_uses_selected_historical_version(self) -> None:
+        turkey = self.add_builder_food(
+            name="Historical Version Turkey",
+            serving_amount=3,
+            serving_unit="oz",
+            calories=170,
+            protein_g=22,
+            carbohydrates_g=0,
+            fat_g=9,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=80,
+        )
+        food_id = int(turkey["food"]["food_id"])
+        original = recipes.prepare_recipe_ingredient(
+            food_id=food_id,
+            amount_description="3 oz",
+        )
+        library.add_user_nutrition_version(
+            food_id=food_id,
+            calories=200,
+            protein_g=20,
+            carbohydrates_g=1,
+            fat_g=12,
+            fiber_g=0,
+            sugar_g=0,
+            sodium_mg=100,
+        )
+
+        corrected = recipes.prepare_recipe_ingredient(
+            food_id=food_id,
+            nutrition_version_id=int(original["nutrition_version_id"]),
+            amount_description="6 oz",
+        )
+
+        self.assertEqual(
+            corrected["nutrition_version_id"],
+            original["nutrition_version_id"],
+        )
+        self.assertEqual(corrected["nutrition"]["calories"], 340)
+
     def test_builder_recalculation_versions_future_recipe_logs(self) -> None:
         turkey = self.add_builder_food(
             name="Recalculation Turkey",

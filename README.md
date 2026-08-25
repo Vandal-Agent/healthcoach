@@ -27,7 +27,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   version-linked Recipe Builder while blocking unresolved major ingredients
   and documenting any user-approved trace exclusions; unresolved ingredients
   have tap-friendly exact, confirmed-generic, simpler-description, and manual
-  Saved Food paths without silent substitution
+  Saved Food paths without silent substitution; the final review has a
+  numbered editor for correcting amounts, replacing foods, adding missing
+  ingredients, and removing optional ingredients before save
 - Edits or deletes Saved Recipes without rewriting previously logged meals
 - Renames, updates, or removes Saved Foods while preserving food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the

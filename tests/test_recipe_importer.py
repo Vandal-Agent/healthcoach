@@ -42,6 +42,8 @@ class RecipeImporterTests(unittest.TestCase):
                 "recipe_name": "Chicken Bowl",
                 "meal_type": "dinner",
                 "yield_servings": 4,
+                "claimed_calories_per_serving": 420,
+                "claimed_protein_g_per_serving": 40,
                 "summary": "A simple bowl.",
                 "ingredients": [
                     {
@@ -68,6 +70,8 @@ class RecipeImporterTests(unittest.TestCase):
         self.assertTrue(result["readable"])
         self.assertEqual(result["recipe_name"], "Chicken Bowl")
         self.assertEqual(result["yield_servings"], 4)
+        self.assertEqual(result["claimed_calories_per_serving"], 420)
+        self.assertEqual(result["claimed_protein_g_per_serving"], 40)
         self.assertNotIn("calories", result)
         client.close.assert_called_once()
         config = client.models.generate_content.call_args.kwargs["config"]
