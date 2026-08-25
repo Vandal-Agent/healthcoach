@@ -6720,6 +6720,20 @@ def process_telegram_update(update):
     if (
         active_conversation
         and active_conversation.get("conversation_type")
+        == "food_interpretation"
+        and lowered_text in {"cancel", "exit", "quit", "close"}
+    ):
+        cancel_conversation(chat_id)
+        send_telegram_msg(
+            "Food entry cancelled. Nothing was logged.",
+            chat_id=chat_id,
+            remove_keyboard=True,
+        )
+        return
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
         == "yesterday_food_logging"
         and active_conversation.get("current_step")
         == "awaiting_food"
@@ -16363,6 +16377,15 @@ def process_telegram_update(update):
                 or "handful" in cleaned_amount
             )
 
+            if not valid_amount:
+                send_telegram_msg(
+                    "How much did you have? Reply with an amount such as "
+                    "1 serving, 1 cup, 4 oz, or 100 g. Reply Cancel to "
+                    "stop without logging.",
+                    chat_id=chat_id,
+                )
+                return
+
             if valid_amount:
                 known_data["quantity_description"] = text.strip()
 
@@ -16381,7 +16404,10 @@ def process_telegram_update(update):
                         "food_name": "What food did you have?",
                         "size": "What size was it?",
                         "quantity": "How many did you have?",
-                        "quantity_description": "How much did you have?",
+                        "quantity_description": (
+                            "How much did you have? Reply with an amount "
+                            "such as 1 serving, 1 cup, 4 oz, or 100 g."
+                        ),
                         "meal_category": "Which meal was this for?",
                         "drink": "What drink did you have?",
                         "drink_detail": "What drink did you have?",
@@ -16669,7 +16695,10 @@ def process_telegram_update(update):
             "food_name": "What food did you have?",
             "size": "What size was it?",
             "quantity": "How many did you have?",
-            "quantity_description": "How much did you have?",
+            "quantity_description": (
+                "How much did you have? Reply with an amount such as "
+                "1 serving, 1 cup, 4 oz, or 100 g."
+            ),
             "meal_category": "Which meal was this for?",
             "drink": "What drink did you have?",
             "drink_detail": "What drink did you have?",
@@ -16758,6 +16787,15 @@ def process_telegram_update(update):
                 or "handful" in cleaned_amount
             )
 
+            if not valid_amount:
+                send_telegram_msg(
+                    "How much did you have? Reply with an amount such as "
+                    "1 serving, 1 cup, 4 oz, or 100 g. Reply Cancel to "
+                    "stop without logging.",
+                    chat_id=chat_id,
+                )
+                return
+
             if valid_amount:
                 known_data["quantity_description"] = text.strip()
 
@@ -16776,7 +16814,10 @@ def process_telegram_update(update):
                         "food_name": "What food did you have?",
                         "size": "What size was it?",
                         "quantity": "How many did you have?",
-                        "quantity_description": "How much did you have?",
+                        "quantity_description": (
+                            "How much did you have? Reply with an amount "
+                            "such as 1 serving, 1 cup, 4 oz, or 100 g."
+                        ),
                         "meal_category": "Which meal was this for?",
                         "drink": "What drink did you have?",
                         "drink_detail": "What drink did you have?",
@@ -17064,7 +17105,10 @@ def process_telegram_update(update):
             "food_name": "What food did you have?",
             "size": "What size was it?",
             "quantity": "How many did you have?",
-            "quantity_description": "How much did you have?",
+            "quantity_description": (
+                "How much did you have? Reply with an amount such as "
+                "1 serving, 1 cup, 4 oz, or 100 g."
+            ),
             "meal_category": "Which meal was this for?",
             "drink": "What drink did you have?",
             "drink_detail": "What drink did you have?",
