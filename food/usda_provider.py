@@ -63,6 +63,7 @@ def normalized_tokens(value: str | None) -> set[str]:
         "fry": "fries",
         "fries": "fries",
         "burgers": "burger",
+        "onions": "onion",
         "tacos": "taco",
         "sandwiches": "sandwich",
     }
@@ -848,9 +849,15 @@ def find_portion(
 
         return None
 
-    matches = []
+    candidates = []
 
     for portion in portions:
+        portion_amount = portion.get("amount")
+        amount_text = (
+            f"{float(portion_amount):g}"
+            if portion_amount is not None
+            else ""
+        )
         modifier = normalize_text(
             portion.get("modifier")
         )
@@ -858,17 +865,38 @@ def find_portion(
             portion.get("portionDescription")
         )
 
-        searchable = f"{modifier} {description}".strip()
+        searchable = re.sub(
+            r"\([^)]*\)",
+            " ",
+            f"{amount_text} {modifier} {description}",
+        )
+        searchable = normalize_text(searchable)
 
-        if normalized_size not in searchable.split():
+        requested_tokens = set(normalized_size.split())
+        searchable_tokens = set(searchable.split())
+        if not requested_tokens.issubset(searchable_tokens):
             continue
 
-        matches.append(portion)
+        candidates.append({
+            "portion": portion,
+            "extra_token_count": len(searchable_tokens - requested_tokens),
+        })
 
-    if len(matches) != 1:
+    if not candidates:
         return None
 
-    return matches[0]
+    best_extra_count = min(
+        candidate["extra_token_count"]
+        for candidate in candidates
+    )
+    best = [
+        candidate["portion"]
+        for candidate in candidates
+        if candidate["extra_token_count"] == best_extra_count
+    ]
+    if len(best) != 1:
+        return None
+    return best[0]
 
 
 def extract_nutrients_per_100g(

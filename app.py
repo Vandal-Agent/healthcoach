@@ -105,6 +105,7 @@ from food.recipes import (
 from food.recipe_importer import (
     parse_recipe_photo,
     parse_recipe_text,
+    suggest_generic_ingredient_name,
 )
 from food.nutrition_provider import lookup_official_nutrition
 from food.menu_photo_advisor import (
@@ -499,6 +500,25 @@ def menu_reply_markup(message):
             if "You may also reply Exclude ingredient" in message:
                 rows.append(["Exclude ingredient"])
         rows.append(["Cancel"])
+        one_time = True
+    elif message.startswith("Recipe Import — Verified Lookup Options"):
+        rows = []
+        if "Try verified generic match:" in message:
+            rows.append(["Try verified generic match"])
+        rows.extend([
+            ["Enter simpler description"],
+            ["Add new saved food"],
+            ["Cancel"],
+        ])
+        one_time = True
+    elif message.startswith("Recipe Import — Verified Serving"):
+        rows = [
+            ["Use one verified serving"],
+            ["Back", "Cancel"],
+        ]
+        one_time = True
+    elif "Enter a simpler food description for verified lookup." in message:
+        rows = [["Back", "Cancel"]]
         one_time = True
     elif "Saved Recipe Details\n\n" in message:
         rows = [
@@ -3866,6 +3886,196 @@ def format_recipe_import_missing(ingredient: dict) -> str:
         "Reply Cancel to stop without saving.",
     ])
     return "\n".join(lines)
+
+
+RECIPE_IMPORT_REQUIRED_NUTRIENTS = (
+    "calories",
+    "protein_g",
+    "carbohydrates_g",
+    "fat_g",
+    "fiber_g",
+    "sugar_g",
+    "sodium_mg",
+)
+
+
+def recipe_import_lookup_is_complete(result: dict) -> bool:
+    nutrition = dict(result.get("nutrition") or {})
+    return bool(
+        result.get("found")
+        and not any(
+            nutrition.get(field) is None
+            for field in RECIPE_IMPORT_REQUIRED_NUTRIENTS
+        )
+    )
+
+
+def format_recipe_import_lookup_failure(ingredient: dict) -> str:
+    name = str(ingredient.get("ingredient_name") or "ingredient")
+    amount = str(ingredient.get("amount_description") or "").strip()
+    suggestion = str(ingredient.get("generic_lookup_name") or "").strip()
+    lines = [
+        "Recipe Import — Verified Lookup Options",
+        "",
+        "I couldn't find one complete verified match for:",
+        f"{amount} {name}".strip(),
+    ]
+    notes = [
+        str(note).strip()
+        for note in (ingredient.get("lookup_failure_notes") or [])
+        if str(note).strip()
+    ][:2]
+    if notes:
+        lines.extend(["", "Provider details:"])
+        lines.extend(f"- {note[:240]}" for note in notes)
+    lines.extend(["", "Nothing was saved."])
+    if suggestion:
+        lines.append(f"Try verified generic match: {suggestion}")
+    lines.extend([
+        "Enter a simpler description",
+        "Add new saved food",
+        "Cancel",
+    ])
+    return "\n".join(lines)
+
+
+def show_recipe_import_verified_confirmation(
+    *,
+    chat_id: int,
+    known_data: dict,
+    provider_result: dict,
+    lookup_name: str,
+    generic_match: bool,
+) -> None:
+    provider_food = dict(provider_result.get("food") or {})
+    nutrition = dict(provider_result.get("nutrition") or {})
+    updated = dict(known_data)
+    updated["_recipe_import_verified_result"] = provider_result
+    updated["_recipe_import_verified_lookup_name"] = lookup_name
+    updated["_recipe_import_verified_is_generic"] = bool(generic_match)
+    update_conversation(
+        chat_id=chat_id,
+        current_step="recipe_import_verified_confirmation",
+        known_data=updated,
+        missing_fields=[],
+    )
+    source = str(
+        (provider_result.get("verification") or {}).get("source")
+        or "verified source"
+    )
+    match_note = (
+        "\nMatch type: Verified generic match approved for review.\n"
+        if generic_match
+        else ""
+    )
+    send_telegram_msg(
+        "Verified ingredient found:\n\n"
+        f"Food: {provider_food.get('canonical_name')}\n"
+        f"Serving: {provider_food.get('serving_description')}\n"
+        f"Calories: {format_display_number(float(nutrition['calories']), decimals=0)}\n"
+        f"Protein: {format_display_number(float(nutrition['protein_g']))} g\n"
+        f"Source: {source}\n"
+        f"{match_note}\n"
+        "Save this as a Saved Food and use it in the recipe?\n\n"
+        "1. Yes\n2. No",
+        chat_id=chat_id,
+    )
+
+
+def run_recipe_import_verified_lookup(
+    *,
+    chat_id: int,
+    known_data: dict,
+    lookup_name: str,
+    generic_match: bool = False,
+) -> None:
+    pending = list(known_data.get("_recipe_import_pending") or [])
+    if not pending:
+        continue_recipe_import_resolution(chat_id=chat_id, known_data=known_data)
+        return
+    current = dict(pending[0])
+    send_telegram_msg(
+        "I'm checking for one verified nutrition match. "
+        "This may take a moment.",
+        chat_id=chat_id,
+    )
+    try:
+        provider_result = lookup_official_nutrition(
+            restaurant=None,
+            food_name=str(lookup_name or "").strip(),
+            size=str(current.get("amount_description") or ""),
+            brand=None if generic_match else current.get("brand"),
+        )
+    except Exception:
+        logging.exception("Recipe ingredient lookup failed")
+        provider_result = {
+            "found": False,
+            "notes": ["The verified nutrition provider was unavailable."],
+        }
+
+    if not recipe_import_lookup_is_complete(provider_result):
+        suggestion = suggest_generic_ingredient_name(
+            str(current.get("ingredient_name") or ""),
+            brand=current.get("brand"),
+        )
+        if generic_match or suggestion == str(lookup_name).strip().lower():
+            suggestion = None
+        current["generic_lookup_name"] = suggestion
+        current["lookup_failure_notes"] = list(
+            provider_result.get("notes") or []
+        )
+        current["lookup_attempt_name"] = str(lookup_name).strip()
+        updated = dict(known_data)
+        updated["_recipe_import_pending"] = [current, *pending[1:]]
+        update_conversation(
+            chat_id=chat_id,
+            current_step="recipe_import_ingredient",
+            known_data=updated,
+            missing_fields=["recipe_ingredient"],
+        )
+        send_telegram_msg(
+            format_recipe_import_lookup_failure(current),
+            chat_id=chat_id,
+        )
+        return
+
+    provider_food = dict(provider_result.get("food") or {})
+    try:
+        ingredient_serving_multiplier(
+            amount_description=str(current.get("amount_description") or ""),
+            serving_amount=float(provider_food["serving_amount"]),
+            serving_unit=str(provider_food["serving_unit"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        updated = dict(known_data)
+        updated["_recipe_import_verified_result"] = provider_result
+        updated["_recipe_import_verified_lookup_name"] = str(lookup_name)
+        updated["_recipe_import_verified_is_generic"] = bool(generic_match)
+        update_conversation(
+            chat_id=chat_id,
+            current_step="recipe_import_verified_amount",
+            known_data=updated,
+            missing_fields=["recipe_ingredient_amount"],
+        )
+        send_telegram_msg(
+            "Recipe Import — Verified Serving\n\n"
+            f"Recipe amount: {current.get('amount_description')}\n"
+            f"Verified serving: {provider_food.get('serving_description')}\n\n"
+            f"{exc}\n\n"
+            "The verified result has been preserved. Reply Use one verified "
+            "serving, or type Amount: followed by a compatible amount. "
+            "Reply Back to choose another match.",
+            chat_id=chat_id,
+        )
+        return
+
+    show_recipe_import_verified_confirmation(
+        chat_id=chat_id,
+        known_data=known_data,
+        provider_result=provider_result,
+        lookup_name=str(lookup_name),
+        generic_match=generic_match,
+    )
 
 
 def continue_recipe_import_resolution(
@@ -10491,6 +10701,42 @@ def process_telegram_update(update):
             advance_recipe_import_metadata(chat_id=chat_id, known_data=updated)
             return
 
+        if current_step == "recipe_import_lookup_description":
+            pending = list(known_data.get("_recipe_import_pending") or [])
+            if not pending:
+                continue_recipe_import_resolution(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                )
+                return
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_ingredient",
+                    known_data=known_data,
+                    missing_fields=["recipe_ingredient"],
+                )
+                send_telegram_msg(
+                    format_recipe_import_missing(dict(pending[0])),
+                    chat_id=chat_id,
+                )
+                return
+            lookup_name = text.strip()
+            if len(lookup_name) < 2:
+                send_telegram_msg(
+                    "Enter a simpler food description with at least two "
+                    "characters, or reply Back.",
+                    chat_id=chat_id,
+                )
+                return
+            run_recipe_import_verified_lookup(
+                chat_id=chat_id,
+                known_data=known_data,
+                lookup_name=lookup_name,
+                generic_match=True,
+            )
+            return
+
         if current_step == "recipe_import_ingredient":
             pending = list(known_data.get("_recipe_import_pending") or [])
             if not pending:
@@ -10569,85 +10815,58 @@ def process_telegram_update(update):
                 "look up",
                 "lookup",
             }:
-                send_telegram_msg(
-                    "I'm checking for one exact verified nutrition match. "
-                    "This may take a moment.",
+                run_recipe_import_verified_lookup(
                     chat_id=chat_id,
+                    known_data=known_data,
+                    lookup_name=str(
+                        current.get("ingredient_name") or ""
+                    ),
                 )
-                try:
-                    provider_result = lookup_official_nutrition(
-                        restaurant=None,
-                        food_name=str(
-                            current.get("ingredient_name") or ""
-                        ),
-                        size=str(
-                            current.get("amount_description") or ""
-                        ),
-                        brand=current.get("brand"),
+                return
+            elif lowered in {
+                "try verified generic match",
+                "verified generic match",
+                "generic match",
+            }:
+                suggestion = str(
+                    current.get("generic_lookup_name") or ""
+                ).strip()
+                if not suggestion:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="recipe_import_lookup_description",
+                        known_data=known_data,
+                        missing_fields=["recipe_ingredient_lookup_name"],
                     )
-                except Exception:
-                    logging.exception("Recipe ingredient lookup failed")
-                    provider_result = {"found": False}
-                nutrition = dict(provider_result.get("nutrition") or {})
-                provider_food = dict(provider_result.get("food") or {})
-                required_nutrients = (
-                    "calories",
-                    "protein_g",
-                    "carbohydrates_g",
-                    "fat_g",
-                    "fiber_g",
-                    "sugar_g",
-                    "sodium_mg",
-                )
-                if (
-                    not provider_result.get("found")
-                    or any(nutrition.get(field) is None for field in required_nutrients)
-                ):
                     send_telegram_msg(
-                        "I couldn't find one complete, exact verified match. "
-                        "No nutrition was saved. Type an existing Saved Food "
-                        "name or reply Add new saved food.",
+                        "Enter a simpler food description for verified "
+                        "lookup.\n\nExample: onion\n\nNothing will be saved "
+                        "without your confirmation.",
                         chat_id=chat_id,
                     )
                     return
-                try:
-                    ingredient_serving_multiplier(
-                        amount_description=str(
-                            current.get("amount_description") or ""
-                        ),
-                        serving_amount=float(provider_food["serving_amount"]),
-                        serving_unit=str(provider_food["serving_unit"]),
-                    )
-                except (KeyError, TypeError, ValueError) as exc:
-                    send_telegram_msg(
-                        "Verified nutrition was found, but its serving cannot "
-                        f"be safely converted to the recipe amount: {exc}\n\n"
-                        "Nothing was saved. Add a Saved Food with a compatible "
-                        "serving or choose another existing Saved Food.",
-                        chat_id=chat_id,
-                    )
-                    return
-                updated = dict(known_data)
-                updated["_recipe_import_verified_result"] = provider_result
+                run_recipe_import_verified_lookup(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    lookup_name=suggestion,
+                    generic_match=True,
+                )
+                return
+            elif lowered in {
+                "enter simpler description",
+                "simpler description",
+                "different description",
+            }:
                 update_conversation(
                     chat_id=chat_id,
-                    current_step="recipe_import_verified_confirmation",
-                    known_data=updated,
-                    missing_fields=[],
-                )
-                source = str(
-                    (provider_result.get("verification") or {}).get("source")
-                    or "verified source"
+                    current_step="recipe_import_lookup_description",
+                    known_data=known_data,
+                    missing_fields=["recipe_ingredient_lookup_name"],
                 )
                 send_telegram_msg(
-                    "Verified ingredient found:\n\n"
-                    f"Food: {provider_food.get('canonical_name')}\n"
-                    f"Serving: {provider_food.get('serving_description')}\n"
-                    f"Calories: {format_display_number(float(nutrition['calories']), decimals=0)}\n"
-                    f"Protein: {format_display_number(float(nutrition['protein_g']))} g\n"
-                    f"Source: {source}\n\n"
-                    "Save this as a Saved Food and use it in the recipe?\n\n"
-                    "1. Yes\n2. No",
+                    "Enter a simpler food description for verified lookup."
+                    "\n\nExample: onion\n\nNothing will be saved without "
+                    "your confirmation.",
                     chat_id=chat_id,
                 )
                 return
@@ -10711,6 +10930,81 @@ def process_telegram_update(update):
             continue_recipe_import_resolution(
                 chat_id=chat_id,
                 known_data=updated,
+            )
+            return
+
+        if current_step == "recipe_import_verified_amount":
+            pending = list(known_data.get("_recipe_import_pending") or [])
+            provider_result = dict(
+                known_data.get("_recipe_import_verified_result") or {}
+            )
+            if not pending or not recipe_import_lookup_is_complete(
+                provider_result
+            ):
+                send_telegram_msg(
+                    "That verified result expired. Please restart Recipe "
+                    "Import. Nothing was saved.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered == "back":
+                updated = dict(known_data)
+                updated.pop("_recipe_import_verified_result", None)
+                updated.pop("_recipe_import_verified_lookup_name", None)
+                updated.pop("_recipe_import_verified_is_generic", None)
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_ingredient",
+                    known_data=updated,
+                    missing_fields=["recipe_ingredient"],
+                )
+                send_telegram_msg(
+                    format_recipe_import_missing(dict(pending[0])),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"use one verified serving", "one serving"}:
+                amount_description = "1 serving"
+            elif lowered.startswith("amount:"):
+                amount_description = text.split(":", 1)[1].strip()
+            else:
+                send_telegram_msg(
+                    "Reply Use one verified serving, or type Amount: "
+                    "followed by a compatible amount. Reply Back to choose "
+                    "another match.",
+                    chat_id=chat_id,
+                )
+                return
+            provider_food = dict(provider_result.get("food") or {})
+            try:
+                ingredient_serving_multiplier(
+                    amount_description=amount_description,
+                    serving_amount=float(provider_food["serving_amount"]),
+                    serving_unit=str(provider_food["serving_unit"]),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"{exc}\n\nReply Use one verified serving, or type "
+                    "Amount: followed by another compatible amount.",
+                    chat_id=chat_id,
+                )
+                return
+            current = dict(pending[0])
+            current["amount_description"] = amount_description
+            updated = dict(known_data)
+            updated["_recipe_import_pending"] = [current, *pending[1:]]
+            show_recipe_import_verified_confirmation(
+                chat_id=chat_id,
+                known_data=updated,
+                provider_result=provider_result,
+                lookup_name=str(
+                    known_data.get("_recipe_import_verified_lookup_name")
+                    or current.get("ingredient_name")
+                    or ""
+                ),
+                generic_match=bool(
+                    known_data.get("_recipe_import_verified_is_generic")
+                ),
             )
             return
 

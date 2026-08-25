@@ -6,6 +6,27 @@ from food import recipe_importer
 
 
 class RecipeImporterTests(unittest.TestCase):
+    def test_generic_suggestion_is_limited_and_never_changes_brands(self) -> None:
+        self.assertEqual(
+            recipe_importer.suggest_generic_ingredient_name("white onion"),
+            "onion",
+        )
+        self.assertEqual(
+            recipe_importer.suggest_generic_ingredient_name("red bell pepper"),
+            "bell pepper",
+        )
+        self.assertIsNone(
+            recipe_importer.suggest_generic_ingredient_name(
+                "red bell pepper",
+                brand="Example Brand",
+            )
+        )
+        self.assertIsNone(
+            recipe_importer.suggest_generic_ingredient_name(
+                "reduced fat mozzarella"
+            )
+        )
+
     def test_gemini_schema_has_no_unsupported_exclusive_minimum(self) -> None:
         schema = recipe_importer.ImportedRecipeDraft.model_json_schema()
 

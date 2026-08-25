@@ -416,6 +416,13 @@ Supported workflow:
 - Match imported ingredients to existing nutrition-ready Saved Foods before
   calculation. Stop on every unresolved major ingredient instead of omitting,
   estimating, or treating it as zero.
+- Offer tap-friendly verified-lookup choices for unresolved ingredients. When
+  an exact description has no compatible result, a conservative generic
+  produce suggestion or a user-entered simpler description may be searched,
+  but the resulting food and nutrition must be shown for confirmation before
+  saving or use. Generic matches are never substituted silently.
+- Preserve a complete verified result when only its serving unit needs user
+  clarification, rather than repeating the provider lookup.
 - Permit an explicitly optional ingredient, tiny spice, dried herb, or garnish
   to be excluded only after the user confirms that choice. Preserve the
   exclusion in the review and Saved Recipe estimate note.

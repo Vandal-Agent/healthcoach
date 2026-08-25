@@ -276,6 +276,197 @@ class SavedRecipeMenuTests(unittest.TestCase):
         self.assertIn(["Add new saved food"], keyboard["keyboard"])
         self.assertIn(["Cancel"], keyboard["keyboard"])
 
+    def test_failed_exact_lookup_offers_confirmed_generic_match(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_ingredient",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "white onion",
+                    "amount_description": "1 medium",
+                    "brand": None,
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "lookup_official_nutrition",
+                return_value={
+                    "found": False,
+                    "notes": ["No exact portion was available."],
+                },
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Try verified lookup",
+                }
+            })
+
+        pending = update.call_args.kwargs["known_data"][
+            "_recipe_import_pending"
+        ]
+        self.assertEqual(pending[0]["generic_lookup_name"], "onion")
+        self.assertIn("Try verified generic match: onion", send.call_args.args[0])
+        keyboard = app.menu_reply_markup(send.call_args.args[0])
+        self.assertIn(["Try verified generic match"], keyboard["keyboard"])
+        self.assertIn(["Enter simpler description"], keyboard["keyboard"])
+
+    def test_generic_lookup_still_requires_confirmation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_ingredient",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "white onion",
+                    "amount_description": "1 medium",
+                    "generic_lookup_name": "onion",
+                    "brand": None,
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        result = {
+            "found": True,
+            "food": {
+                "canonical_name": "Onions, raw",
+                "serving_description": "1 Medium Onion (110 g)",
+                "serving_amount": 1.0,
+                "serving_unit": "Medium Onion",
+                "brand": None,
+            },
+            "nutrition": {
+                "calories": 44.0,
+                "protein_g": 1.2,
+                "carbohydrates_g": 10.3,
+                "fat_g": 0.1,
+                "fiber_g": 1.9,
+                "sugar_g": 4.7,
+                "sodium_mg": 4.0,
+            },
+            "verification": {"source": "USDA FoodData Central"},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "lookup_official_nutrition",
+                return_value=result,
+            ) as lookup,
+            patch.object(
+                app,
+                "ingredient_serving_multiplier",
+                return_value=1.0,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Try verified generic match",
+                }
+            })
+
+        self.assertEqual(lookup.call_args.kwargs["food_name"], "onion")
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_import_verified_confirmation",
+        )
+        self.assertTrue(
+            update.call_args.kwargs["known_data"][
+                "_recipe_import_verified_is_generic"
+            ]
+        )
+        self.assertIn("Verified generic match", send.call_args.args[0])
+
+    def test_verified_result_is_preserved_when_amount_needs_help(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_ingredient",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "marinara",
+                    "amount_description": "1 cup",
+                    "brand": None,
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        result = {
+            "found": True,
+            "food": {
+                "canonical_name": "Marinara",
+                "serving_description": "125 g",
+                "serving_amount": 125.0,
+                "serving_unit": "g",
+            },
+            "nutrition": {
+                "calories": 80.0,
+                "protein_g": 2.0,
+                "carbohydrates_g": 12.0,
+                "fat_g": 2.0,
+                "fiber_g": 2.0,
+                "sugar_g": 7.0,
+                "sodium_mg": 400.0,
+            },
+            "verification": {"source": "verified source"},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "lookup_official_nutrition",
+                return_value=result,
+            ),
+            patch.object(
+                app,
+                "ingredient_serving_multiplier",
+                side_effect=ValueError("cannot be converted"),
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Try verified lookup",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_import_verified_amount",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "_recipe_import_verified_result"
+            ],
+            result,
+        )
+        self.assertIn("result has been preserved", send.call_args.args[0])
+
     def test_verified_import_lookup_requires_confirmation_before_save(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",

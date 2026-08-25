@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from google.genai import types
@@ -11,6 +12,48 @@ from food.nutrition_lookup import MODEL_NAME, get_client
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_RECIPE_TEXT_LENGTH = 20_000
+
+
+def suggest_generic_ingredient_name(
+    ingredient_name: str,
+    *,
+    brand: str | None = None,
+) -> str | None:
+    """Suggest a visibly less-specific produce name for user approval."""
+    if str(brand or "").strip():
+        return None
+
+    tokens = re.findall(r"[a-z0-9]+", str(ingredient_name or "").lower())
+    singular = {
+        "onions": "onion",
+        "peppers": "pepper",
+        "apples": "apple",
+        "grapes": "grape",
+        "potatoes": "potato",
+        "cabbages": "cabbage",
+    }
+    tokens = [singular.get(token, token) for token in tokens]
+    produce_nouns = {
+        "onion",
+        "pepper",
+        "apple",
+        "grape",
+        "potato",
+        "cabbage",
+    }
+    if not (set(tokens) & produce_nouns):
+        return None
+
+    simplified = [
+        token
+        for token in tokens
+        if token not in {"white", "yellow", "red", "green", "orange"}
+    ]
+    suggestion = " ".join(simplified).strip()
+    original = " ".join(tokens).strip()
+    if not suggestion or suggestion == original:
+        return None
+    return suggestion
 
 
 class ImportedRecipeIngredient(BaseModel):
