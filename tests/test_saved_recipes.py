@@ -524,6 +524,50 @@ class SavedRecipeTests(unittest.TestCase):
                 serving_unit="g",
             )
 
+    def test_recipe_amount_uses_exact_parenthetical_serving_weight(
+        self,
+    ) -> None:
+        rice = library.add_food_with_nutrition(
+            canonical_name="Parenthetical Weight Rice",
+            serving_description="1 package (240 g)",
+            serving_amount=1,
+            serving_unit="serving",
+            verification_status="verified",
+            verification_source="user_entered",
+            calories=360,
+            protein_g=7,
+            carbohydrates_g=72,
+            fat_g=5,
+            fiber_g=3,
+            sugar_g=2,
+            sodium_mg=475,
+        )
+
+        half_package = recipes.prepare_recipe_ingredient(
+            food_id=int(rice["food"]["food_id"]),
+            amount_description="120 grams",
+        )
+        result = recipes.create_saved_recipe_from_ingredients(
+            name="Half Package Rice Recipe",
+            meal_type="lunch",
+            yield_servings=1,
+            ingredients=[half_package],
+            preparation_steps=["Heat and serve."],
+        )
+
+        self.assertEqual(half_package["serving_multiplier"], 0.5)
+        self.assertEqual(half_package["nutrition"]["calories"], 180)
+        self.assertEqual(result["recipe"]["calories"], 180)
+
+    def test_recipe_amount_rejects_ambiguous_parenthetical_weight(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot be converted"):
+            recipes.ingredient_serving_multiplier(
+                amount_description="120 g",
+                serving_amount=1,
+                serving_unit="serving",
+                serving_description="1 package (2 x 120 g)",
+            )
+
     def test_recipe_food_match_accepts_tortilla_plural(self) -> None:
         saved = self.add_builder_food(
             name="Mission Flour Tortilla, Soft Taco",

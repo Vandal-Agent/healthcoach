@@ -467,6 +467,10 @@ Supported workflow:
 - Require an explicit ingredient amount such as `1 serving`, `40 g`, `3 oz`,
   or `2 slices`. Convert only compatible units; ask for a different amount
   instead of guessing conversions such as cups to grams.
+- Treat one exact parenthetical package weight in a Saved Food serving label,
+  such as `1 package (240 g)`, as verified conversion metadata. This permits a
+  recipe amount such as `120 g` to use half the saved serving while still
+  rejecting ambiguous or unstated volume-to-weight conversions.
 - Calculate the recipe's complete nutrition from the exact active Nutrition
   Version of every selected ingredient, then divide the total by the entered
   serving yield. Store the calculated per-serving nutrition as the recipe's

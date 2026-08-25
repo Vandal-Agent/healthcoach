@@ -4214,6 +4214,9 @@ def run_recipe_import_verified_lookup(
             amount_description=str(current.get("amount_description") or ""),
             serving_amount=float(provider_food["serving_amount"]),
             serving_unit=str(provider_food["serving_unit"]),
+            serving_description=str(
+                provider_food.get("serving_description") or ""
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         updated = dict(known_data)
@@ -11343,6 +11346,9 @@ def process_telegram_update(update):
                     amount_description=amount_description,
                     serving_amount=float(provider_food["serving_amount"]),
                     serving_unit=str(provider_food["serving_unit"]),
+                    serving_description=str(
+                        provider_food.get("serving_description") or ""
+                    ),
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 send_telegram_msg(

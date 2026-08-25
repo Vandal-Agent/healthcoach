@@ -439,11 +439,42 @@ def _whole_item_units_equivalent(
     return base_tokens.issubset(requested_tokens)
 
 
+def _serving_description_weight_grams(
+    serving_description: str | None,
+) -> float | None:
+    """Return one exact parenthetical serving weight, when safely stated."""
+    matches = []
+    for parenthetical in re.findall(
+        r"\(([^()]*)\)",
+        str(serving_description or ""),
+    ):
+        match = re.fullmatch(
+            r"\s*[~≈]?\s*(\d+(?:\.\d+)?)\s*"
+            r"(g|gram|grams|oz|ounce|ounces)\s*",
+            parenthetical,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            continue
+        amount = float(match.group(1))
+        if amount <= 0:
+            continue
+        unit = _normalize_amount_unit(match.group(2))
+        matches.append(
+            amount * 28.349523125 if unit == "ounce" else amount
+        )
+
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def ingredient_serving_multiplier(
     *,
     amount_description: str,
     serving_amount: float,
     serving_unit: str,
+    serving_description: str | None = None,
 ) -> float:
     """Convert an explicit ingredient amount into saved-food servings."""
     match = re.fullmatch(
@@ -480,6 +511,18 @@ def ingredient_serving_multiplier(
         return amount / base_amount
 
     weight_units = {"gram", "ounce"}
+    if requested_unit in weight_units and base_unit not in weight_units:
+        serving_weight_grams = _serving_description_weight_grams(
+            serving_description
+        )
+        if serving_weight_grams is not None:
+            amount_grams = (
+                amount * 28.349523125
+                if requested_unit == "ounce"
+                else amount
+            )
+            return amount_grams / serving_weight_grams
+
     if requested_unit in weight_units and base_unit in weight_units:
         amount_grams = (
             amount * 28.349523125
@@ -493,9 +536,14 @@ def ingredient_serving_multiplier(
         )
         return amount_grams / base_grams
 
+    display_serving = (
+        str(serving_description).strip()
+        if str(serving_description or "").strip()
+        else f"{serving_amount:g} {serving_unit}"
+    )
     raise ValueError(
         "That amount cannot be converted safely to this Saved Food's "
-        f"serving ({serving_amount:g} {serving_unit})."
+        f"serving ({display_serving})."
     )
 
 
@@ -642,6 +690,7 @@ def prepare_recipe_ingredient(
         amount_description=amount_description,
         serving_amount=float(food["serving_amount"]),
         serving_unit=str(food["serving_unit"]),
+        serving_description=str(food["serving_description"]),
     )
     contribution = {
         field: round(float(food[field]) * multiplier, 3)
@@ -706,6 +755,7 @@ def validate_linked_recipe_ingredients(
                 SELECT
                     foods.food_id,
                     foods.canonical_name,
+                    foods.serving_description,
                     foods.food_type,
                     foods.verification_status,
                     foods.verification_source,
@@ -761,6 +811,7 @@ def validate_linked_recipe_ingredients(
                 amount_description=amount_description,
                 serving_amount=float(food["serving_amount"]),
                 serving_unit=str(food["serving_unit"]),
+                serving_description=str(food["serving_description"]),
             )
             validated.append({
                 "food_id": int(food["food_id"]),
