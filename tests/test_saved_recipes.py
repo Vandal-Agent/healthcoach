@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from food import database, ledger, library, recipes
+from food import database, ledger, library, recipes, resolver
 
 
 RECIPE_IDEA = {
@@ -64,6 +64,7 @@ class SavedRecipeTests(unittest.TestCase):
             patch.object(library, "DATABASE_PATH", self.database_path),
             patch.object(ledger, "DATABASE_PATH", self.database_path),
             patch.object(recipes, "DATABASE_PATH", self.database_path),
+            patch.object(resolver, "DATABASE_PATH", self.database_path),
             patch.object(
                 database,
                 "initialize_database",
@@ -81,6 +82,11 @@ class SavedRecipeTests(unittest.TestCase):
             ),
             patch.object(
                 recipes,
+                "initialize_database",
+                initialize_test_database,
+            ),
+            patch.object(
+                resolver,
                 "initialize_database",
                 initialize_test_database,
             ),
@@ -476,6 +482,30 @@ class SavedRecipeTests(unittest.TestCase):
                 serving_amount=28,
                 serving_unit="g",
             )
+
+    def test_recipe_food_match_accepts_tortilla_plural(self) -> None:
+        saved = self.add_builder_food(
+            name="Mission Flour Tortilla, Soft Taco",
+            serving_amount=1,
+            serving_unit="tortilla",
+            calories=140,
+            protein_g=4,
+            carbohydrates_g=24,
+            fat_g=3,
+            fiber_g=1,
+            sugar_g=2,
+            sodium_mg=350,
+        )
+
+        matched = recipes.find_recipe_ingredient_food(
+            "Mission Flour Tortillas, Soft Taco"
+        )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(
+            matched["food_id"],
+            saved["food"]["food_id"],
+        )
 
     def test_recipe_amount_accepts_equivalent_whole_item_serving(self) -> None:
         self.assertEqual(

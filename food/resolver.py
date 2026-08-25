@@ -154,6 +154,7 @@ def normalized_food_tokens(value: str | None) -> set[str]:
         "burgers": "burger",
         "tacos": "taco",
         "burritos": "burrito",
+        "tortillas": "tortilla",
     }
 
     tokens = set()
