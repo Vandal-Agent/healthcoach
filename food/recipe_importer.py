@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from google.genai import types
@@ -59,18 +60,92 @@ Strict rules:
     explicit user confirmation. Never mark oils, sauces, cheese, meat,
     grains, produce, sweeteners, or other substantial foods as trace-only.
 11. Set readable=false when a reliable ingredient list cannot be extracted.
+12. Return this exact JSON shape and no nutrition fields:
+    {"readable": true, "recipe_name": null, "meal_type": null,
+    "yield_servings": null, "summary": "", "ingredients":
+    [{"ingredient_name": "", "amount_description": "", "brand": null,
+    "optional": false, "trace_only": false}],
+    "preparation_steps": [], "notes": []}
 """
+
+
+def _normalize_recipe_payload(value: Any) -> dict[str, Any]:
+    """Normalize harmless JSON key variants without inventing amounts."""
+    if isinstance(value, str):
+        payload = json.loads(value)
+    elif isinstance(value, dict):
+        payload = dict(value)
+    else:
+        raise ValueError("Gemini returned an invalid recipe object.")
+
+    normalized_ingredients = []
+    for raw_item in payload.get("ingredients") or []:
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        ingredient_name = str(
+            item.get("ingredient_name") or item.get("name") or ""
+        ).strip()
+        if not ingredient_name:
+            continue
+
+        amount_description = str(
+            item.get("amount_description") or ""
+        ).strip()
+        if not amount_description:
+            amount = item.get("amount")
+            unit = str(item.get("unit") or "").strip()
+            amount_text = (
+                str(amount).strip()
+                if amount is not None and str(amount).strip()
+                else ""
+            )
+            amount_description = " ".join(
+                part for part in (amount_text, unit) if part
+            )
+        if not amount_description:
+            amount_description = "amount not specified"
+
+        normalized_ingredients.append({
+            "ingredient_name": ingredient_name,
+            "amount_description": amount_description,
+            "brand": item.get("brand"),
+            "optional": bool(item.get("optional", False)),
+            "trace_only": bool(item.get("trace_only", False)),
+        })
+
+    return {
+        "readable": bool(payload.get("readable", normalized_ingredients)),
+        "recipe_name": payload.get("recipe_name") or payload.get("name"),
+        "meal_type": payload.get("meal_type"),
+        "yield_servings": (
+            payload.get("yield_servings")
+            if payload.get("yield_servings") is not None
+            else payload.get("servings")
+        ),
+        "summary": str(payload.get("summary") or ""),
+        "ingredients": normalized_ingredients,
+        "preparation_steps": list(
+            payload.get("preparation_steps")
+            or payload.get("steps")
+            or []
+        ),
+        "notes": list(payload.get("notes") or []),
+    }
 
 
 def _decode_recipe_response(response: Any) -> dict[str, Any]:
     if response.parsed is not None:
-        draft = (
-            response.parsed
-            if isinstance(response.parsed, ImportedRecipeDraft)
-            else ImportedRecipeDraft.model_validate(response.parsed)
-        )
+        if isinstance(response.parsed, ImportedRecipeDraft):
+            draft = response.parsed
+        else:
+            draft = ImportedRecipeDraft.model_validate(
+                _normalize_recipe_payload(response.parsed)
+            )
     elif response.text:
-        draft = ImportedRecipeDraft.model_validate_json(response.text)
+        draft = ImportedRecipeDraft.model_validate(
+            _normalize_recipe_payload(response.text)
+        )
     else:
         raise RuntimeError("Gemini returned no recipe draft.")
 

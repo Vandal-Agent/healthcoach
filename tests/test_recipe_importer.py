@@ -124,6 +124,53 @@ class RecipeImporterTests(unittest.TestCase):
         self.assertIsNone(result["yield_servings"])
         self.assertIn("outside the supported range", result["notes"][0])
 
+    def test_json_amount_and_unit_are_combined_without_guessing(self) -> None:
+        response = SimpleNamespace(
+            parsed=None,
+            text='''{
+                "readable": true,
+                "recipe_name": "Pizza Pockets",
+                "meal_type": "dinner",
+                "yield_servings": 8,
+                "summary": "",
+                "ingredients": [
+                    {
+                        "ingredient_name": "ground beef",
+                        "amount": "1",
+                        "unit": "lb",
+                        "brand": null,
+                        "optional": false,
+                        "trace_only": false
+                    },
+                    {
+                        "ingredient_name": "garlic powder",
+                        "amount": null,
+                        "unit": null,
+                        "brand": null,
+                        "optional": false,
+                        "trace_only": true
+                    }
+                ],
+                "preparation_steps": ["Cook."],
+                "notes": []
+            }''',
+        )
+        client = Mock()
+        client.models.generate_content.return_value = response
+
+        with patch.object(recipe_importer, "get_client", return_value=client):
+            result = recipe_importer.parse_recipe_text("Pizza pockets")
+
+        self.assertEqual(
+            result["ingredients"][0]["amount_description"],
+            "1 lb",
+        )
+        self.assertEqual(
+            result["ingredients"][1]["amount_description"],
+            "amount not specified",
+        )
+        self.assertTrue(result["ingredients"][1]["trace_only"])
+
 
 if __name__ == "__main__":
     unittest.main()
