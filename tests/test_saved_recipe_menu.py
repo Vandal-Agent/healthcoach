@@ -276,6 +276,202 @@ class SavedRecipeMenuTests(unittest.TestCase):
         self.assertIn(["Add new saved food"], keyboard["keyboard"])
         self.assertIn(["Cancel"], keyboard["keyboard"])
 
+    def test_typed_saved_food_requires_substitution_confirmation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_ingredient",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "turkey pepperoni",
+                    "amount_description": "9 slices",
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        selected = {
+            "food_id": 17,
+            "canonical_name": "Mission Flour Tortilla, Soft Taco",
+            "serving_description": "1 tortilla",
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "find_recipe_ingredient_food",
+                return_value=selected,
+            ),
+            patch.object(app, "prepare_recipe_ingredient") as prepare,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Mission Flour Tortilla, Soft Taco",
+                }
+            })
+
+        prepare.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_import_saved_food_confirmation",
+        )
+        self.assertIn("9 slices turkey pepperoni", send.call_args.args[0])
+        self.assertIn("Mission Flour Tortilla", send.call_args.args[0])
+        self.assertIn(
+            ["Yes", "No"],
+            app.menu_reply_markup(send.call_args.args[0])["keyboard"],
+        )
+
+    def test_saved_food_substitution_can_be_rejected(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_saved_food_confirmation",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "turkey pepperoni",
+                    "amount_description": "9 slices",
+                    "optional": False,
+                    "trace_only": False,
+                }],
+                "_recipe_import_selected_food": {
+                    "food_id": 17,
+                    "canonical_name": "Mission Flour Tortilla, Soft Taco",
+                    "serving_description": "1 tortilla",
+                },
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "prepare_recipe_ingredient") as prepare,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "No"}
+            })
+
+        prepare.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_import_ingredient",
+        )
+        self.assertNotIn(
+            "_recipe_import_selected_food",
+            update.call_args.kwargs["known_data"],
+        )
+        self.assertIn("9 slices turkey pepperoni", send.call_args.args[0])
+
+    def test_confirmed_saved_food_preserves_conversion_help(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_saved_food_confirmation",
+            "known_data": {
+                "_recipe_import_pending": [{
+                    "ingredient_name": "turkey pepperoni",
+                    "amount_description": "9 slices",
+                    "optional": False,
+                    "trace_only": False,
+                }],
+                "_recipe_import_selected_food": {
+                    "food_id": 18,
+                    "canonical_name": "Hormel Original Pepperoni",
+                    "serving_description": "30 g",
+                },
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "prepare_recipe_ingredient",
+                side_effect=ValueError("That amount cannot be converted"),
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_import_ingredient",
+        )
+        current = update.call_args.kwargs["known_data"][
+            "_recipe_import_pending"
+        ][0]
+        self.assertEqual(current["candidate_food_id"], 18)
+        self.assertEqual(current["candidate_serving_description"], "30 g")
+        self.assertIn("Hormel Original Pepperoni", send.call_args.args[0])
+        self.assertIn("Saved Food serving: 30 g", send.call_args.args[0])
+        self.assertIn(
+            ["Use one Saved Food serving"],
+            app.menu_reply_markup(send.call_args.args[0])["keyboard"],
+        )
+
+    def test_one_saved_food_serving_is_an_explicit_amount_choice(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "recipe_import_ingredient",
+            "known_data": {
+                "_recipe_builder_ingredients": [],
+                "_recipe_import_pending": [{
+                    "ingredient_name": "turkey pepperoni",
+                    "amount_description": "9 slices",
+                    "candidate_food_id": 18,
+                    "candidate_food_name": "Hormel Original Pepperoni",
+                    "candidate_serving_description": "30 g",
+                    "conversion_error": "That amount cannot be converted",
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "prepare_recipe_ingredient",
+                return_value=BUILDER_INGREDIENT,
+            ) as prepare,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Use one Saved Food serving",
+                }
+            })
+
+        self.assertEqual(
+            prepare.call_args.kwargs["amount_description"],
+            "1 serving",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "recipe_builder_confirmation",
+        )
+        self.assertIn("Recipe Builder Review", send.call_args.args[0])
+
     def test_failed_exact_lookup_offers_confirmed_generic_match(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",

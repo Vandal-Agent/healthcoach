@@ -423,6 +423,14 @@ Supported workflow:
   saving or use. Generic matches are never substituted silently.
 - Preserve a complete verified result when only its serving unit needs user
   clarification, rather than repeating the provider lookup.
+- Confirm every manually selected Saved Food against the currently unresolved
+  imported ingredient before using it. This prevents a delayed Telegram reply
+  from being assigned to the next ingredient and makes brand or product
+  substitutions explicit.
+- When an imported amount cannot be converted to a Saved Food serving, preserve
+  the selected food and let the user deliberately use one listed Saved Food
+  serving or enter a compatible weight or serving amount. Never infer a
+  slice-to-weight conversion that is not present in verified data.
 - Permit an explicitly optional ingredient, tiny spice, dried herb, or garnish
   to be excluded only after the user confirms that choice. Preserve the
   exclusion in the review and Saved Recipe estimate note.

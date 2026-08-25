@@ -423,6 +423,7 @@ def menu_reply_markup(message):
             "Copy this meal from yesterday?",
             "Add the new Saved Food ingredients created during this "
             "import to My Pantry?",
+            "Use this Saved Food for this imported ingredient?",
         )
     ):
         rows = [["Yes", "No"]]
@@ -485,7 +486,7 @@ def menu_reply_markup(message):
             ],
             ["Change ingredients", "Cancel"],
         ]
-    elif message.startswith("Recipe Import — Ingredient Needed"):
+    elif "Recipe Import — Ingredient Needed" in message:
         if "Matched Saved Food:" in message:
             rows = [["Include ingredient", "Exclude ingredient"]]
         elif "I could not match this" in message:
@@ -496,7 +497,10 @@ def menu_reply_markup(message):
             if "You may also reply Exclude ingredient" in message:
                 rows.append(["Exclude ingredient"])
         else:
-            rows = [["Add new saved food"]]
+            rows = [
+                ["Use one Saved Food serving"],
+                ["Add new saved food"],
+            ]
             if "You may also reply Exclude ingredient" in message:
                 rows.append(["Exclude ingredient"])
         rows.append(["Cancel"])
@@ -3865,8 +3869,17 @@ def format_recipe_import_missing(ingredient: dict) -> str:
             "",
             "I found a Saved Food, but its serving could not be safely "
             "matched to this recipe amount.",
-            "Reply Amount: followed by an equivalent amount that works "
-            "with the Saved Food (for example, Amount: 2 servings).",
+            "Saved Food: "
+            + str(ingredient.get("candidate_food_name") or "Saved Food"),
+            "Saved Food serving: "
+            + str(
+                ingredient.get("candidate_serving_description")
+                or "not listed"
+            ),
+            "Reply Use one Saved Food serving to deliberately use exactly "
+            "one listed serving, or reply Amount: followed by an "
+            "equivalent amount.",
+            "Example: Amount: 2 servings.",
         ])
     else:
         lines.extend([
@@ -3886,6 +3899,31 @@ def format_recipe_import_missing(ingredient: dict) -> str:
         "Reply Cancel to stop without saving.",
     ])
     return "\n".join(lines)
+
+
+def format_recipe_import_saved_food_confirmation(
+    *,
+    ingredient: dict,
+    food: dict,
+) -> str:
+    amount = str(ingredient.get("amount_description") or "").strip()
+    brand = str(ingredient.get("brand") or "").strip()
+    name = str(ingredient.get("ingredient_name") or "ingredient").strip()
+    source_label = " ".join(
+        part for part in (amount, brand, name) if part
+    )
+    serving = str(food.get("serving_description") or "not listed")
+    return (
+        "Recipe Import — Confirm Saved Food\n\n"
+        f"Imported ingredient: {source_label}\n"
+        f"Selected Saved Food: {food.get('canonical_name')}\n"
+        f"Saved Food serving: {serving}\n\n"
+        "Use this Saved Food for this imported ingredient?\n\n"
+        "This confirmation also protects against a reply arriving after "
+        "Recipe Import has moved to the next ingredient.\n\n"
+        "1. Yes\n"
+        "2. No"
+    )
 
 
 RECIPE_IMPORT_REQUIRED_NUTRIENTS = (
@@ -10881,6 +10919,21 @@ def process_telegram_update(update):
                     return
                 amount_description = text.split(":", 1)[1].strip()
                 food = None
+            elif lowered in {
+                "use one saved food serving",
+                "use one serving",
+                "one serving",
+            }:
+                selected_food_id = current.get("candidate_food_id")
+                if not selected_food_id:
+                    send_telegram_msg(
+                        "Choose an existing Saved Food first by typing its "
+                        "exact name.",
+                        chat_id=chat_id,
+                    )
+                    return
+                amount_description = "1 serving"
+                food = None
             else:
                 food = find_recipe_ingredient_food(text)
                 if food is None:
@@ -10889,10 +10942,30 @@ def process_telegram_update(update):
                         chat_id=chat_id,
                     )
                     return
-                selected_food_id = int(food["food_id"])
-                amount_description = str(
-                    current.get("amount_description") or ""
+                updated = dict(known_data)
+                updated["_recipe_import_selected_food"] = {
+                    "food_id": int(food["food_id"]),
+                    "canonical_name": str(
+                        food.get("canonical_name") or "Saved Food"
+                    ),
+                    "serving_description": str(
+                        food.get("serving_description") or "not listed"
+                    ),
+                }
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_saved_food_confirmation",
+                    known_data=updated,
+                    missing_fields=[],
                 )
+                send_telegram_msg(
+                    format_recipe_import_saved_food_confirmation(
+                        ingredient=current,
+                        food=food,
+                    ),
+                    chat_id=chat_id,
+                )
+                return
 
             try:
                 ingredient = prepare_recipe_ingredient(
@@ -10904,6 +10977,9 @@ def process_telegram_update(update):
                 if food is not None:
                     current["candidate_food_name"] = str(
                         food.get("canonical_name") or ""
+                    )
+                    current["candidate_serving_description"] = str(
+                        food.get("serving_description") or ""
                     )
                 current["conversion_error"] = str(exc)
                 updated = dict(known_data)
@@ -10925,6 +11001,85 @@ def process_telegram_update(update):
             )
             ingredients.append(ingredient)
             updated = dict(known_data)
+            updated["_recipe_builder_ingredients"] = ingredients
+            updated["_recipe_import_pending"] = pending[1:]
+            continue_recipe_import_resolution(
+                chat_id=chat_id,
+                known_data=updated,
+            )
+            return
+
+        if current_step == "recipe_import_saved_food_confirmation":
+            pending = list(known_data.get("_recipe_import_pending") or [])
+            selected = dict(
+                known_data.get("_recipe_import_selected_food") or {}
+            )
+            if not pending or not selected.get("food_id"):
+                send_telegram_msg(
+                    "That Saved Food selection expired. Please restart "
+                    "Recipe Import. Nothing was saved.",
+                    chat_id=chat_id,
+                )
+                return
+            updated = dict(known_data)
+            updated.pop("_recipe_import_selected_food", None)
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_ingredient",
+                    known_data=updated,
+                    missing_fields=["recipe_ingredient"],
+                )
+                send_telegram_msg(
+                    format_recipe_import_missing(dict(pending[0])),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes"}:
+                send_telegram_msg(
+                    "Use this Saved Food for this imported ingredient?\n\n"
+                    "1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+
+            current = dict(pending[0])
+            try:
+                ingredient = prepare_recipe_ingredient(
+                    food_id=int(selected["food_id"]),
+                    amount_description=str(
+                        current.get("amount_description") or ""
+                    ),
+                )
+            except (TypeError, ValueError) as exc:
+                current["candidate_food_id"] = int(selected["food_id"])
+                current["candidate_food_name"] = str(
+                    selected.get("canonical_name") or "Saved Food"
+                )
+                current["candidate_serving_description"] = str(
+                    selected.get("serving_description") or "not listed"
+                )
+                current["conversion_error"] = str(exc)
+                updated["_recipe_import_pending"] = [
+                    current,
+                    *pending[1:],
+                ]
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="recipe_import_ingredient",
+                    known_data=updated,
+                    missing_fields=["recipe_ingredient_amount"],
+                )
+                send_telegram_msg(
+                    f"{exc}\n\n" + format_recipe_import_missing(current),
+                    chat_id=chat_id,
+                )
+                return
+
+            ingredients = list(
+                known_data.get("_recipe_builder_ingredients") or []
+            )
+            ingredients.append(ingredient)
             updated["_recipe_builder_ingredients"] = ingredients
             updated["_recipe_import_pending"] = pending[1:]
             continue_recipe_import_resolution(
