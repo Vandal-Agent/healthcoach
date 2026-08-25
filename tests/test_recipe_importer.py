@@ -6,6 +6,14 @@ from food import recipe_importer
 
 
 class RecipeImporterTests(unittest.TestCase):
+    def test_gemini_schema_has_no_unsupported_exclusive_minimum(self) -> None:
+        schema = recipe_importer.ImportedRecipeDraft.model_json_schema()
+
+        self.assertNotIn(
+            "exclusiveMinimum",
+            schema["properties"]["yield_servings"],
+        )
+
     def test_text_import_extracts_structure_without_nutrition(self) -> None:
         response = SimpleNamespace(
             parsed={
@@ -70,6 +78,35 @@ class RecipeImporterTests(unittest.TestCase):
 
         self.assertFalse(result["readable"])
         self.assertIn("No recipe ingredients", result["notes"][0])
+
+    def test_unsupported_yield_is_cleared_after_parsing(self) -> None:
+        response = SimpleNamespace(
+            parsed={
+                "readable": True,
+                "recipe_name": "Large Batch",
+                "meal_type": "dinner",
+                "yield_servings": 101,
+                "summary": "",
+                "ingredients": [{
+                    "ingredient_name": "chicken",
+                    "amount_description": "1 lb",
+                    "brand": None,
+                    "optional": False,
+                    "trace_only": False,
+                }],
+                "preparation_steps": ["Cook."],
+                "notes": [],
+            },
+            text=None,
+        )
+        client = Mock()
+        client.models.generate_content.return_value = response
+
+        with patch.object(recipe_importer, "get_client", return_value=client):
+            result = recipe_importer.parse_recipe_text("Large recipe")
+
+        self.assertIsNone(result["yield_servings"])
+        self.assertIn("outside the supported range", result["notes"][0])
 
 
 if __name__ == "__main__":

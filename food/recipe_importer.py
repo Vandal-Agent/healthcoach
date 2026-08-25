@@ -24,11 +24,9 @@ class ImportedRecipeDraft(BaseModel):
     readable: bool
     recipe_name: str | None = None
     meal_type: str | None = None
-    yield_servings: float | None = Field(
-        default=None,
-        gt=0,
-        le=100,
-    )
+    # Gemini's response-schema adapter rejects Pydantic's
+    # exclusiveMinimum keyword, so validate this range after parsing.
+    yield_servings: float | None = None
     summary: str = ""
     ingredients: list[ImportedRecipeIngredient] = Field(
         default_factory=list,
@@ -77,6 +75,14 @@ def _decode_recipe_response(response: Any) -> dict[str, Any]:
         raise RuntimeError("Gemini returned no recipe draft.")
 
     result = draft.model_dump()
+    yield_servings = result.get("yield_servings")
+    if yield_servings is not None and not (
+        0 < float(yield_servings) <= 100
+    ):
+        result["yield_servings"] = None
+        result.setdefault("notes", []).append(
+            "The supplied recipe yield was outside the supported range."
+        )
     if result.get("readable") and not result.get("ingredients"):
         result["readable"] = False
         result.setdefault("notes", []).append(
