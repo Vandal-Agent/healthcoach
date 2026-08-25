@@ -99,28 +99,32 @@ def parse_recipe_text(recipe_text: str) -> dict[str, Any]:
     if len(cleaned) > MAX_RECIPE_TEXT_LENGTH:
         raise ValueError("That recipe is too long to import safely.")
 
-    response = get_client().models.generate_content(
-        model=MODEL_NAME,
-        contents=[
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_text(
-                        text=(
-                            RECIPE_EXTRACTION_RULES
-                            + "\n\nRecipe text:\n"
-                            + cleaned
+    client = get_client()
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(
+                            text=(
+                                RECIPE_EXTRACTION_RULES
+                                + "\n\nRecipe text:\n"
+                                + cleaned
+                            )
                         )
-                    )
-                ],
-            )
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0,
-            response_mime_type="application/json",
-            response_schema=ImportedRecipeDraft,
-        ),
-    )
+                    ],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=ImportedRecipeDraft,
+            ),
+        )
+    finally:
+        client.close()
     return _decode_recipe_response(response)
 
 
@@ -137,30 +141,34 @@ def parse_recipe_photo(
         raise ValueError("Unsupported recipe photo type.")
 
     context = str(user_context or "").strip()
-    response = get_client().models.generate_content(
-        model=MODEL_NAME,
-        contents=[
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_text(
-                        text=(
-                            RECIPE_EXTRACTION_RULES
-                            + "\n\nUser context:\n"
-                            + (context or "None")
-                        )
-                    ),
-                    types.Part.from_bytes(
-                        data=image_bytes,
-                        mime_type=mime_type,
-                    ),
-                ],
-            )
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0,
-            response_mime_type="application/json",
-            response_schema=ImportedRecipeDraft,
-        ),
-    )
+    client = get_client()
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(
+                            text=(
+                                RECIPE_EXTRACTION_RULES
+                                + "\n\nUser context:\n"
+                                + (context or "None")
+                            )
+                        ),
+                        types.Part.from_bytes(
+                            data=image_bytes,
+                            mime_type=mime_type,
+                        ),
+                    ],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=ImportedRecipeDraft,
+            ),
+        )
+    finally:
+        client.close()
     return _decode_recipe_response(response)

@@ -48,6 +48,19 @@ class RecipeImporterTests(unittest.TestCase):
         self.assertEqual(result["recipe_name"], "Chicken Bowl")
         self.assertEqual(result["yield_servings"], 4)
         self.assertNotIn("calories", result)
+        client.close.assert_called_once()
+
+    def test_client_closes_when_text_request_fails(self) -> None:
+        client = Mock()
+        client.models.generate_content.side_effect = RuntimeError("failed")
+
+        with (
+            patch.object(recipe_importer, "get_client", return_value=client),
+            self.assertRaises(RuntimeError),
+        ):
+            recipe_importer.parse_recipe_text("Recipe text")
+
+        client.close.assert_called_once()
 
     def test_photo_import_rejects_unsupported_type(self) -> None:
         with self.assertRaises(ValueError):
