@@ -11,6 +11,91 @@ app.CHAT_ID = None
 
 
 class FoodLoggingFailureTests(unittest.TestCase):
+    def test_food_clarification_cancel_words_always_close_entry(self) -> None:
+        conversation = {
+            "conversation_type": "food_interpretation",
+            "current_step": "clarification",
+            "original_message": "home salad",
+            "known_data": {
+                "food_name": "salad",
+                "quantity": 1.0,
+                "meal_category": "lunch",
+                "missing_fields": ["quantity_description"],
+            },
+            "missing_fields": ["quantity_description"],
+        }
+
+        for cancel_word in ("cancel", "exit", "quit", "close"):
+            with self.subTest(cancel_word=cancel_word):
+                with (
+                    patch.object(
+                        app,
+                        "get_active_conversation",
+                        return_value=conversation,
+                    ),
+                    patch.object(
+                        app,
+                        "cancel_conversation",
+                    ) as cancel,
+                    patch.object(
+                        app,
+                        "interpret_food_message",
+                    ) as interpret,
+                    patch.object(app, "send_telegram_msg") as send,
+                ):
+                    app.process_telegram_update({
+                        "message": {
+                            "chat": {"id": 123},
+                            "message_id": 52,
+                            "text": cancel_word,
+                        }
+                    })
+
+                cancel.assert_called_once_with(123)
+                interpret.assert_not_called()
+                self.assertIn(
+                    "Food entry cancelled",
+                    send.call_args.args[0],
+                )
+                self.assertTrue(send.call_args.kwargs["remove_keyboard"])
+
+    def test_bare_quantity_count_gets_clear_unit_prompt(self) -> None:
+        conversation = {
+            "conversation_type": "food_interpretation",
+            "current_step": "clarification",
+            "original_message": "home salad",
+            "known_data": {
+                "food_name": "salad",
+                "quantity": 1.0,
+                "meal_category": "lunch",
+                "missing_fields": ["quantity_description"],
+            },
+            "missing_fields": ["quantity_description"],
+        }
+
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "interpret_food_message") as interpret,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "message_id": 53,
+                    "text": "1",
+                }
+            })
+
+        interpret.assert_not_called()
+        response = send.call_args.args[0]
+        self.assertIn("1 serving", response)
+        self.assertIn("4 oz", response)
+        self.assertIn("Reply Cancel", response)
+
     def test_saved_unbranded_food_converts_ounces_to_one_serving(self) -> None:
         interpretation = FoodInterpretation(
             is_food_logging_request=True,
