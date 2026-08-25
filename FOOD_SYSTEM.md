@@ -429,8 +429,12 @@ Supported workflow:
   substitutions explicit.
 - When an imported amount cannot be converted to a Saved Food serving, preserve
   the selected food and let the user deliberately use one listed Saved Food
-  serving or enter a compatible weight or serving amount. Never infer a
-  slice-to-weight conversion that is not present in verified data.
+  serving for the entire recipe or enter a compatible weight or serving
+  amount. Never infer a slice-to-weight conversion that is not present in
+  verified data.
+- The final review states that every ingredient amount is the total for the
+  entire recipe, not the amount in each finished serving, and directs the user
+  to change any placeholder or incorrect amount before saving.
 - Permit an explicitly optional ingredient, tiny spice, dried herb, or garnish
   to be excluded only after the user confirms that choice. Preserve the
   exclusion in the review and Saved Recipe estimate note.

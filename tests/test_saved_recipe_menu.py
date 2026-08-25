@@ -231,7 +231,84 @@ class SavedRecipeMenuTests(unittest.TestCase):
             "recipe_builder_confirmation",
         )
         self.assertIn("Recipe Builder Review", send.call_args.args[0])
+        self.assertIn(
+            "total used in the entire recipe",
+            send.call_args.args[0],
+        )
         self.assertIn("Nothing has been saved", send.call_args.args[0])
+
+    def test_new_saved_food_preserves_serving_description_for_amount_help(
+        self,
+    ) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "saved_food_add_confirmation",
+            "known_data": {
+                "_saved_food_name": "Paprika",
+                "_saved_food_serving": "1 teaspoon",
+                "_saved_food_calories": 7,
+                "_saved_food_protein_g": 0.3,
+                "_saved_food_carbohydrates_g": 1.3,
+                "_saved_food_fat_g": 0.3,
+                "_saved_food_fiber_g": 0.8,
+                "_saved_food_sugar_g": 0.2,
+                "_saved_food_sodium_mg": 2,
+                "_recipe_import_return": True,
+                "_recipe_builder_return": True,
+                "_recipe_import_pending": [{
+                    "ingredient_name": "paprika",
+                    "amount_description": "amount not specified",
+                    "optional": False,
+                    "trace_only": False,
+                }],
+            },
+        }
+        saved = {
+            "created": True,
+            "food": {
+                "food_id": 91,
+                "canonical_name": "Paprika",
+                "serving_description": "1 teaspoon",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "add_food_with_nutrition",
+                return_value=saved,
+            ),
+            patch.object(
+                app,
+                "prepare_recipe_ingredient",
+                side_effect=ValueError("Use a compatible amount."),
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        current = update.call_args.kwargs["known_data"][
+            "_recipe_import_pending"
+        ][0]
+        self.assertEqual(
+            current["candidate_serving_description"],
+            "1 teaspoon",
+        )
+        self.assertIn(
+            "Saved Food serving: 1 teaspoon",
+            send.call_args.args[0],
+        )
+        self.assertIn(
+            "entire recipe uses exactly one listed serving",
+            send.call_args.args[0],
+        )
 
     def test_major_imported_ingredient_cannot_be_excluded(self) -> None:
         conversation = {

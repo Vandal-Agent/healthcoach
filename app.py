@@ -3889,9 +3889,9 @@ def format_recipe_import_missing(ingredient: dict) -> str:
                 ingredient.get("candidate_serving_description")
                 or "not listed"
             ),
-            "Reply Use one Saved Food serving to deliberately use exactly "
-            "one listed serving, or reply Amount: followed by an "
-            "equivalent amount.",
+            "Reply Use one Saved Food serving only when the entire recipe "
+            "uses exactly one listed serving. Otherwise, reply Amount: "
+            "followed by an equivalent amount.",
             "Example: Amount: 2 servings.",
         ])
     else:
@@ -4335,6 +4335,11 @@ def format_recipe_builder_review(known_data: dict) -> str:
         lines.extend(["", "Excluded from nutrition with your approval:"])
         lines.extend(f"- {item}" for item in excluded)
     lines.extend([
+        "",
+        "Important: every ingredient amount above is the total used in the "
+        "entire recipe, not the amount in each finished serving.",
+        "Choose Change ingredients if any amount is a placeholder or does "
+        "not match the full recipe.",
         "",
         "Entire recipe:",
         f"Calories: {format_display_number(total['calories'], decimals=0)}",
@@ -13810,6 +13815,9 @@ def process_telegram_update(update):
                     current["candidate_food_id"] = int(food["food_id"])
                     current["candidate_food_name"] = str(
                         food.get("canonical_name") or ""
+                    )
+                    current["candidate_serving_description"] = str(
+                        food.get("serving_description") or "not listed"
                     )
                     current["conversion_error"] = str(exc)
                     updated = dict(known_data)
