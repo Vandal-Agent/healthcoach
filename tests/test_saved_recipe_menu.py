@@ -262,6 +262,20 @@ class SavedRecipeMenuTests(unittest.TestCase):
         update.assert_not_called()
         self.assertIn("major ingredient", send.call_args.args[0])
 
+    def test_missing_imported_ingredient_has_tappable_choices(self) -> None:
+        message = app.format_recipe_import_missing({
+            "ingredient_name": "white onion",
+            "amount_description": "1 medium",
+            "optional": False,
+            "trace_only": False,
+        })
+
+        keyboard = app.menu_reply_markup(message)
+
+        self.assertIn(["Try verified lookup"], keyboard["keyboard"])
+        self.assertIn(["Add new saved food"], keyboard["keyboard"])
+        self.assertIn(["Cancel"], keyboard["keyboard"])
+
     def test_verified_import_lookup_requires_confirmation_before_save(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",

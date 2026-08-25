@@ -378,6 +378,67 @@ def _normalize_amount_unit(value: str) -> str:
     return unit
 
 
+def _whole_item_unit_tokens(value: str) -> set[str]:
+    """Return meaningful tokens from a whole-item serving description."""
+    cleaned = re.sub(r"\([^)]*\)", " ", str(value or "").lower())
+    cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned).strip()
+    tokens = {
+        token[:-1] if token.endswith("s") and len(token) > 1 else token
+        for token in cleaned.split()
+    }
+    return tokens - {
+        "white",
+        "yellow",
+        "red",
+        "green",
+        "fresh",
+        "raw",
+        "whole",
+    }
+
+
+def _whole_item_units_equivalent(
+    *,
+    requested_unit: str,
+    base_unit: str,
+) -> bool:
+    """Recognize a requested whole item contained in a verified serving label."""
+    requested_tokens = _whole_item_unit_tokens(requested_unit)
+    base_tokens = _whole_item_unit_tokens(base_unit)
+    if not requested_tokens or not base_tokens:
+        return False
+
+    measurement_tokens = {
+        "serving",
+        "gram",
+        "ounce",
+        "fluid",
+        "cup",
+        "teaspoon",
+        "tablespoon",
+        "tsp",
+        "tbsp",
+        "milliliter",
+        "liter",
+        "pound",
+        "lb",
+        "kg",
+        "ml",
+    }
+    if (requested_tokens | base_tokens) & measurement_tokens:
+        return False
+
+    size_tokens = {"small", "medium", "large", "extra", "jumbo"}
+    requested_sizes = requested_tokens & size_tokens
+    base_sizes = base_tokens & size_tokens
+    if requested_sizes != base_sizes:
+        return False
+    if not (base_tokens - size_tokens):
+        return False
+
+    return base_tokens.issubset(requested_tokens)
+
+
 def ingredient_serving_multiplier(
     *,
     amount_description: str,
@@ -410,6 +471,12 @@ def ingredient_serving_multiplier(
         return amount
 
     if requested_unit == base_unit:
+        return amount / base_amount
+
+    if _whole_item_units_equivalent(
+        requested_unit=requested_unit,
+        base_unit=base_unit,
+    ):
         return amount / base_amount
 
     weight_units = {"gram", "ounce"}

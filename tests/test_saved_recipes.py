@@ -477,6 +477,29 @@ class SavedRecipeTests(unittest.TestCase):
                 serving_unit="g",
             )
 
+    def test_recipe_amount_accepts_equivalent_whole_item_serving(self) -> None:
+        self.assertEqual(
+            recipes.ingredient_serving_multiplier(
+                amount_description="1 medium white onion",
+                serving_amount=1,
+                serving_unit="Medium Onion (~110 g)",
+            ),
+            1.0,
+        )
+
+        with self.assertRaisesRegex(ValueError, "cannot be converted"):
+            recipes.ingredient_serving_multiplier(
+                amount_description="1 large white onion",
+                serving_amount=1,
+                serving_unit="Medium Onion (~110 g)",
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be converted"):
+            recipes.ingredient_serving_multiplier(
+                amount_description="1 fluid ounce",
+                serving_amount=1,
+                serving_unit="ounce",
+            )
+
     def test_version_six_database_migrates_to_saved_recipes(self) -> None:
         with database.get_connection(self.database_path) as connection:
             connection.execute("DROP TABLE saved_recipes")

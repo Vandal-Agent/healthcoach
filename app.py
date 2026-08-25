@@ -484,6 +484,22 @@ def menu_reply_markup(message):
             ],
             ["Change ingredients", "Cancel"],
         ]
+    elif message.startswith("Recipe Import — Ingredient Needed"):
+        if "Matched Saved Food:" in message:
+            rows = [["Include ingredient", "Exclude ingredient"]]
+        elif "I could not match this" in message:
+            rows = [
+                ["Try verified lookup"],
+                ["Add new saved food"],
+            ]
+            if "You may also reply Exclude ingredient" in message:
+                rows.append(["Exclude ingredient"])
+        else:
+            rows = [["Add new saved food"]]
+            if "You may also reply Exclude ingredient" in message:
+                rows.append(["Exclude ingredient"])
+        rows.append(["Cancel"])
+        one_time = True
     elif "Saved Recipe Details\n\n" in message:
         rows = [
             ["Log Recipe", "Edit Recipe"],
