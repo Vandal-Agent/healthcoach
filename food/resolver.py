@@ -133,6 +133,7 @@ def normalized_food_tokens(value: str | None) -> set[str]:
 
     cleaned = value.lower()
     cleaned = cleaned.replace("’", "'")
+    cleaned = re.sub(r"\b([a-z0-9]+)'s\b", r"\1", cleaned)
     cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned)
 
     ignored = {
@@ -161,6 +162,14 @@ def normalized_food_tokens(value: str | None) -> set[str]:
 
     for token in cleaned.split():
         normalized = replacements.get(token, token)
+
+        if (
+            normalized == token
+            and len(token) > 3
+            and token.endswith("s")
+            and not token.endswith(("ss", "us", "is"))
+        ):
+            normalized = token[:-1]
 
         if normalized in ignored:
             continue
@@ -261,6 +270,10 @@ def find_unique_restaurant_food_match(
     for row in rows:
         candidate = dict(row)
 
+        candidate_name_tokens = normalized_food_tokens(
+            candidate.get("canonical_name")
+        )
+
         candidate_tokens = normalized_food_tokens(
             " ".join(
                 part
@@ -271,6 +284,12 @@ def find_unique_restaurant_food_match(
                 if part
             )
         )
+
+        if (
+            len(requested_tokens) == 1
+            and candidate_name_tokens != requested_tokens
+        ):
+            continue
 
         if not requested_tokens.issubset(candidate_tokens):
             continue

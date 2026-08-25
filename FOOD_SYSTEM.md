@@ -642,6 +642,13 @@ Renames are rejected when another Food already uses the resulting name and
 serving identity. Removed foods are marked unverified so they no longer
 appear in Saved Foods or resolve as trusted Saved Foods.
 
+Food logging normalizes simple possessive and plural differences when one
+trusted Saved Food is the only unambiguous match. For example, `tracy salad`
+may match `Tracy's Home Salad`, and `chipper` may match `Chippers`. A generic
+single word such as `salad` cannot select a longer personalized food name.
+Close matches are labeled on the verified-nutrition review and are never
+logged until the user explicitly chooses Log It.
+
 ## Morning Food Coaching
 
 The morning Food Coaching message is a recap of the previous day.

@@ -3121,6 +3121,19 @@ def format_pending_nutrition_confirmation(
 
         lines.append(line)
 
+        if component.get("matched_by") == "controlled_fallback":
+            requested_name = str(
+                component.get("requested_food_name") or ""
+            ).strip()
+            if requested_name:
+                lines.append(
+                    "Close Saved Food match: "
+                    f"{requested_name} → {display_name}"
+                )
+                lines.append(
+                    "Review this match before choosing Log It."
+                )
+
         source = component.get("verification_source")
 
         if source:
@@ -17621,11 +17634,36 @@ def process_telegram_update(update):
             return
 
         if not interpretation.is_food_logging_request:
-            send_telegram_msg(
-                "Please send the food you want to add.",
-                chat_id=chat_id,
+            try:
+                saved_name_match = resolve_food(
+                    food_name=text,
+                    serving_description="standard",
+                    brand=None,
+                    restaurant=restaurant_context,
+                )
+            except Exception:
+                logging.exception(
+                    "Additional meal Saved Food lookup failed"
+                )
+                saved_name_match = {"found": False}
+
+            if not saved_name_match.get("found"):
+                send_telegram_msg(
+                    "Please send the food you want to add.",
+                    chat_id=chat_id,
+                )
+                return
+
+            interpretation = FoodInterpretation(
+                is_food_logging_request=True,
+                food_name=text.strip(),
+                quantity=None,
+                meal_category=meal_category,
+                missing_fields=["quantity"],
+                assumptions=[],
+                confidence=1.0,
+                clarification_question="How many did you have?",
             )
-            return
 
         interpretation.meal_category = meal_category
 
@@ -18887,6 +18925,8 @@ def process_telegram_update(update):
                         "verification_source": food.get(
                             "verification_source"
                         ),
+                        "matched_by": resolution.get("matched_by"),
+                        "requested_food_name": food_name,
                     }
                 ]
 
@@ -19374,6 +19414,12 @@ def process_telegram_update(update):
                                 ),
                                 "verification_source": saved_food.get(
                                     "verification_source"
+                                ),
+                                "matched_by": saved_resolution.get(
+                                    "matched_by"
+                                ),
+                                "requested_food_name": (
+                                    interpretation.food_name
                                 ),
                             }
                         ]
