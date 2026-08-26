@@ -63,6 +63,8 @@ from food.goals import (
     update_active_weight_goal,
 )
 from food.pantry import (
+    PANTRY_FOOD_CATEGORIES,
+    PANTRY_STORAGE_AREAS,
     add_pantry_item,
     add_pantry_items,
     clean_pantry_name,
@@ -70,6 +72,7 @@ from food.pantry import (
     list_pantry_items,
     parse_pantry_item_list,
     remove_pantry_item,
+    update_pantry_item_organization,
 )
 from food.pantry_advisor import (
     MEAL_CALORIE_LIMITS,
@@ -677,11 +680,74 @@ def menu_reply_markup(message):
             ["View pantry", "Add items manually"],
             ["Scan product into Pantry"],
             ["Add items from shelf photo"],
+            ["Organize pantry"],
             ["Get meal ideas", "Smart Pantry swaps"],
             ["Shopping list"],
             ["Remove pantry item", "Clear pantry"],
             ["Back", "Cancel"],
         ]
+    elif message.startswith("My Pantry — Page"):
+        match = re.search(r"Page (\d+) of (\d+)", message)
+        rows = []
+        if match:
+            current_page, total_pages = map(int, match.groups())
+            navigation = []
+            if current_page > 1:
+                navigation.append("Previous")
+            if current_page < total_pages:
+                navigation.append("Next")
+            if navigation:
+                rows.append(navigation)
+        rows.append(["Back", "Cancel"])
+    elif message.startswith("Pantry Organizer — Choose Item"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index : index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        match = re.search(r"Page (\d+) of (\d+)", message)
+        if match:
+            current_page, total_pages = map(int, match.groups())
+            navigation = []
+            if current_page > 1:
+                navigation.append("Previous")
+            if current_page < total_pages:
+                navigation.append("Next")
+            if navigation:
+                rows.append(navigation)
+        rows.append(["Back", "Cancel"])
+        one_time = True
+    elif message.startswith("Pantry Organizer — Storage Area"):
+        labels = list(PANTRY_STORAGE_AREAS.values())
+        rows = [labels[index : index + 2] for index in range(0, len(labels), 2)]
+        rows.append(["Back", "Cancel"])
+        one_time = True
+    elif message.startswith("Pantry Organizer — Food Type"):
+        labels = list(PANTRY_FOOD_CATEGORIES.values())
+        rows = [labels[index : index + 2] for index in range(0, len(labels), 2)]
+        rows.append(["Back", "Cancel"])
+        one_time = True
+    elif message.startswith("Save this Pantry organization?"):
+        rows = [["Yes", "No"], ["Cancel"]]
+        one_time = True
+    elif message.startswith("Choose a Pantry item to remove:"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index : index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        match = re.search(r"Page (\d+) of (\d+)", message)
+        if match:
+            current_page, total_pages = map(int, match.groups())
+            navigation = []
+            if current_page > 1:
+                navigation.append("Previous")
+            if current_page < total_pages:
+                navigation.append("Next")
+            if navigation:
+                rows.append(navigation)
+        rows.append(["Back", "Cancel"])
+        one_time = True
     elif message.startswith("Pantry Shelf Photo — Items Found"):
         rows = [
             ["Add another photo", "Review items"],
@@ -4662,12 +4728,13 @@ def healthcoach_pantry_menu_text() -> str:
         "2. Add items manually\n"
         "3. Scan product into Pantry\n"
         "4. Add items from shelf photo\n"
-        "5. Get meal ideas\n"
-        "6. Smart Pantry swaps\n"
-        "7. Shopping list\n"
-        "8. Remove pantry item\n"
-        "9. Clear pantry\n"
-        "10. Back\n\n"
+        "5. Organize pantry\n"
+        "6. Get meal ideas\n"
+        "7. Smart Pantry swaps\n"
+        "8. Shopping list\n"
+        "9. Remove pantry item\n"
+        "10. Clear pantry\n"
+        "11. Back\n\n"
         "Pantry items stay available until you remove or clear "
         "them. Quantities are not tracked."
     )
@@ -5060,7 +5127,79 @@ def format_shopping_item_choices(
     return "\n".join(lines)
 
 
-def format_pantry_items(items: list[dict]) -> str:
+PANTRY_PAGE_SIZE = 12
+
+
+def pantry_page(
+    items: list[dict],
+    *,
+    page: int = 0,
+) -> tuple[list[dict], int, int]:
+    """Return one stable storage-grouped Pantry page."""
+    storage_order = {
+        key: index
+        for index, key in enumerate(
+            (
+                "pantry_shelf",
+                "refrigerator",
+                "freezer",
+                "counter_produce",
+                "other",
+                "unsorted",
+            )
+        )
+    }
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            storage_order.get(str(item.get("storage_area")), 999),
+            str(item.get("display_name") or "").lower(),
+            int(item.get("pantry_item_id") or 0),
+        ),
+    )
+    total_pages = max(
+        1,
+        (len(ordered) + PANTRY_PAGE_SIZE - 1) // PANTRY_PAGE_SIZE,
+    )
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * PANTRY_PAGE_SIZE
+    return (
+        ordered[start : start + PANTRY_PAGE_SIZE],
+        safe_page,
+        total_pages,
+    )
+
+
+def pantry_nutrition_ready(item: dict) -> bool:
+    """Return whether one Pantry item has linked usable nutrition."""
+    return (
+        item.get("nutrition_version_id") is not None
+        and item.get("calories") is not None
+    )
+
+
+def pantry_choice_key(
+    value: str,
+    choices: dict[str, str],
+    *,
+    aliases: dict[str, str] | None = None,
+) -> str | None:
+    """Resolve a numbered or labeled Pantry organization choice."""
+    lowered = str(value or "").strip().lower()
+    try:
+        selected_index = int(lowered) - 1
+    except ValueError:
+        selected_index = -1
+    keys = list(choices)
+    if 0 <= selected_index < len(keys):
+        return keys[selected_index]
+    for key, label in choices.items():
+        if lowered in {key.lower(), label.lower()}:
+            return key
+    return (aliases or {}).get(lowered)
+
+
+def format_pantry_items(items: list[dict], *, page: int = 0) -> str:
     if not items:
         return (
             "My Pantry\n\n"
@@ -5068,23 +5207,49 @@ def format_pantry_items(items: list[dict]) -> str:
             "Reply Back to return or Cancel to close."
         )
 
-    lines = ["My Pantry", ""]
-    for index, item in enumerate(items, start=1):
+    page_items, safe_page, total_pages = pantry_page(items, page=page)
+    nutrition_ready_count = sum(
+        1 for item in items if pantry_nutrition_ready(item)
+    )
+    lines = [
+        f"My Pantry — Page {safe_page + 1} of {total_pages}",
+        "",
+    ]
+    previous_storage = None
+    for index, item in enumerate(page_items, start=1):
+        storage_area = str(item.get("storage_area") or "unsorted")
+        if storage_area != previous_storage:
+            if previous_storage is not None:
+                lines.append("")
+            lines.append(
+                str(
+                    PANTRY_STORAGE_AREAS.get(
+                        storage_area,
+                        "Unsorted",
+                    )
+                ).upper()
+            )
+            previous_storage = storage_area
         name = str(item.get("display_name") or "Pantry item")
-        source_note = (
-            " — scanned product"
-            if item.get("source") == "barcode"
-            else " — shelf photo"
-            if item.get("source") == "shelf_photo"
-            else ""
+        category = PANTRY_FOOD_CATEGORIES.get(
+            str(item.get("food_category") or "unsorted"),
+            "Unsorted",
         )
-        lines.append(f"{index}. {name}{source_note}")
+        nutrition_status = (
+            "nutrition ready"
+            if pantry_nutrition_ready(item)
+            else "needs nutrition"
+        )
+        lines.append(
+            f"{index}. {name} — {category} — {nutrition_status}"
+        )
 
     lines.extend([
         "",
+        f"Nutrition ready: {nutrition_ready_count}/{len(items)} items",
         "These items are remembered as available; quantities are not tracked.",
         "",
-        "Reply Back to return or Cancel to close.",
+        "Reply Next, Previous, Back, or Cancel.",
     ])
     return "\n".join(lines)
 
@@ -5169,14 +5334,167 @@ def format_pantry_photo_edit_choices(names: list[str]) -> str:
     return "\n".join(lines)
 
 
-def format_pantry_remove_choices(items: list[dict]) -> str:
-    lines = ["Choose a Pantry item to remove:", ""]
-    for index, item in enumerate(items, start=1):
+def format_pantry_organize_choices(
+    items: list[dict],
+    *,
+    page: int = 0,
+) -> str:
+    page_items, safe_page, total_pages = pantry_page(items, page=page)
+    lines = [
+        "Pantry Organizer — Choose Item",
+        f"Page {safe_page + 1} of {total_pages}",
+        "",
+    ]
+    for index, item in enumerate(page_items, start=1):
+        storage = PANTRY_STORAGE_AREAS.get(
+            str(item.get("storage_area") or "unsorted"),
+            "Unsorted",
+        )
+        category = PANTRY_FOOD_CATEGORIES.get(
+            str(item.get("food_category") or "unsorted"),
+            "Unsorted",
+        )
+        lines.append(
+            f"{index}. {item.get('display_name') or 'Pantry item'} "
+            f"— {storage}; {category}"
+        )
+    lines.extend([
+        "",
+        "Choose a number, Next, Previous, or Back.",
+    ])
+    return "\n".join(lines)
+
+
+def format_pantry_storage_choices(item_name: str) -> str:
+    lines = [
+        "Pantry Organizer — Storage Area",
+        "",
+        f"Item: {item_name}",
+        "",
+    ]
+    lines.extend(
+        f"{index}. {label}"
+        for index, label in enumerate(PANTRY_STORAGE_AREAS.values(), start=1)
+    )
+    lines.extend(["", "Reply Back to choose a different item."])
+    return "\n".join(lines)
+
+
+def format_pantry_category_choices(item_name: str) -> str:
+    lines = [
+        "Pantry Organizer — Food Type",
+        "",
+        f"Item: {item_name}",
+        "",
+    ]
+    lines.extend(
+        f"{index}. {label}"
+        for index, label in enumerate(PANTRY_FOOD_CATEGORIES.values(), start=1)
+    )
+    lines.extend(["", "Reply Back to change the storage area."])
+    return "\n".join(lines)
+
+
+def format_pantry_remove_choices(
+    items: list[dict],
+    *,
+    page: int = 0,
+) -> str:
+    page_items, safe_page, total_pages = pantry_page(items, page=page)
+    lines = [
+        "Choose a Pantry item to remove:",
+        f"Page {safe_page + 1} of {total_pages}",
+        "",
+    ]
+    for index, item in enumerate(page_items, start=1):
         lines.append(
             f"{index}. {item.get('display_name') or 'Pantry item'}"
         )
-    lines.extend(["", "Reply Back to return."])
+    lines.extend(["", "Reply Next, Previous, or Back."])
     return "\n".join(lines)
+
+
+def show_pantry_view_page(
+    *,
+    chat_id: int | str,
+    page: int = 0,
+) -> None:
+    items = list_pantry_items()
+    _, safe_page, _ = pantry_page(items, page=page)
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_view",
+        known_data={"pantry_page": safe_page},
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_items(items, page=safe_page),
+        chat_id=chat_id,
+    )
+
+
+def show_pantry_organizer_page(
+    *,
+    chat_id: int | str,
+    page: int = 0,
+) -> bool:
+    items = list_pantry_items()
+    if not items:
+        send_telegram_msg(
+            "Your Pantry is empty. Add some items before organizing it.",
+            chat_id=chat_id,
+        )
+        return False
+    page_items, safe_page, _ = pantry_page(items, page=page)
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_organize_select",
+        known_data={
+            "pantry_page": safe_page,
+            "pantry_item_ids": [
+                int(item["pantry_item_id"])
+                for item in page_items
+            ],
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_organize_choices(items, page=safe_page),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def show_pantry_remove_page(
+    *,
+    chat_id: int | str,
+    page: int = 0,
+) -> bool:
+    items = list_pantry_items()
+    if not items:
+        send_telegram_msg(
+            "Your Pantry is empty. Nothing can be removed.",
+            chat_id=chat_id,
+        )
+        return False
+    page_items, safe_page, _ = pantry_page(items, page=page)
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_remove_select",
+        known_data={
+            "pantry_page": safe_page,
+            "pantry_item_ids": [
+                int(item["pantry_item_id"])
+                for item in page_items
+            ],
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_remove_choices(items, page=safe_page),
+        chat_id=chat_id,
+    )
+    return True
 
 
 def format_saved_food_choices(foods: list[dict]) -> str:
@@ -8413,17 +8731,7 @@ def process_telegram_update(update):
 
         if current_step == "pantry":
             if lowered in {"1", "view", "view pantry"}:
-                items = list_pantry_items()
-                update_conversation(
-                    chat_id=chat_id,
-                    current_step="pantry_view",
-                    known_data={},
-                    missing_fields=[],
-                )
-                send_telegram_msg(
-                    format_pantry_items(items),
-                    chat_id=chat_id,
-                )
+                show_pantry_view_page(chat_id=chat_id)
                 return
 
             if lowered in {
@@ -8498,6 +8806,15 @@ def process_telegram_update(update):
 
             if lowered in {
                 "5",
+                "organize",
+                "organize pantry",
+                "organize pantry items",
+            }:
+                show_pantry_organizer_page(chat_id=chat_id)
+                return
+
+            if lowered in {
+                "6",
                 "get meal ideas",
                 "meal ideas",
                 "pantry meal ideas",
@@ -8529,7 +8846,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "6",
+                "7",
                 "smart pantry swaps",
                 "smart pantry swap",
                 "pantry swaps",
@@ -8539,7 +8856,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "7",
+                "8",
                 "shopping list",
                 "my shopping list",
             }:
@@ -8556,37 +8873,15 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "remove",
                 "remove pantry item",
             }:
-                items = list_pantry_items()
-                if not items:
-                    send_telegram_msg(
-                        "Your Pantry is empty. Nothing can be removed.",
-                        chat_id=chat_id,
-                    )
-                    return
-
-                update_conversation(
-                    chat_id=chat_id,
-                    current_step="pantry_remove_select",
-                    known_data={
-                        "pantry_item_ids": [
-                            int(item["pantry_item_id"])
-                            for item in items
-                        ],
-                    },
-                    missing_fields=[],
-                )
-                send_telegram_msg(
-                    format_pantry_remove_choices(items),
-                    chat_id=chat_id,
-                )
+                show_pantry_remove_page(chat_id=chat_id)
                 return
 
             if lowered in {
-                "9",
+                "10",
                 "clear",
                 "clear pantry",
             }:
@@ -8616,7 +8911,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"10", "back"}:
+            if lowered in {"11", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -9621,10 +9916,15 @@ def process_telegram_update(update):
                 )
                 return
 
-            send_telegram_msg(
-                format_pantry_items(list_pantry_items()),
-                chat_id=chat_id,
-            )
+            page = int(known_data.get("pantry_page") or 0)
+            if lowered in {"next", "next page"}:
+                show_pantry_view_page(chat_id=chat_id, page=page + 1)
+                return
+            if lowered in {"previous", "previous page", "prev"}:
+                show_pantry_view_page(chat_id=chat_id, page=page - 1)
+                return
+
+            show_pantry_view_page(chat_id=chat_id, page=page)
             return
 
         if current_step == "shopping_list":
@@ -10114,6 +10414,217 @@ def process_telegram_update(update):
             )
             return
 
+        if current_step == "pantry_organize_select":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            page = int(known_data.get("pantry_page") or 0)
+            if lowered in {"next", "next page"}:
+                show_pantry_organizer_page(
+                    chat_id=chat_id,
+                    page=page + 1,
+                )
+                return
+            if lowered in {"previous", "previous page", "prev"}:
+                show_pantry_organizer_page(
+                    chat_id=chat_id,
+                    page=page - 1,
+                )
+                return
+
+            pantry_ids = list(known_data.get("pantry_item_ids") or [])
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(pantry_ids):
+                show_pantry_organizer_page(chat_id=chat_id, page=page)
+                return
+
+            pantry_item_id = int(pantry_ids[selection - 1])
+            selected = next(
+                (
+                    item
+                    for item in list_pantry_items()
+                    if int(item["pantry_item_id"]) == pantry_item_id
+                ),
+                None,
+            )
+            if selected is None:
+                send_telegram_msg(
+                    "That Pantry item is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_organize_storage",
+                known_data={
+                    "pantry_page": page,
+                    "pantry_organize_id": pantry_item_id,
+                    "pantry_organize_name": selected["display_name"],
+                },
+                missing_fields=["storage_area"],
+            )
+            send_telegram_msg(
+                format_pantry_storage_choices(selected["display_name"]),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_organize_storage":
+            page = int(known_data.get("pantry_page") or 0)
+            if lowered == "back":
+                show_pantry_organizer_page(chat_id=chat_id, page=page)
+                return
+            storage_area = pantry_choice_key(
+                text,
+                PANTRY_STORAGE_AREAS,
+                aliases={
+                    "shelf": "pantry_shelf",
+                    "pantry": "pantry_shelf",
+                    "fridge": "refrigerator",
+                    "cold": "refrigerator",
+                    "produce": "counter_produce",
+                    "counter": "counter_produce",
+                },
+            )
+            if storage_area is None:
+                send_telegram_msg(
+                    format_pantry_storage_choices(
+                        str(known_data.get("pantry_organize_name") or "Item")
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+            revised_data = dict(known_data)
+            revised_data["pantry_organize_storage"] = storage_area
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_organize_category",
+                known_data=revised_data,
+                missing_fields=["food_category"],
+            )
+            send_telegram_msg(
+                format_pantry_category_choices(
+                    str(known_data.get("pantry_organize_name") or "Item")
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_organize_category":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_organize_storage",
+                    known_data=known_data,
+                    missing_fields=["storage_area"],
+                )
+                send_telegram_msg(
+                    format_pantry_storage_choices(
+                        str(known_data.get("pantry_organize_name") or "Item")
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+            food_category = pantry_choice_key(
+                text,
+                PANTRY_FOOD_CATEGORIES,
+                aliases={
+                    "meat": "protein",
+                    "meat/protein": "protein",
+                    "canned": "canned_jarred",
+                    "jarred": "canned_jarred",
+                    "spices": "baking_spices",
+                    "baking": "baking_spices",
+                    "beverages": "drinks",
+                },
+            )
+            if food_category is None:
+                send_telegram_msg(
+                    format_pantry_category_choices(
+                        str(known_data.get("pantry_organize_name") or "Item")
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+            revised_data = dict(known_data)
+            revised_data["pantry_organize_category"] = food_category
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_organize_confirmation",
+                known_data=revised_data,
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Save this Pantry organization?\n\n"
+                f"Item: {known_data.get('pantry_organize_name')}\n"
+                "Storage: "
+                f"{PANTRY_STORAGE_AREAS[revised_data['pantry_organize_storage']]}\n"
+                "Food type: "
+                f"{PANTRY_FOOD_CATEGORIES[food_category]}\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_organize_confirmation":
+            page = int(known_data.get("pantry_page") or 0)
+            if lowered in {"2", "no", "back"}:
+                send_telegram_msg(
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                show_pantry_organizer_page(chat_id=chat_id, page=page)
+                return
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                updated = update_pantry_item_organization(
+                    int(known_data.get("pantry_organize_id") or 0),
+                    storage_area=str(
+                        known_data.get("pantry_organize_storage") or ""
+                    ),
+                    food_category=str(
+                        known_data.get("pantry_organize_category") or ""
+                    ),
+                )
+            except (TypeError, ValueError):
+                logging.exception("Could not organize Pantry item")
+                send_telegram_msg(
+                    "That Pantry item could not be updated.",
+                    chat_id=chat_id,
+                )
+                show_pantry_organizer_page(chat_id=chat_id, page=page)
+                return
+            send_telegram_msg(
+                "Pantry organization updated.\n\n"
+                f"{updated['display_name']}\n"
+                "Storage: "
+                f"{PANTRY_STORAGE_AREAS[updated['storage_area']]}\n"
+                "Food type: "
+                f"{PANTRY_FOOD_CATEGORIES[updated['food_category']]}",
+                chat_id=chat_id,
+            )
+            show_pantry_organizer_page(chat_id=chat_id, page=page)
+            return
+
         if current_step == "pantry_remove_select":
             if lowered == "back":
                 update_conversation(
@@ -10128,6 +10639,14 @@ def process_telegram_update(update):
                 )
                 return
 
+            page = int(known_data.get("pantry_page") or 0)
+            if lowered in {"next", "next page"}:
+                show_pantry_remove_page(chat_id=chat_id, page=page + 1)
+                return
+            if lowered in {"previous", "previous page", "prev"}:
+                show_pantry_remove_page(chat_id=chat_id, page=page - 1)
+                return
+
             pantry_ids = list(
                 known_data.get("pantry_item_ids") or []
             )
@@ -10137,10 +10656,7 @@ def process_telegram_update(update):
                 selection = 0
 
             if selection < 1 or selection > len(pantry_ids):
-                send_telegram_msg(
-                    "Choose one of the numbered Pantry items, or reply Back.",
-                    chat_id=chat_id,
-                )
+                show_pantry_remove_page(chat_id=chat_id, page=page)
                 return
 
             pantry_item_id = int(pantry_ids[selection - 1])
@@ -10164,6 +10680,7 @@ def process_telegram_update(update):
                 known_data={
                     "pantry_remove_id": pantry_item_id,
                     "pantry_remove_name": selected["display_name"],
+                    "pantry_page": page,
                 },
                 missing_fields=[],
             )

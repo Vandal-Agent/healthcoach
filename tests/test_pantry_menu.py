@@ -457,6 +457,35 @@ class PantryMenuTests(unittest.TestCase):
             [["Back", "Cancel"]],
         )
 
+    def test_organized_pantry_view_is_grouped_and_paginated(self) -> None:
+        items = [
+            {
+                "pantry_item_id": index,
+                "display_name": f"Shelf Item {index:02d}",
+                "source": "manual",
+                "storage_area": "pantry_shelf",
+                "food_category": "canned_jarred",
+                "nutrition_version_id": 5 if index == 1 else None,
+                "calories": 100 if index == 1 else None,
+            }
+            for index in range(1, 14)
+        ]
+
+        first_page = app.format_pantry_items(items, page=0)
+        second_page = app.format_pantry_items(items, page=1)
+        keyboard = app.menu_reply_markup(first_page)
+
+        self.assertIn("My Pantry — Page 1 of 2", first_page)
+        self.assertIn("PANTRY SHELF", first_page)
+        self.assertIn("Canned/jarred — nutrition ready", first_page)
+        self.assertIn("Nutrition ready: 1/13 items", first_page)
+        self.assertNotIn("Shelf Item 13", first_page)
+        self.assertIn("Shelf Item 13", second_page)
+        self.assertEqual(
+            keyboard["keyboard"],
+            [["Next"], ["Back", "Cancel"]],
+        )
+
     def test_food_menu_routes_to_pantry(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",
@@ -589,6 +618,162 @@ class PantryMenuTests(unittest.TestCase):
             "Send a clear photo of a product barcode",
             send.call_args.args[0],
         )
+
+    def test_pantry_routes_to_paginated_organizer(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry",
+            "known_data": {},
+        }
+        items = [
+            {
+                "pantry_item_id": 42,
+                "display_name": "Chicken breast",
+                "storage_area": "unsorted",
+                "food_category": "unsorted",
+            }
+        ]
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "list_pantry_items", return_value=items),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Organize pantry",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_organize_select",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["pantry_item_ids"],
+            [42],
+        )
+        self.assertIn("Chicken breast", send.call_args.args[0])
+
+    def test_pantry_organizer_confirms_before_updating(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_confirmation",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Chicken breast",
+                "pantry_organize_storage": "freezer",
+                "pantry_organize_category": "protein",
+            },
+        }
+        updated_item = {
+            "pantry_item_id": 42,
+            "display_name": "Chicken breast",
+            "storage_area": "freezer",
+            "food_category": "protein",
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "update_pantry_item_organization",
+                return_value=updated_item,
+            ) as update_item,
+            patch.object(
+                app,
+                "list_pantry_items",
+                return_value=[updated_item],
+            ),
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        update_item.assert_called_once_with(
+            42,
+            storage_area="freezer",
+            food_category="protein",
+        )
+        self.assertIn(
+            "Pantry organization updated",
+            send.call_args_list[0].args[0],
+        )
+
+    def test_pantry_organizer_collects_storage_then_food_type(self) -> None:
+        storage_conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_storage",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Chicken breast",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=storage_conversation,
+            ),
+            patch.object(app, "update_conversation") as update_storage,
+            patch.object(app, "send_telegram_msg"),
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Freezer"}
+            })
+
+        self.assertEqual(
+            update_storage.call_args.kwargs["current_step"],
+            "pantry_organize_category",
+        )
+        storage_data = update_storage.call_args.kwargs["known_data"]
+        self.assertEqual(
+            storage_data["pantry_organize_storage"],
+            "freezer",
+        )
+
+        category_conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_category",
+            "known_data": storage_data,
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=category_conversation,
+            ),
+            patch.object(app, "update_conversation") as update_category,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Protein"}
+            })
+
+        self.assertEqual(
+            update_category.call_args.kwargs["current_step"],
+            "pantry_organize_confirmation",
+        )
+        self.assertEqual(
+            update_category.call_args.kwargs["known_data"][
+                "pantry_organize_category"
+            ],
+            "protein",
+        )
+        self.assertIn("Freezer", send.call_args.args[0])
+        self.assertIn("Protein", send.call_args.args[0])
 
     def test_pantry_shelf_action_waits_for_photo(self) -> None:
         conversation = {

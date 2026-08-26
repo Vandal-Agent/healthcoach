@@ -14,6 +14,43 @@ from food.database import (
 
 PANTRY_SOURCES = {"manual", "barcode", "saved_food", "shelf_photo"}
 MAX_PANTRY_ITEMS_PER_MESSAGE = 30
+PANTRY_STORAGE_AREAS = {
+    "unsorted": "Unsorted",
+    "pantry_shelf": "Pantry shelf",
+    "refrigerator": "Refrigerator",
+    "freezer": "Freezer",
+    "counter_produce": "Counter/produce",
+    "other": "Other",
+}
+PANTRY_FOOD_CATEGORIES = {
+    "unsorted": "Unsorted",
+    "produce": "Produce",
+    "protein": "Protein",
+    "dairy": "Dairy",
+    "grains": "Grains",
+    "canned_jarred": "Canned/jarred",
+    "snacks": "Snacks",
+    "condiments": "Condiments",
+    "baking_spices": "Baking/spices",
+    "drinks": "Drinks",
+    "other": "Other",
+}
+
+
+def validate_pantry_storage_area(value: str | None) -> str:
+    """Validate one persistent Pantry storage-area key."""
+    cleaned = str(value or "unsorted").strip().lower()
+    if cleaned not in PANTRY_STORAGE_AREAS:
+        raise ValueError("Unknown Pantry storage area.")
+    return cleaned
+
+
+def validate_pantry_food_category(value: str | None) -> str:
+    """Validate one persistent Pantry food-category key."""
+    cleaned = str(value or "unsorted").strip().lower()
+    if cleaned not in PANTRY_FOOD_CATEGORIES:
+        raise ValueError("Unknown Pantry food category.")
+    return cleaned
 
 
 def clean_pantry_name(value: str) -> str:
@@ -85,6 +122,8 @@ def add_pantry_item(
     food_id: int | None = None,
     source: str = "manual",
     barcode_text: str | None = None,
+    storage_area: str | None = None,
+    food_category: str = "unsorted",
 ) -> dict[str, Any]:
     """Add or refresh one presence-only Pantry item."""
     initialize_database()
@@ -96,6 +135,12 @@ def add_pantry_item(
         raise ValueError(
             "source must be manual, barcode, saved_food, or shelf_photo."
         )
+
+    cleaned_storage_area = validate_pantry_storage_area(
+        storage_area
+        or ("pantry_shelf" if cleaned_source == "shelf_photo" else None)
+    )
+    cleaned_food_category = validate_pantry_food_category(food_category)
 
     cleaned_barcode = (
         str(barcode_text).strip()
@@ -189,10 +234,12 @@ def add_pantry_item(
                 food_id,
                 source,
                 barcode_text,
+                storage_area,
+                food_category,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(normalized_name)
             DO UPDATE SET
                 display_name = CASE
@@ -221,6 +268,8 @@ def add_pantry_item(
                 int(food_id) if food_id is not None else None,
                 cleaned_source,
                 cleaned_barcode,
+                cleaned_storage_area,
+                cleaned_food_category,
                 timestamp,
                 timestamp,
             ),
@@ -298,6 +347,45 @@ def list_pantry_items() -> list[dict[str, Any]]:
         ).fetchall()
 
     return [dict(row) for row in rows]
+
+
+def update_pantry_item_organization(
+    pantry_item_id: int,
+    *,
+    storage_area: str,
+    food_category: str,
+) -> dict[str, Any]:
+    """Update only the organizational labels for one Pantry item."""
+    initialize_database()
+    cleaned_storage_area = validate_pantry_storage_area(storage_area)
+    cleaned_food_category = validate_pantry_food_category(food_category)
+
+    with get_connection(DATABASE_PATH) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE pantry_items
+            SET
+                storage_area = ?,
+                food_category = ?,
+                updated_at = ?
+            WHERE pantry_item_id = ?
+            """,
+            (
+                cleaned_storage_area,
+                cleaned_food_category,
+                current_timestamp(),
+                int(pantry_item_id),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Pantry item not found: {pantry_item_id}")
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM pantry_items WHERE pantry_item_id = ?",
+            (int(pantry_item_id),),
+        ).fetchone()
+
+    return dict(row)
 
 
 def remove_pantry_item(pantry_item_id: int) -> bool:

@@ -317,6 +317,21 @@ learn the product from its package:
 My Pantry is a separate presence-only list under the Telegram Food menu.
 It does not treat every Saved Food as currently available.
 
+Each Pantry item has two independent organizational labels:
+
+- Storage area: Unsorted, Pantry shelf, Refrigerator, Freezer,
+  Counter/produce, or Other.
+- Food type: Unsorted, Produce, Protein, Dairy, Grains, Canned/jarred,
+  Snacks, Condiments, Baking/spices, Drinks, or Other.
+
+The organized Pantry view groups items by storage area, shows the food type
+and nutrition-readiness status, reports total nutrition coverage, and uses
+12-item pages so large Pantry lists stay usable in Telegram. The Pantry
+Organizer changes one item's labels only after explicit confirmation.
+Existing items migrate to Unsorted without losing their names, Saved Food
+links, sources, or history. New shelf-photo items default to Pantry shelf;
+all other additions remain Unsorted until organized.
+
 Supported workflow:
 
 - View the foods currently available at home.
@@ -396,6 +411,10 @@ Duplicate names are matched case-insensitively and are not added twice.
 Food database schema version `12` expands the Pantry source constraint to
 include `shelf_photo`. Its migration rebuilds the constrained Pantry table
 while preserving every existing Pantry row and identifier.
+
+Food database schema version `13` adds `storage_area` and `food_category` to
+each Pantry item. Its migration preserves existing rows and defaults both
+new fields to `unsorted`.
 
 # Shopping List
 

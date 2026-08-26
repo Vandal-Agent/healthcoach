@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 12
+SCHEMA_VERSION: Final[int] = 13
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -462,6 +462,33 @@ def create_schema(connection: sqlite3.Connection) -> None:
                     )
                 ),
             barcode_text TEXT,
+            storage_area TEXT NOT NULL DEFAULT 'unsorted'
+                CHECK (
+                    storage_area IN (
+                        'unsorted',
+                        'pantry_shelf',
+                        'refrigerator',
+                        'freezer',
+                        'counter_produce',
+                        'other'
+                    )
+                ),
+            food_category TEXT NOT NULL DEFAULT 'unsorted'
+                CHECK (
+                    food_category IN (
+                        'unsorted',
+                        'produce',
+                        'protein',
+                        'dairy',
+                        'grains',
+                        'canned_jarred',
+                        'snacks',
+                        'condiments',
+                        'baking_spices',
+                        'drinks',
+                        'other'
+                    )
+                ),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
 
@@ -475,6 +502,12 @@ def create_schema(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_pantry_items_display_name
             ON pantry_items (display_name);
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_storage_area
+            ON pantry_items (storage_area);
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_food_category
+            ON pantry_items (food_category);
 
         CREATE TABLE IF NOT EXISTS shopping_list_items (
             shopping_list_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -637,8 +670,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=12,
         description="Allow reviewed shelf-photo Pantry items",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Organize Pantry by storage area and food type",
     )
 
 
@@ -802,6 +841,33 @@ def create_pantry_schema(
                     )
                 ),
             barcode_text TEXT,
+            storage_area TEXT NOT NULL DEFAULT 'unsorted'
+                CHECK (
+                    storage_area IN (
+                        'unsorted',
+                        'pantry_shelf',
+                        'refrigerator',
+                        'freezer',
+                        'counter_produce',
+                        'other'
+                    )
+                ),
+            food_category TEXT NOT NULL DEFAULT 'unsorted'
+                CHECK (
+                    food_category IN (
+                        'unsorted',
+                        'produce',
+                        'protein',
+                        'dairy',
+                        'grains',
+                        'canned_jarred',
+                        'snacks',
+                        'condiments',
+                        'baking_spices',
+                        'drinks',
+                        'other'
+                    )
+                ),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
 
@@ -815,6 +881,12 @@ def create_pantry_schema(
 
         CREATE INDEX IF NOT EXISTS idx_pantry_items_display_name
             ON pantry_items (display_name);
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_storage_area
+            ON pantry_items (storage_area);
+
+        CREATE INDEX IF NOT EXISTS idx_pantry_items_food_category
+            ON pantry_items (food_category);
         """
     )
 
@@ -1295,6 +1367,78 @@ def migrate_version_11_to_12(
     )
 
 
+def migrate_version_12_to_13(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add editable Pantry storage areas and food categories."""
+    if not table_exists(connection, "pantry_items"):
+        create_pantry_schema(connection)
+    else:
+        columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(pantry_items)"
+            ).fetchall()
+        }
+        if "storage_area" not in columns:
+            connection.execute(
+                """
+                ALTER TABLE pantry_items
+                ADD COLUMN storage_area TEXT NOT NULL DEFAULT 'unsorted'
+                    CHECK (
+                        storage_area IN (
+                            'unsorted',
+                            'pantry_shelf',
+                            'refrigerator',
+                            'freezer',
+                            'counter_produce',
+                            'other'
+                        )
+                    )
+                """
+            )
+        if "food_category" not in columns:
+            connection.execute(
+                """
+                ALTER TABLE pantry_items
+                ADD COLUMN food_category TEXT NOT NULL DEFAULT 'unsorted'
+                    CHECK (
+                        food_category IN (
+                            'unsorted',
+                            'produce',
+                            'protein',
+                            'dairy',
+                            'grains',
+                            'canned_jarred',
+                            'snacks',
+                            'condiments',
+                            'baking_spices',
+                            'drinks',
+                            'other'
+                        )
+                    )
+                """
+            )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pantry_items_storage_area
+            ON pantry_items (storage_area)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pantry_items_food_category
+            ON pantry_items (food_category)
+            """
+        )
+
+    record_schema_version(
+        connection,
+        version=13,
+        description="Organize Pantry by storage area and food type",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1348,6 +1492,10 @@ def apply_migrations(
     if version < 12:
         migrate_version_11_to_12(connection)
         version = 12
+
+    if version < 13:
+        migrate_version_12_to_13(connection)
+        version = 13
 
     if version > SCHEMA_VERSION:
         raise RuntimeError(

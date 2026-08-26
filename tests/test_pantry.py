@@ -152,7 +152,7 @@ class PantryTests(unittest.TestCase):
         pantry.add_pantry_item(display_name="Rice", source="manual")
         with database.get_connection(self.database_path) as connection:
             connection.execute(
-                "DELETE FROM schema_version WHERE version = 12"
+                "DELETE FROM schema_version WHERE version >= 12"
             )
             connection.commit()
 
@@ -170,6 +170,69 @@ class PantryTests(unittest.TestCase):
             [item["display_name"] for item in pantry.list_pantry_items()],
             ["Black beans", "Rice"],
         )
+
+    def test_new_items_have_safe_organization_defaults(self) -> None:
+        manual = pantry.add_pantry_item(
+            display_name="Cucumbers",
+            source="manual",
+        )
+        shelf = pantry.add_pantry_item(
+            display_name="Tomato Paste",
+            source="shelf_photo",
+        )
+
+        self.assertEqual(manual["storage_area"], "unsorted")
+        self.assertEqual(manual["food_category"], "unsorted")
+        self.assertEqual(shelf["storage_area"], "pantry_shelf")
+        self.assertEqual(shelf["food_category"], "unsorted")
+
+    def test_updates_only_pantry_organization(self) -> None:
+        added = pantry.add_pantry_item(
+            display_name="Chicken breast",
+            source="manual",
+        )
+
+        updated = pantry.update_pantry_item_organization(
+            added["pantry_item_id"],
+            storage_area="freezer",
+            food_category="protein",
+        )
+
+        self.assertEqual(updated["display_name"], "Chicken breast")
+        self.assertEqual(updated["source"], "manual")
+        self.assertEqual(updated["storage_area"], "freezer")
+        self.assertEqual(updated["food_category"], "protein")
+
+    def test_version_twelve_migration_preserves_and_unsorts_items(self) -> None:
+        pantry.add_pantry_item(display_name="Rice", source="manual")
+        with database.get_connection(self.database_path) as connection:
+            connection.execute(
+                "DROP INDEX IF EXISTS idx_pantry_items_food_category"
+            )
+            connection.execute(
+                "DROP INDEX IF EXISTS idx_pantry_items_storage_area"
+            )
+            connection.execute(
+                "ALTER TABLE pantry_items DROP COLUMN food_category"
+            )
+            connection.execute(
+                "ALTER TABLE pantry_items DROP COLUMN storage_area"
+            )
+            connection.execute(
+                "DELETE FROM schema_version WHERE version >= 13"
+            )
+            connection.commit()
+
+        result = database.initialize_database()
+        item = pantry.list_pantry_items()[0]
+
+        self.assertEqual(
+            result["schema_version"]["version"],
+            database.SCHEMA_VERSION,
+        )
+        self.assertEqual(item["display_name"], "Rice")
+        self.assertEqual(item["storage_area"], "unsorted")
+        self.assertEqual(item["food_category"], "unsorted")
 
     def test_scanned_item_keeps_food_and_active_nutrition_link(self) -> None:
         added = pantry.add_pantry_item(
