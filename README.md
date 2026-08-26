@@ -23,8 +23,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   detected items remain unsaved until explicit confirmation and do not invent
   quantities or nutrition
 - Organizes large Pantry lists with separate storage-area and food-type labels,
-  safe item renaming and Pantry-only deletion, 12-item Telegram pages, explicit
-  edit confirmation, and visible linked-nutrition coverage
+  safe item renaming, versioned nutrition correction or relinking, Pantry-only
+  unlinking and deletion, 12-item Telegram pages, explicit confirmation, and
+  visible linked-nutrition coverage
 - Guides the user through Pantry items that still need nutrition and links each
   existing item—after review—to trusted existing user, package-label, USDA, or
   approved-source nutrition; an exact verified lookup; a barcode; a confirmed

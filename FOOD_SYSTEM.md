@@ -328,12 +328,12 @@ Each Pantry item has two independent organizational labels:
 The organized Pantry view groups items by storage area, shows the food type
 and nutrition-readiness status, reports total nutrition coverage, and uses
 12-item pages so large Pantry lists stay usable in Telegram. The Pantry
-Organizer can rename an item, change its organizational labels, or delete its
-Pantry presence, always after explicit confirmation. Renaming preserves the
-Pantry item's Saved Food link, nutrition version, source, storage area, and food
-type. A rename cannot silently merge two existing Pantry items. Organizer
-deletion removes only the Pantry row; it preserves Saved Foods, nutrition,
-recipes, and historical Food Ledger entries.
+Organizer can rename an item, change its organizational labels, view or change
+its linked nutrition, or delete its Pantry presence, always after explicit
+confirmation. Renaming preserves the Pantry item's Saved Food link, nutrition
+version, source, storage area, and food type. A rename cannot silently merge two
+existing Pantry items. Organizer deletion removes only the Pantry row; it
+preserves Saved Foods, nutrition, recipes, and historical Food Ledger entries.
 Existing items migrate to Unsorted without losing their names, Saved Food
 links, sources, or history. New shelf-photo items default to Pantry shelf;
 all other additions remain Unsorted until organized.
@@ -377,6 +377,13 @@ Supported workflow:
 - Preserve the Pantry display name, storage area, and food type when nutrition
   is linked. Linking points the existing Pantry row to the trusted Food record;
   it does not add a duplicate Pantry item or log anything as eaten.
+- From the Pantry Organizer, show the linked serving, active nutrition version,
+  nutrient values, and source. Allow the user to correct the linked Food by
+  creating a new active nutrition version, replace the Pantry link through the
+  same trusted completion paths, or remove only the Pantry link. Corrections
+  apply to future uses; existing Food Ledger snapshots and saved recipe
+  ingredient versions remain unchanged. Removing a link preserves the Food and
+  its versions and returns the Pantry item to the needs-nutrition queue.
 - Require usable active nutrition with calories before a Food may be linked.
   Missing or unreadable label fields remain missing and block the label-photo
   path instead of being changed to zero.

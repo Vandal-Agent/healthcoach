@@ -1222,7 +1222,287 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn("Change name", send.call_args.args[0])
         self.assertIn("Change storage and food type", send.call_args.args[0])
+        self.assertIn("View or change nutrition", send.call_args.args[0])
         self.assertIn("Delete Pantry item", send.call_args.args[0])
+
+    def test_pantry_organizer_opens_linked_nutrition_editor(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_action",
+            "known_data": {
+                "pantry_page": 1,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Ground turkey",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "show_pantry_organize_nutrition") as show,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "View or change nutrition",
+                }
+            })
+
+        show.assert_called_once_with(
+            chat_id=123,
+            pantry_item_id=42,
+            page=1,
+        )
+
+    def test_pantry_nutrition_editor_shows_current_values(self) -> None:
+        message = app.format_pantry_organize_nutrition({
+            "display_name": "Ground turkey",
+            "food_id": 9,
+            "canonical_name": "Ground Turkey 90/10",
+            "serving_description": "3 oz cooked",
+            "nutrition_version_id": 17,
+            "version_number": 2,
+            "verification_source": "user_entered",
+            "calories": 190,
+            "protein_g": 20,
+            "carbohydrates_g": 0,
+            "fat_g": 10.5,
+            "fiber_g": 0,
+            "sugar_g": 0,
+            "sodium_mg": 95,
+        })
+
+        self.assertIn("Serving: 3 oz cooked", message)
+        self.assertIn("Version: 2", message)
+        self.assertIn("Calories: 190 cal", message)
+        self.assertIn("Correct current values", message)
+        self.assertIn("Replace linked nutrition", message)
+        self.assertIn("Remove nutrition link", message)
+
+    def test_pantry_nutrition_correction_starts_versioned_editor(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_nutrition",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Ground turkey",
+                "_pantry_organizer_nutrition_return": True,
+            },
+        }
+        item = {
+            "pantry_item_id": 42,
+            "display_name": "Ground turkey",
+            "food_id": 9,
+            "canonical_name": "Ground Turkey 90/10",
+            "serving_description": "3 oz cooked",
+            "nutrition_version_id": 17,
+            "version_number": 2,
+            "calories": 190,
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "get_pantry_item_by_id", return_value=item),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Correct current values",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "saved_food_edit_calories",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["_saved_food_edit_id"],
+            9,
+        )
+        self.assertIn("new version", send.call_args.args[0])
+
+    def test_linked_item_can_open_replacement_nutrition_options(self) -> None:
+        item = {
+            "pantry_item_id": 42,
+            "display_name": "Ground turkey",
+            "food_id": 9,
+            "nutrition_version_id": 17,
+            "calories": 190,
+        }
+        known_data = {
+            "pantry_page": 0,
+            "pantry_organize_id": 42,
+            "_pantry_organizer_nutrition_return": True,
+        }
+        with (
+            patch.object(app, "get_pantry_item_by_id", return_value=item),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            shown = app.show_pantry_nutrition_options(
+                chat_id=123,
+                pantry_item_id=42,
+                known_data=known_data,
+            )
+
+        self.assertTrue(shown)
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_nutrition_options",
+        )
+        self.assertNotIn("Skip", send.call_args.args[0])
+        self.assertIn("6. Back", send.call_args.args[0])
+
+    def test_confirmed_pantry_correction_returns_to_organizer(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "saved_food_edit_confirmation",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "_pantry_organizer_nutrition_return": True,
+                "_saved_food_edit_id": 9,
+                "_saved_food_edit_name": "Ground Turkey 90/10",
+                "_saved_food_edit_calories": 190,
+                "_saved_food_edit_protein_g": 20,
+                "_saved_food_edit_carbohydrates_g": 0,
+                "_saved_food_edit_fat_g": 10.5,
+                "_saved_food_edit_fiber_g": 0,
+                "_saved_food_edit_sugar_g": 0,
+                "_saved_food_edit_sodium_mg": 95,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "add_user_nutrition_version",
+                return_value={"version_number": 3},
+            ) as add_version,
+            patch.object(app, "show_pantry_organize_nutrition") as show,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        add_version.assert_called_once_with(
+            food_id=9,
+            calories=190.0,
+            protein_g=20.0,
+            carbohydrates_g=0.0,
+            fat_g=10.5,
+            fiber_g=0.0,
+            sugar_g=0.0,
+            sodium_mg=95.0,
+        )
+        show.assert_called_once_with(
+            chat_id=123,
+            pantry_item_id=42,
+            page=0,
+        )
+        self.assertIn("nutrition version 3", send.call_args.args[0])
+        self.assertIn("recipe calculations", send.call_args.args[0])
+
+    def test_pantry_nutrition_unlink_requires_confirmation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_nutrition",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Ground turkey",
+                "_pantry_organizer_nutrition_return": True,
+            },
+        }
+        item = {
+            "pantry_item_id": 42,
+            "display_name": "Ground turkey",
+            "food_id": 9,
+            "canonical_name": "Ground Turkey 90/10",
+            "nutrition_version_id": 17,
+            "calories": 190,
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "get_pantry_item_by_id", return_value=item),
+            patch.object(app, "unlink_pantry_item_nutrition") as unlink,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Remove nutrition link",
+                }
+            })
+
+        unlink.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_organize_nutrition_unlink_confirmation",
+        )
+        self.assertIn("Nothing has been changed", send.call_args.args[0])
+
+    def test_confirmed_pantry_nutrition_unlink_preserves_food(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": (
+                "pantry_organize_nutrition_unlink_confirmation"
+            ),
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Ground turkey",
+                "_pantry_organizer_nutrition_return": True,
+            },
+        }
+        unlinked = {
+            "pantry_item_id": 42,
+            "display_name": "Ground turkey",
+            "food_id": None,
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "unlink_pantry_item_nutrition",
+                return_value=unlinked,
+            ) as unlink,
+            patch.object(app, "show_pantry_organize_nutrition") as show,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        unlink.assert_called_once_with(42)
+        show.assert_called_once_with(
+            chat_id=123,
+            pantry_item_id=42,
+            page=0,
+        )
+        self.assertIn("versions, recipes, and previous logs", send.call_args.args[0])
 
     def test_pantry_organizer_delete_requires_confirmation(self) -> None:
         conversation = {

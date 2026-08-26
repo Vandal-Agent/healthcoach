@@ -342,6 +342,29 @@ class PantryTests(unittest.TestCase):
         item = pantry.list_pantry_items()[0]
         self.assertIsNone(item["food_id"])
 
+    def test_unlink_nutrition_preserves_pantry_and_saved_food(self) -> None:
+        added = pantry.add_pantry_item(
+            display_name="Beans on pantry shelf",
+            food_id=self.food_id,
+            source="barcode",
+            barcode_text="036000291452",
+            storage_area="pantry_shelf",
+            food_category="canned_jarred",
+        )
+
+        unlinked = pantry.unlink_pantry_item_nutrition(
+            added["pantry_item_id"]
+        )
+
+        self.assertEqual(unlinked["display_name"], "Beans on pantry shelf")
+        self.assertEqual(unlinked["storage_area"], "pantry_shelf")
+        self.assertEqual(unlinked["food_category"], "canned_jarred")
+        self.assertEqual(unlinked["source"], "manual")
+        self.assertIsNone(unlinked["food_id"])
+        self.assertIsNone(unlinked["barcode_text"])
+        self.assertIsNone(unlinked["nutrition_version_id"])
+        self.assertIsNotNone(library.get_food(self.food_id))
+
     def test_remove_and_clear_do_not_change_saved_food(self) -> None:
         first = pantry.add_pantry_item(display_name="Rice")
         pantry.add_pantry_item(display_name="Cucumbers")

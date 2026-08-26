@@ -328,6 +328,7 @@ def list_pantry_items() -> list[dict[str, Any]]:
                 foods.verification_status,
                 foods.verification_source,
                 nutrition_versions.nutrition_version_id,
+                nutrition_versions.version_number,
                 nutrition_versions.calories,
                 nutrition_versions.protein_g,
                 nutrition_versions.carbohydrates_g,
@@ -423,6 +424,36 @@ def link_pantry_item_to_food(
                 int(pantry_item_id),
             ),
         )
+        connection.commit()
+
+    return next(
+        item
+        for item in list_pantry_items()
+        if int(item["pantry_item_id"]) == int(pantry_item_id)
+    )
+
+
+def unlink_pantry_item_nutrition(
+    pantry_item_id: int,
+) -> dict[str, Any]:
+    """Remove only one Pantry item's Food/nutrition association."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE pantry_items
+            SET
+                food_id = NULL,
+                source = 'manual',
+                barcode_text = NULL,
+                updated_at = ?
+            WHERE pantry_item_id = ?
+            """,
+            (current_timestamp(), int(pantry_item_id)),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Pantry item not found: {pantry_item_id}")
         connection.commit()
 
     return next(
