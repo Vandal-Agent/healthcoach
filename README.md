@@ -30,6 +30,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   approved-source nutrition; an exact verified lookup; a barcode; a confirmed
   Nutrition Facts photo; or a complete manual label without duplicating the
   Pantry item or inventing nutrition
+- Filters existing Pantry nutrition choices to close food-name and product-form
+  matches so unrelated records are never presented as likely links
 - Saves Pantry meal ideas as reusable recipes and builds new recipes from a
   numbered, paginated My Pantry chooser backed by version-linked Saved Food
   ingredients, explicit amounts, serving yields, calculated per-serving

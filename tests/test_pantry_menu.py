@@ -717,6 +717,39 @@ class PantryMenuTests(unittest.TestCase):
                 "nutrition_version_id": 13,
                 "calories": 30,
             },
+            {
+                "food_id": 4,
+                "canonical_name": "BLACK BEANS",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "fdc.nal.usda.gov",
+                "nutrition_version_id": 14,
+                "calories": 110,
+            },
+            {
+                "food_id": 5,
+                "canonical_name": "Organic Extra Virgin Olive Oil",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "user_entered",
+                "nutrition_version_id": 15,
+                "calories": 120,
+            },
+            {
+                "food_id": 6,
+                "canonical_name": "Olives",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "user_entered",
+                "nutrition_version_id": 16,
+                "calories": 20,
+            },
         ]
 
         with patch.object(
@@ -728,15 +761,50 @@ class PantryMenuTests(unittest.TestCase):
 
         self.assertEqual(
             [food["food_id"] for food in matches],
-            [2, 1],
+            [6, 2],
         )
 
         message = app.format_pantry_saved_food_choices(
             matches,
             pantry_name="black olives",
         )
-        self.assertIn("Likely name matches are listed first", message)
+        self.assertIn("Only close name matches are shown", message)
         self.assertIn("fdc.nal.usda.gov", message)
+
+    def test_existing_nutrition_rejects_generic_cheese_matches(self) -> None:
+        foods = [
+            {
+                "food_id": 1,
+                "canonical_name": "Colby-Jack Cheese",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "user_entered",
+                "nutrition_version_id": 11,
+                "calories": 70,
+            },
+            {
+                "food_id": 2,
+                "canonical_name": "Blue Cheese Crumbles",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "fdc.nal.usda.gov",
+                "nutrition_version_id": 12,
+                "calories": 100,
+            },
+        ]
+
+        with patch.object(
+            app,
+            "list_nutrition_ready_foods",
+            return_value=foods,
+        ):
+            matches = app.pantry_linkable_foods("blue cheese crumbles")
+
+        self.assertEqual([food["food_id"] for food in matches], [2])
 
     def test_skipping_nutrition_item_changes_nothing(self) -> None:
         pantry_item = {

@@ -368,8 +368,11 @@ Supported workflow:
   silently accept a provider result.
 - Include verified user-entered, package-label, USDA, and other approved-source
   Foods in the existing-nutrition chooser. Exclude recipes, restaurant items,
-  estimates, and untrusted records. Rank likely name matches first for review,
-  but never select or link a match automatically.
+  estimates, and untrusted records. Show only close food-name matches: a shared
+  color, preparation word, or broad food family is not enough, and different
+  product forms such as olives and olive oil remain separate. Never select or
+  link a match automatically. When no close match exists, return the user to
+  verified lookup, barcode, label-photo, and manual-entry choices.
 - Preserve the Pantry display name, storage area, and food type when nutrition
   is linked. Linking points the existing Pantry row to the trusted Food record;
   it does not add a duplicate Pantry item or log anything as eaten.

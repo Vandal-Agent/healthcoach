@@ -5588,7 +5588,7 @@ def format_pantry_saved_food_choices(
         f"Pantry item: {pantry_name}",
         f"Page {safe_page + 1} of {total_pages}",
         "",
-        "Likely name matches are listed first. Review the product, serving, "
+        "Only close name matches are shown. Review the product, serving, "
         "and source before linking.",
         "",
     ]
@@ -5880,11 +5880,53 @@ def show_pantry_nutrition_options(
 
 
 def pantry_linkable_foods(pantry_name: str) -> list[dict]:
-    """Return trusted nutrition Foods with likely name matches first."""
+    """Return only trusted nutrition Foods with a close name match."""
     requested_tokens = normalized_food_tokens(pantry_name)
 
-    def match_rank(food: dict) -> tuple:
-        candidate_tokens = normalized_food_tokens(
+    # A shared color, preparation word, or broad food family is not enough
+    # to suggest that two Pantry names describe the same food. The chooser is
+    # deliberately conservative because verified lookup and manual label
+    # entry remain available when no close existing record is found.
+    weak_shared_tokens = {
+        "black",
+        "blue",
+        "brown",
+        "cheese",
+        "crumbled",
+        "crumble",
+        "diced",
+        "extra",
+        "fresh",
+        "frozen",
+        "green",
+        "large",
+        "light",
+        "medium",
+        "original",
+        "red",
+        "shredded",
+        "sliced",
+        "small",
+        "white",
+        "yellow",
+    }
+    product_form_tokens = {
+        "broth",
+        "butter",
+        "cream",
+        "dressing",
+        "flour",
+        "juice",
+        "milk",
+        "oil",
+        "powder",
+        "sauce",
+        "soup",
+        "yogurt",
+    }
+
+    def candidate_tokens(food: dict) -> set[str]:
+        return normalized_food_tokens(
             " ".join(
                 str(value)
                 for value in (
@@ -5894,14 +5936,44 @@ def pantry_linkable_foods(pantry_name: str) -> list[dict]:
                 if value
             )
         )
-        overlap = len(requested_tokens & candidate_tokens)
-        exact = bool(requested_tokens) and requested_tokens == candidate_tokens
+
+    def is_close_match(food: dict) -> bool:
+        tokens = candidate_tokens(food)
+        if not requested_tokens or not tokens:
+            return False
+
+        # Do not suggest a different product form merely because its source
+        # ingredient has the same name, such as olives versus olive oil.
+        if (
+            requested_tokens & product_form_tokens
+        ) != (tokens & product_form_tokens):
+            return False
+
+        if requested_tokens == tokens:
+            return True
+
+        if requested_tokens.issubset(tokens):
+            return True
+
+        if tokens.issubset(requested_tokens):
+            return len(tokens) >= 2 or not (
+                tokens & weak_shared_tokens
+            )
+
+        overlap = requested_tokens & tokens
+        meaningful_overlap = overlap - weak_shared_tokens
+        return len(overlap) >= 2 or bool(meaningful_overlap)
+
+    def match_rank(food: dict) -> tuple:
+        tokens = candidate_tokens(food)
+        overlap = len(requested_tokens & tokens)
+        exact = bool(requested_tokens) and requested_tokens == tokens
         contained = bool(requested_tokens) and (
-            requested_tokens.issubset(candidate_tokens)
-            or candidate_tokens.issubset(requested_tokens)
+            requested_tokens.issubset(tokens)
+            or tokens.issubset(requested_tokens)
         )
         return (
-            0 if exact else 1 if contained else 2 if overlap else 3,
+            0 if exact else 1 if contained else 2,
             -overlap,
             str(food.get("canonical_name") or "").lower(),
             int(food.get("food_id") or 0),
@@ -5914,6 +5986,7 @@ def pantry_linkable_foods(pantry_name: str) -> list[dict]:
             if is_trusted_saved_food(food)
             and food.get("restaurant") is None
             and str(food.get("food_type") or "food") in {"food", "drink"}
+            and is_close_match(food)
         ),
         key=match_rank,
     )
@@ -5934,7 +6007,10 @@ def show_pantry_saved_food_page(
     )
     if not foods:
         send_telegram_msg(
-            "There are no trusted nutrition-ready Foods to link yet.",
+            "I couldn't find a close existing nutrition match for this "
+            "Pantry item. Unrelated Foods were not shown.\n\n"
+            "Try verified lookup, scan the barcode, photograph the label, "
+            "or enter the nutrition manually.",
             chat_id=chat_id,
         )
         show_pantry_nutrition_options(
