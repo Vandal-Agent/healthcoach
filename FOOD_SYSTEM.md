@@ -355,6 +355,21 @@ Supported workflow:
   items. Treat punctuation and a standalone "and" or ampersand as equivalent
   for Pantry identity without broadly fuzzy-matching different products.
   Limit each review session to 30 items.
+- Select Complete Pantry nutrition to work through only the Pantry items that
+  do not yet have usable linked nutrition. The queue uses 10-item pages and
+  allows an item to be skipped for the current review session without changing
+  it.
+- Complete an item's nutrition by explicitly linking a nutrition-ready Saved
+  Food, confirming one exact verified lookup, scanning its barcode,
+  photographing and confirming its complete Nutrition Facts label, or entering
+  its package nutrition manually. Never infer nutrition from the Pantry name or
+  silently accept a provider result.
+- Preserve the Pantry display name, storage area, and food type when nutrition
+  is linked. Linking points the existing Pantry row to the trusted Food record;
+  it does not add a duplicate Pantry item or log anything as eaten.
+- Require usable active nutrition with calories before a Food may be linked.
+  Missing or unreadable label fields remain missing and block the label-photo
+  path instead of being changed to zero.
 - Remove one Pantry item without deleting its Saved Food or Food Ledger
   history.
 - Clear the entire Pantry only after explicit confirmation.

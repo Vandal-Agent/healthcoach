@@ -69,6 +69,7 @@ from food.pantry import (
     add_pantry_items,
     clean_pantry_name,
     clear_pantry,
+    link_pantry_item_to_food,
     list_pantry_items,
     parse_pantry_item_list,
     remove_pantry_item,
@@ -625,12 +626,19 @@ def menu_reply_markup(message):
         ]
         one_time = True
     elif "Barcode Product\n\n" in message:
-        rows = [
-            ["Add to Pantry", "Log It"],
-            ["Save Product"],
-            ["Scan Another"],
-            ["Back", "Cancel"],
-        ]
+        if "Selected Pantry item:" in message:
+            rows = [
+                ["Link nutrition"],
+                ["Save Product", "Scan Another"],
+                ["Back", "Cancel"],
+            ]
+        else:
+            rows = [
+                ["Add to Pantry", "Log It"],
+                ["Save Product"],
+                ["Scan Another"],
+                ["Back", "Cancel"],
+            ]
     elif "Photo Tools Menu\n\n" in message:
         rows = [
             ["Read menu photo"],
@@ -654,6 +662,7 @@ def menu_reply_markup(message):
         or "Send a clear photo of the actual meal." in message
         or "Send a clear photo of a product barcode." in message
         or "Send a clear photo of the Nutrition Facts label." in message
+        or "Send a clear, straight-on photo of the Nutrition Facts" in message
         or "Send a clear photo of one Pantry shelf." in message
         or "Type the corrected Pantry item name." in message
         or "Type the new Pantry item name." in message
@@ -683,6 +692,7 @@ def menu_reply_markup(message):
             ["Scan product into Pantry"],
             ["Add items from shelf photo"],
             ["Organize pantry"],
+            ["Complete Pantry nutrition"],
             ["Get meal ideas", "Smart Pantry swaps"],
             ["Shopping list"],
             ["Remove pantry item", "Clear pantry"],
@@ -725,6 +735,58 @@ def menu_reply_markup(message):
             ["Change storage and food type"],
             ["Back", "Cancel"],
         ]
+        one_time = True
+    elif message.startswith("Complete Pantry Nutrition — Choose Item"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index : index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        match = re.search(r"Page (\d+) of (\d+)", message)
+        if match:
+            current_page, total_pages = map(int, match.groups())
+            navigation = []
+            if current_page > 1:
+                navigation.append("Previous")
+            if current_page < total_pages:
+                navigation.append("Next")
+            if navigation:
+                rows.append(navigation)
+        rows.append(["Back", "Cancel"])
+        one_time = True
+    elif message.startswith("Complete Pantry Nutrition — Options"):
+        rows = [
+            ["Link Saved Food"],
+            ["Try verified lookup"],
+            ["Scan barcode", "Photograph label"],
+            ["Enter manually", "Skip"],
+            ["Back", "Cancel"],
+        ]
+        one_time = True
+    elif message.startswith("Complete Pantry Nutrition — Saved Foods"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index : index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        match = re.search(r"Page (\d+) of (\d+)", message)
+        if match:
+            current_page, total_pages = map(int, match.groups())
+            navigation = []
+            if current_page > 1:
+                navigation.append("Previous")
+            if current_page < total_pages:
+                navigation.append("Next")
+            if navigation:
+                rows.append(navigation)
+        rows.append(["Back", "Cancel"])
+        one_time = True
+    elif (
+        message.startswith("Link this nutrition to the Pantry item?")
+        or message.startswith("Use this verified nutrition for the Pantry item?")
+        or message.startswith("Use this Nutrition Facts label for the Pantry item?")
+    ):
+        rows = [["Yes", "No"], ["Cancel"]]
         one_time = True
     elif message.startswith("Pantry Organizer — Storage Area"):
         labels = list(PANTRY_STORAGE_AREAS.values())
@@ -3693,6 +3755,7 @@ def format_barcode_product(
     *,
     barcode: str,
     saved: bool = False,
+    pantry_item_name: str | None = None,
 ) -> str:
     food = dict(result.get("food") or {})
     nutrition = dict(result.get("nutrition") or {})
@@ -3749,10 +3812,21 @@ def format_barcode_product(
         ),
         "",
         (
-            "Reply Add to Pantry, Save Product, Log It, "
-            "Scan Another, Back, or Cancel."
+            "Reply Link nutrition, Save Product, Scan Another, Back, "
+            "or Cancel."
+            if pantry_item_name
+            else (
+                "Reply Add to Pantry, Save Product, Log It, "
+                "Scan Another, Back, or Cancel."
+            )
         ),
     ])
+
+    if pantry_item_name:
+        lines.insert(
+            -2,
+            f"Selected Pantry item: {pantry_item_name}",
+        )
 
     return "\n".join(lines)
 
@@ -4741,12 +4815,13 @@ def healthcoach_pantry_menu_text() -> str:
         "3. Scan product into Pantry\n"
         "4. Add items from shelf photo\n"
         "5. Organize pantry\n"
-        "6. Get meal ideas\n"
-        "7. Smart Pantry swaps\n"
-        "8. Shopping list\n"
-        "9. Remove pantry item\n"
-        "10. Clear pantry\n"
-        "11. Back\n\n"
+        "6. Complete Pantry nutrition\n"
+        "7. Get meal ideas\n"
+        "8. Smart Pantry swaps\n"
+        "9. Shopping list\n"
+        "10. Remove pantry item\n"
+        "11. Clear pantry\n"
+        "12. Back\n\n"
         "Pantry items stay available until you remove or clear "
         "them. Quantities are not tracked."
     )
@@ -5140,6 +5215,8 @@ def format_shopping_item_choices(
 
 
 PANTRY_PAGE_SIZE = 12
+PANTRY_NUTRITION_PAGE_SIZE = 10
+PANTRY_SAVED_FOOD_PAGE_SIZE = 10
 
 
 def pantry_page(
@@ -5187,6 +5264,45 @@ def pantry_nutrition_ready(item: dict) -> bool:
     return (
         item.get("nutrition_version_id") is not None
         and item.get("calories") is not None
+    )
+
+
+def pantry_needs_nutrition(item: dict) -> bool:
+    """Return whether one Pantry item still needs a trusted Food link."""
+    return not pantry_nutrition_ready(item)
+
+
+def simple_page(
+    items: list[dict],
+    *,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict], int, int]:
+    """Return one clamped page without changing item order."""
+    total_pages = max(1, (len(items) + page_size - 1) // page_size)
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * page_size
+    return items[start : start + page_size], safe_page, total_pages
+
+
+def pantry_nutrition_items(
+    items: list[dict],
+    *,
+    skipped_ids: list[int] | None = None,
+) -> list[dict]:
+    """Return stable nutrition-incomplete items not skipped this session."""
+    skipped = {int(value) for value in (skipped_ids or [])}
+    return sorted(
+        (
+            item
+            for item in items
+            if pantry_needs_nutrition(item)
+            and int(item.get("pantry_item_id") or 0) not in skipped
+        ),
+        key=lambda item: (
+            str(item.get("display_name") or "").lower(),
+            int(item.get("pantry_item_id") or 0),
+        ),
     )
 
 
@@ -5398,6 +5514,123 @@ def format_pantry_organize_action(item: dict) -> str:
     )
 
 
+def format_pantry_nutrition_choices(
+    items: list[dict],
+    *,
+    page: int = 0,
+    total_incomplete: int | None = None,
+) -> str:
+    """Show one page of Pantry items that need nutrition."""
+    page_items, safe_page, total_pages = simple_page(
+        items,
+        page=page,
+        page_size=PANTRY_NUTRITION_PAGE_SIZE,
+    )
+    lines = [
+        "Complete Pantry Nutrition — Choose Item",
+        f"Page {safe_page + 1} of {total_pages}",
+        "",
+    ]
+    lines.extend(
+        f"{index}. {item.get('display_name') or 'Pantry item'}"
+        for index, item in enumerate(page_items, start=1)
+    )
+    lines.extend([
+        "",
+        (
+            f"Needs nutrition: {int(total_incomplete)} item(s)"
+            if total_incomplete is not None
+            else f"Needs nutrition: {len(items)} item(s)"
+        ),
+        "Choose a number, Next, Previous, Back, or Cancel.",
+    ])
+    return "\n".join(lines)
+
+
+def format_pantry_nutrition_options(item: dict) -> str:
+    """Show trusted completion choices for one Pantry item."""
+    return (
+        "Complete Pantry Nutrition — Options\n\n"
+        f"Item: {item.get('display_name') or 'Pantry item'}\n\n"
+        "1. Link Saved Food\n"
+        "2. Try verified lookup\n"
+        "3. Scan barcode\n"
+        "4. Photograph label\n"
+        "5. Enter manually\n"
+        "6. Skip\n"
+        "7. Back\n\n"
+        "Nothing will be linked or saved without confirmation."
+    )
+
+
+def format_pantry_saved_food_choices(
+    foods: list[dict],
+    *,
+    pantry_name: str,
+    page: int = 0,
+) -> str:
+    """Show one page of nutrition-ready Saved Foods to link."""
+    page_foods, safe_page, total_pages = simple_page(
+        foods,
+        page=page,
+        page_size=PANTRY_SAVED_FOOD_PAGE_SIZE,
+    )
+    lines = [
+        "Complete Pantry Nutrition — Saved Foods",
+        f"Pantry item: {pantry_name}",
+        f"Page {safe_page + 1} of {total_pages}",
+        "",
+    ]
+    for index, food in enumerate(page_foods, start=1):
+        lines.append(
+            f"{index}. {food.get('canonical_name') or 'Saved Food'} — "
+            f"{food.get('serving_description') or '1 serving'} — "
+            f"{format_display_number(float(food.get('calories') or 0), decimals=0)} cal"
+        )
+    lines.extend([
+        "",
+        "Choose a number, Next, Previous, Back, or Cancel.",
+    ])
+    return "\n".join(lines)
+
+
+def format_pantry_nutrition_review(
+    *,
+    heading: str,
+    pantry_name: str,
+    food: dict,
+    nutrition: dict,
+    source: str,
+) -> str:
+    """Format one explicit Pantry nutrition-link confirmation."""
+    def nutrient(field: str, suffix: str) -> str:
+        value = nutrition.get(field)
+        return (
+            "not available"
+            if value is None
+            else f"{format_display_number(float(value))} {suffix}".strip()
+        )
+
+    return (
+        f"{heading}\n\n"
+        f"Pantry item: {pantry_name}\n"
+        f"Food: {food.get('canonical_name') or pantry_name}\n"
+        "Serving: "
+        f"{food.get('serving_description') or '1 serving'}\n"
+        f"Source: {source}\n\n"
+        f"Calories: {nutrient('calories', 'cal')}\n"
+        f"Protein: {nutrient('protein_g', 'g')}\n"
+        f"Carbohydrates: {nutrient('carbohydrates_g', 'g')}\n"
+        f"Fat: {nutrient('fat_g', 'g')}\n"
+        f"Fiber: {nutrient('fiber_g', 'g')}\n"
+        f"Sugar: {nutrient('sugar_g', 'g')}\n"
+        f"Sodium: {nutrient('sodium_mg', 'mg')}\n\n"
+        "Nothing has been linked or saved yet.\n\n"
+        "1. Yes\n"
+        "2. No"
+    )
+
+
 def format_pantry_storage_choices(item_name: str) -> str:
     lines = [
         "Pantry Organizer — Storage Area",
@@ -5496,6 +5729,229 @@ def show_pantry_organizer_page(
         chat_id=chat_id,
     )
     return True
+
+
+def get_pantry_item_by_id(pantry_item_id: int) -> dict | None:
+    """Return one current Pantry item from the joined Pantry view."""
+    return next(
+        (
+            item
+            for item in list_pantry_items()
+            if int(item["pantry_item_id"]) == int(pantry_item_id)
+        ),
+        None,
+    )
+
+
+def show_pantry_nutrition_queue(
+    *,
+    chat_id: int | str,
+    page: int = 0,
+    skipped_ids: list[int] | None = None,
+) -> bool:
+    """Show one page of Pantry items needing trusted nutrition."""
+    all_items = list_pantry_items()
+    all_incomplete = [
+        item for item in all_items if pantry_needs_nutrition(item)
+    ]
+    remaining = pantry_nutrition_items(
+        all_items,
+        skipped_ids=skipped_ids,
+    )
+    if not remaining:
+        update_conversation(
+            chat_id=chat_id,
+            current_step="pantry",
+            known_data={
+                "pantry_nutrition_skipped_ids": [],
+                "pantry_nutrition_item_id": None,
+            },
+            missing_fields=[],
+        )
+        if all_incomplete:
+            message = (
+                "No more unskipped Pantry items remain in this session.\n\n"
+                f"{len(all_incomplete)} item(s) still need nutrition. "
+                "Choose Complete Pantry nutrition when you want to review "
+                "them again."
+            )
+        else:
+            message = (
+                "Pantry nutrition is complete. Every Pantry item has linked "
+                "nutrition."
+            )
+        send_telegram_msg(
+            message + "\n\n" + healthcoach_pantry_menu_text(),
+            chat_id=chat_id,
+        )
+        return False
+
+    page_items, safe_page, _ = simple_page(
+        remaining,
+        page=page,
+        page_size=PANTRY_NUTRITION_PAGE_SIZE,
+    )
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_nutrition_select",
+        known_data={
+            "pantry_nutrition_page": safe_page,
+            "pantry_nutrition_skipped_ids": list(skipped_ids or []),
+            "pantry_nutrition_item_ids": [
+                int(item["pantry_item_id"])
+                for item in page_items
+            ],
+            "pantry_nutrition_item_id": None,
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_nutrition_choices(
+            remaining,
+            page=safe_page,
+            total_incomplete=len(all_incomplete),
+        ),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def show_pantry_nutrition_options(
+    *,
+    chat_id: int | str,
+    pantry_item_id: int,
+    known_data: dict,
+) -> bool:
+    """Show completion methods for one current Pantry item."""
+    item = get_pantry_item_by_id(pantry_item_id)
+    if item is None:
+        send_telegram_msg(
+            "That Pantry item is no longer available.",
+            chat_id=chat_id,
+        )
+        show_pantry_nutrition_queue(
+            chat_id=chat_id,
+            page=int(known_data.get("pantry_nutrition_page") or 0),
+            skipped_ids=list(
+                known_data.get("pantry_nutrition_skipped_ids") or []
+            ),
+        )
+        return False
+    if pantry_nutrition_ready(item):
+        send_telegram_msg(
+            "That Pantry item already has nutrition linked.",
+            chat_id=chat_id,
+        )
+        show_pantry_nutrition_queue(
+            chat_id=chat_id,
+            page=int(known_data.get("pantry_nutrition_page") or 0),
+            skipped_ids=list(
+                known_data.get("pantry_nutrition_skipped_ids") or []
+            ),
+        )
+        return False
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_nutrition_options",
+        known_data={
+            **known_data,
+            "pantry_nutrition_item_id": int(pantry_item_id),
+            "pantry_nutrition_item_name": item["display_name"],
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_nutrition_options(item),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def show_pantry_saved_food_page(
+    *,
+    chat_id: int | str,
+    known_data: dict,
+    page: int = 0,
+) -> bool:
+    """Show nutrition-ready Saved Foods for one Pantry item."""
+    foods = sorted(
+        (
+            food
+            for food in list_user_saved_foods()
+            if food.get("calories") is not None
+            and food.get("nutrition_version_id") is not None
+        ),
+        key=lambda food: (
+            str(food.get("canonical_name") or "").lower(),
+            int(food.get("food_id") or 0),
+        ),
+    )
+    if not foods:
+        send_telegram_msg(
+            "There are no nutrition-ready Saved Foods to link yet.",
+            chat_id=chat_id,
+        )
+        show_pantry_nutrition_options(
+            chat_id=chat_id,
+            pantry_item_id=int(
+                known_data.get("pantry_nutrition_item_id") or 0
+            ),
+            known_data=known_data,
+        )
+        return False
+    page_foods, safe_page, _ = simple_page(
+        foods,
+        page=page,
+        page_size=PANTRY_SAVED_FOOD_PAGE_SIZE,
+    )
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_nutrition_saved_food_select",
+        known_data={
+            **known_data,
+            "pantry_nutrition_saved_food_page": safe_page,
+            "pantry_nutrition_saved_food_ids": [
+                int(food["food_id"]) for food in page_foods
+            ],
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_saved_food_choices(
+            foods,
+            pantry_name=str(
+                known_data.get("pantry_nutrition_item_name")
+                or "Pantry item"
+            ),
+            page=safe_page,
+        ),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def finish_pantry_nutrition_link(
+    *,
+    chat_id: int | str,
+    known_data: dict,
+    pantry_item: dict,
+    food_name: str,
+) -> None:
+    """Report one completed link and continue the guided queue."""
+    send_telegram_msg(
+        "Pantry nutrition linked.\n\n"
+        f"Pantry item: {pantry_item.get('display_name')}\n"
+        f"Nutrition source food: {food_name}\n\n"
+        "Nothing was logged as eaten.",
+        chat_id=chat_id,
+    )
+    show_pantry_nutrition_queue(
+        chat_id=chat_id,
+        page=int(known_data.get("pantry_nutrition_page") or 0),
+        skipped_ids=list(
+            known_data.get("pantry_nutrition_skipped_ids") or []
+        ),
+    )
 
 
 def show_pantry_organize_action(
@@ -7565,6 +8021,7 @@ def process_telegram_update(update):
             "await_barcode_photo",
             "await_barcode_number",
             "barcode_teach_label_photo",
+            "pantry_nutrition_label_photo",
         }
         caption_intent = photo_intent_from_caption(caption)
 
@@ -7622,9 +8079,10 @@ def process_telegram_update(update):
             }
         )
 
-        label_photo = (
-            photo_step == "barcode_teach_label_photo"
-        )
+        label_photo = photo_step in {
+            "barcode_teach_label_photo",
+            "pantry_nutrition_label_photo",
+        }
 
         food_photo = (
             photo_step == "await_food_photo"
@@ -7715,6 +8173,48 @@ def process_telegram_update(update):
                         "Try another close, straight-on photo that "
                         "shows the serving size and all nutrient lines."
                     )
+                elif photo_step == "pantry_nutrition_label_photo":
+                    photo_known_data = dict(
+                        (photo_conversation or {}).get("known_data") or {}
+                    )
+                    pantry_item = get_pantry_item_by_id(
+                        int(
+                            photo_known_data.get("pantry_nutrition_item_id")
+                            or 0
+                        )
+                    )
+                    if pantry_item is None:
+                        response_message = (
+                            "That Pantry item is no longer available. "
+                            "Nothing was saved."
+                        )
+                    else:
+                        update_conversation(
+                            chat_id=chat_id,
+                            current_step=(
+                                "pantry_nutrition_label_confirmation"
+                            ),
+                            known_data={
+                                **photo_known_data,
+                                "pantry_nutrition_label_result": label_result,
+                            },
+                            missing_fields=[],
+                        )
+                        response_message = format_pantry_nutrition_review(
+                            heading=(
+                                "Use this Nutrition Facts label for the "
+                                "Pantry item?"
+                            ),
+                            pantry_name=str(pantry_item["display_name"]),
+                            food={
+                                "canonical_name": pantry_item["display_name"],
+                                "serving_description": label_result.get(
+                                    "serving_description"
+                                ),
+                            },
+                            nutrition=label_result,
+                            source="Package Nutrition Facts label",
+                        )
                 else:
                     update_conversation(
                         chat_id=chat_id,
@@ -7786,6 +8286,14 @@ def process_telegram_update(update):
                                 barcode=barcode,
                                 saved=bool(
                                     result.get("saved_food_id")
+                                ),
+                                pantry_item_name=(
+                                    dict(
+                                        (photo_conversation or {}).get(
+                                            "known_data"
+                                        )
+                                        or {}
+                                    ).get("pantry_nutrition_item_name")
                                 ),
                             )
                         )
@@ -8887,6 +9395,18 @@ def process_telegram_update(update):
 
             if lowered in {
                 "6",
+                "complete pantry nutrition",
+                "complete nutrition",
+                "pantry nutrition",
+            }:
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    skipped_ids=[],
+                )
+                return
+
+            if lowered in {
+                "7",
                 "get meal ideas",
                 "meal ideas",
                 "pantry meal ideas",
@@ -8918,7 +9438,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "7",
+                "8",
                 "smart pantry swaps",
                 "smart pantry swap",
                 "pantry swaps",
@@ -8928,7 +9448,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "8",
+                "9",
                 "shopping list",
                 "my shopping list",
             }:
@@ -8945,7 +9465,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "9",
+                "10",
                 "remove",
                 "remove pantry item",
             }:
@@ -8953,7 +9473,7 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "10",
+                "11",
                 "clear",
                 "clear pantry",
             }:
@@ -8983,7 +9503,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"11", "back"}:
+            if lowered in {"12", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -10486,6 +11006,518 @@ def process_telegram_update(update):
             )
             return
 
+        if current_step == "pantry_nutrition_select":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            page = int(known_data.get("pantry_nutrition_page") or 0)
+            skipped_ids = list(
+                known_data.get("pantry_nutrition_skipped_ids") or []
+            )
+            if lowered in {"next", "next page"}:
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    page=page + 1,
+                    skipped_ids=skipped_ids,
+                )
+                return
+            if lowered in {"previous", "previous page", "prev"}:
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    page=page - 1,
+                    skipped_ids=skipped_ids,
+                )
+                return
+            pantry_ids = list(
+                known_data.get("pantry_nutrition_item_ids") or []
+            )
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(pantry_ids):
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    page=page,
+                    skipped_ids=skipped_ids,
+                )
+                return
+            show_pantry_nutrition_options(
+                chat_id=chat_id,
+                pantry_item_id=int(pantry_ids[selection - 1]),
+                known_data=known_data,
+            )
+            return
+
+        if current_step == "pantry_nutrition_options":
+            pantry_item_id = int(
+                known_data.get("pantry_nutrition_item_id") or 0
+            )
+            pantry_item = get_pantry_item_by_id(pantry_item_id)
+            if pantry_item is None:
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    skipped_ids=list(
+                        known_data.get("pantry_nutrition_skipped_ids") or []
+                    ),
+                )
+                return
+            if lowered in {"7", "back"}:
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    page=int(
+                        known_data.get("pantry_nutrition_page") or 0
+                    ),
+                    skipped_ids=list(
+                        known_data.get("pantry_nutrition_skipped_ids") or []
+                    ),
+                )
+                return
+            if lowered in {"1", "link saved food", "saved food"}:
+                show_pantry_saved_food_page(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                )
+                return
+            if lowered in {"2", "try verified lookup", "verified lookup"}:
+                send_telegram_msg(
+                    "I'm checking for one exact verified nutrition match. "
+                    "This may take a moment.",
+                    chat_id=chat_id,
+                )
+                try:
+                    result = lookup_official_nutrition(
+                        restaurant=None,
+                        food_name=str(pantry_item["display_name"]),
+                        size=None,
+                        brand=None,
+                    )
+                except Exception:
+                    logging.exception("Pantry verified nutrition lookup failed")
+                    send_telegram_msg(
+                        "I couldn't complete the verified lookup right now. "
+                        "Nothing was linked or saved.",
+                        chat_id=chat_id,
+                    )
+                    return
+                if not result.get("found"):
+                    notes = list(result.get("notes") or [])
+                    note_text = (
+                        "\n".join(f"- {note}" for note in notes)
+                        or "- No complete exact verified match was found."
+                    )
+                    send_telegram_msg(
+                        "I couldn't find one complete exact verified match.\n\n"
+                        f"{note_text}\n\n"
+                        "Nothing was linked or saved.",
+                        chat_id=chat_id,
+                    )
+                    show_pantry_nutrition_options(
+                        chat_id=chat_id,
+                        pantry_item_id=pantry_item_id,
+                        known_data=known_data,
+                    )
+                    return
+                provider_food = dict(result.get("food") or {})
+                provider_nutrition = dict(result.get("nutrition") or {})
+                verification = dict(result.get("verification") or {})
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_nutrition_verified_confirmation",
+                    known_data={
+                        **known_data,
+                        "pantry_nutrition_provider_result": result,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_nutrition_review(
+                        heading=(
+                            "Use this verified nutrition for the Pantry item?"
+                        ),
+                        pantry_name=str(pantry_item["display_name"]),
+                        food=provider_food,
+                        nutrition=provider_nutrition,
+                        source=str(
+                            verification.get("source") or "verified source"
+                        ),
+                    ),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"3", "scan barcode", "barcode"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="await_barcode_photo",
+                    known_data={
+                        **known_data,
+                        "pantry_nutrition_mode": True,
+                        "pantry_scan_mode": False,
+                    },
+                    missing_fields=["barcode_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear photo of the product barcode for "
+                    f"{pantry_item['display_name']}.\n\n"
+                    "You can also type the complete barcode number.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {
+                "4",
+                "photograph label",
+                "photo label",
+                "nutrition label",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_nutrition_label_photo",
+                    known_data=known_data,
+                    missing_fields=["nutrition_label_photo"],
+                )
+                send_telegram_msg(
+                    "Send a clear, straight-on photo of the Nutrition Facts "
+                    f"label for {pantry_item['display_name']}.\n\n"
+                    "Include the serving size and every nutrient line. "
+                    "Nothing will be saved until you confirm it.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"5", "enter manually", "manual"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_food_add_serving",
+                    known_data={
+                        **known_data,
+                        "_pantry_nutrition_return": True,
+                        "_saved_food_name": str(pantry_item["display_name"]),
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "What is one serving?\n\n"
+                    "Examples: 1 cup, 28 g, 4 ounces, or 1 package.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"6", "skip"}:
+                skipped_ids = list(
+                    known_data.get("pantry_nutrition_skipped_ids") or []
+                )
+                if pantry_item_id not in skipped_ids:
+                    skipped_ids.append(pantry_item_id)
+                send_telegram_msg(
+                    f"Skipped {pantry_item['display_name']} for this session. "
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    page=int(
+                        known_data.get("pantry_nutrition_page") or 0
+                    ),
+                    skipped_ids=skipped_ids,
+                )
+                return
+            show_pantry_nutrition_options(
+                chat_id=chat_id,
+                pantry_item_id=pantry_item_id,
+                known_data=known_data,
+            )
+            return
+
+        if current_step == "pantry_nutrition_saved_food_select":
+            page = int(
+                known_data.get("pantry_nutrition_saved_food_page") or 0
+            )
+            if lowered == "back":
+                show_pantry_nutrition_options(
+                    chat_id=chat_id,
+                    pantry_item_id=int(
+                        known_data.get("pantry_nutrition_item_id") or 0
+                    ),
+                    known_data=known_data,
+                )
+                return
+            if lowered in {"next", "next page"}:
+                show_pantry_saved_food_page(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    page=page + 1,
+                )
+                return
+            if lowered in {"previous", "previous page", "prev"}:
+                show_pantry_saved_food_page(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    page=page - 1,
+                )
+                return
+            food_ids = list(
+                known_data.get("pantry_nutrition_saved_food_ids") or []
+            )
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(food_ids):
+                show_pantry_saved_food_page(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    page=page,
+                )
+                return
+            food_id = int(food_ids[selection - 1])
+            selected = next(
+                (
+                    food
+                    for food in list_user_saved_foods()
+                    if int(food["food_id"]) == food_id
+                ),
+                None,
+            )
+            if selected is None or selected.get("calories") is None:
+                send_telegram_msg(
+                    "That Saved Food is no longer nutrition-ready.",
+                    chat_id=chat_id,
+                )
+                show_pantry_saved_food_page(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    page=page,
+                )
+                return
+            pantry_item = get_pantry_item_by_id(
+                int(known_data.get("pantry_nutrition_item_id") or 0)
+            )
+            if pantry_item is None:
+                show_pantry_nutrition_queue(chat_id=chat_id)
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_nutrition_saved_food_confirmation",
+                known_data={
+                    **known_data,
+                    "pantry_nutrition_food_id": food_id,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_pantry_nutrition_review(
+                    heading="Link this nutrition to the Pantry item?",
+                    pantry_name=str(pantry_item["display_name"]),
+                    food=selected,
+                    nutrition=selected,
+                    source=str(
+                        selected.get("verification_source") or "Saved Food"
+                    ),
+                ),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_nutrition_saved_food_confirmation":
+            pantry_item_id = int(
+                known_data.get("pantry_nutrition_item_id") or 0
+            )
+            if lowered in {"2", "no", "back"}:
+                show_pantry_saved_food_page(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    page=int(
+                        known_data.get("pantry_nutrition_saved_food_page")
+                        or 0
+                    ),
+                )
+                return
+            if lowered not in {"1", "yes", "save", "link"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+            food_id = int(known_data.get("pantry_nutrition_food_id") or 0)
+            selected = next(
+                (
+                    food
+                    for food in list_user_saved_foods()
+                    if int(food["food_id"]) == food_id
+                ),
+                None,
+            )
+            try:
+                linked = link_pantry_item_to_food(
+                    pantry_item_id,
+                    food_id=food_id,
+                    source="saved_food",
+                )
+            except (TypeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't link that Saved Food: {exc}\n\n"
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            finish_pantry_nutrition_link(
+                chat_id=chat_id,
+                known_data=known_data,
+                pantry_item=linked,
+                food_name=str(
+                    (selected or {}).get("canonical_name") or "Saved Food"
+                ),
+            )
+            return
+
+        if current_step == "pantry_nutrition_verified_confirmation":
+            pantry_item_id = int(
+                known_data.get("pantry_nutrition_item_id") or 0
+            )
+            if lowered in {"2", "no", "back"}:
+                show_pantry_nutrition_options(
+                    chat_id=chat_id,
+                    pantry_item_id=pantry_item_id,
+                    known_data=known_data,
+                )
+                return
+            if lowered not in {"1", "yes", "save", "link"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            result = dict(
+                known_data.get("pantry_nutrition_provider_result") or {}
+            )
+            food = dict(result.get("food") or {})
+            nutrition = dict(result.get("nutrition") or {})
+            verification = dict(result.get("verification") or {})
+            try:
+                saved = add_food_with_nutrition(
+                    canonical_name=str(food["canonical_name"]),
+                    serving_description=str(food["serving_description"]),
+                    serving_amount=float(food["serving_amount"]),
+                    serving_unit=str(food["serving_unit"]),
+                    verification_status=str(verification["status"]),
+                    verification_source=str(verification["source"]),
+                    calories=float(nutrition["calories"]),
+                    protein_g=nutrition.get("protein_g"),
+                    carbohydrates_g=nutrition.get("carbohydrates_g"),
+                    fat_g=nutrition.get("fat_g"),
+                    fiber_g=nutrition.get("fiber_g"),
+                    sugar_g=nutrition.get("sugar_g"),
+                    sodium_mg=nutrition.get("sodium_mg"),
+                    brand=food.get("brand"),
+                    restaurant=food.get("restaurant"),
+                    food_type=str(food.get("food_type") or "food"),
+                    source_item_id=verification.get("source_item_id"),
+                    source_url=verification.get("source_url"),
+                )
+                linked = link_pantry_item_to_food(
+                    pantry_item_id,
+                    food_id=int(saved["food"]["food_id"]),
+                    source="saved_food",
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't save and link that verified result: {exc}\n\n"
+                    "Nothing was linked.",
+                    chat_id=chat_id,
+                )
+                return
+            finish_pantry_nutrition_link(
+                chat_id=chat_id,
+                known_data=known_data,
+                pantry_item=linked,
+                food_name=str(saved["food"]["canonical_name"]),
+            )
+            return
+
+        if current_step == "pantry_nutrition_label_photo":
+            if lowered == "back":
+                show_pantry_nutrition_options(
+                    chat_id=chat_id,
+                    pantry_item_id=int(
+                        known_data.get("pantry_nutrition_item_id") or 0
+                    ),
+                    known_data=known_data,
+                )
+                return
+            send_telegram_msg(
+                "Send a clear, straight-on Nutrition Facts label photo, "
+                "or reply Back.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_nutrition_label_confirmation":
+            pantry_item_id = int(
+                known_data.get("pantry_nutrition_item_id") or 0
+            )
+            if lowered in {"2", "no", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_nutrition_label_photo",
+                    known_data=known_data,
+                    missing_fields=["nutrition_label_photo"],
+                )
+                send_telegram_msg(
+                    "Nothing was saved. Send another clear Nutrition Facts "
+                    "label photo, or reply Back.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "save", "link"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            label = dict(
+                known_data.get("pantry_nutrition_label_result") or {}
+            )
+            pantry_name = str(
+                known_data.get("pantry_nutrition_item_name") or "Pantry item"
+            )
+            try:
+                saved = add_food_with_nutrition(
+                    canonical_name=pantry_name,
+                    serving_description=str(label["serving_description"]),
+                    serving_amount=float(label["serving_amount"]),
+                    serving_unit=str(label["serving_unit"]),
+                    verification_status="verified",
+                    verification_source="user_package_label",
+                    calories=float(label["calories"]),
+                    protein_g=float(label["protein_g"]),
+                    carbohydrates_g=float(label["carbohydrates_g"]),
+                    fat_g=float(label["fat_g"]),
+                    fiber_g=float(label["fiber_g"]),
+                    sugar_g=float(label["sugar_g"]),
+                    sodium_mg=float(label["sodium_mg"]),
+                    brand=label.get("brand"),
+                )
+                linked = link_pantry_item_to_food(
+                    pantry_item_id,
+                    food_id=int(saved["food"]["food_id"]),
+                    source="saved_food",
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't save and link that label: {exc}\n\n"
+                    "Nothing was linked.",
+                    chat_id=chat_id,
+                )
+                return
+            finish_pantry_nutrition_link(
+                chat_id=chat_id,
+                known_data=known_data,
+                pantry_item=linked,
+                food_name=str(saved["food"]["canonical_name"]),
+            )
+            return
+
         if current_step == "pantry_organize_select":
             if lowered == "back":
                 update_conversation(
@@ -11232,6 +12264,15 @@ def process_telegram_update(update):
                 return
 
             if lowered in {"3", "back"}:
+                if known_data.get("pantry_nutrition_mode"):
+                    show_pantry_nutrition_options(
+                        chat_id=chat_id,
+                        pantry_item_id=int(
+                            known_data.get("pantry_nutrition_item_id") or 0
+                        ),
+                        known_data=known_data,
+                    )
+                    return
                 if known_data.get("pantry_scan_mode"):
                     destination_step = "pantry"
                     destination_message = healthcoach_pantry_menu_text()
@@ -11461,6 +12502,9 @@ def process_telegram_update(update):
                         result,
                         barcode=barcode,
                         saved=True,
+                        pantry_item_name=known_data.get(
+                            "pantry_nutrition_item_name"
+                        ),
                     ),
                     chat_id=chat_id,
                 )
@@ -11509,6 +12553,40 @@ def process_telegram_update(update):
             barcode_saved = bool(
                 known_data.get("barcode_saved")
             )
+
+            if known_data.get("pantry_nutrition_mode") and lowered in {
+                "link nutrition",
+                "link",
+                "use for pantry item",
+            }:
+                pantry_item_id = int(
+                    known_data.get("pantry_nutrition_item_id") or 0
+                )
+                try:
+                    saved = save_barcode_product_result(
+                        result,
+                        barcode=barcode,
+                    )
+                    linked = link_pantry_item_to_food(
+                        pantry_item_id,
+                        food_id=int(saved["food"]["food_id"]),
+                        source="barcode",
+                        barcode_text=barcode,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    send_telegram_msg(
+                        f"I couldn't link that barcode nutrition: {exc}\n\n"
+                        "Nothing was linked.",
+                        chat_id=chat_id,
+                    )
+                    return
+                finish_pantry_nutrition_link(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    pantry_item=linked,
+                    food_name=str(saved["food"]["canonical_name"]),
+                )
+                return
 
             if lowered in {
                 "add to pantry",
@@ -11586,6 +12664,9 @@ def process_telegram_update(update):
                             result,
                             barcode=barcode,
                             saved=True,
+                            pantry_item_name=known_data.get(
+                                "pantry_nutrition_item_name"
+                            ),
                         ),
                         chat_id=chat_id,
                     )
@@ -11630,6 +12711,9 @@ def process_telegram_update(update):
                         result,
                         barcode=barcode,
                         saved=True,
+                        pantry_item_name=known_data.get(
+                            "pantry_nutrition_item_name"
+                        ),
                     ),
                     chat_id=chat_id,
                 )
@@ -11695,6 +12779,15 @@ def process_telegram_update(update):
                 return
 
             if lowered == "back":
+                if known_data.get("pantry_nutrition_mode"):
+                    show_pantry_nutrition_options(
+                        chat_id=chat_id,
+                        pantry_item_id=int(
+                            known_data.get("pantry_nutrition_item_id") or 0
+                        ),
+                        known_data=known_data,
+                    )
+                    return
                 if known_data.get("pantry_scan_mode"):
                     destination_step = "pantry"
                     destination_message = healthcoach_pantry_menu_text()
@@ -11720,6 +12813,9 @@ def process_telegram_update(update):
                     result,
                     barcode=barcode,
                     saved=barcode_saved,
+                    pantry_item_name=known_data.get(
+                        "pantry_nutrition_item_name"
+                    ),
                 ),
                 chat_id=chat_id,
             )
@@ -11745,6 +12841,9 @@ def process_telegram_update(update):
                             or ""
                         ),
                         saved=True,
+                        pantry_item_name=known_data.get(
+                            "pantry_nutrition_item_name"
+                        ),
                     ),
                     chat_id=chat_id,
                 )
@@ -11920,6 +13019,15 @@ def process_telegram_update(update):
             "await_barcode_number",
         }:
             if lowered == "back":
+                if known_data.get("pantry_nutrition_mode"):
+                    show_pantry_nutrition_options(
+                        chat_id=chat_id,
+                        pantry_item_id=int(
+                            known_data.get("pantry_nutrition_item_id") or 0
+                        ),
+                        known_data=known_data,
+                    )
+                    return
                 if known_data.get("pantry_scan_mode"):
                     destination_step = "pantry"
                     destination_message = healthcoach_pantry_menu_text()
@@ -12025,6 +13133,9 @@ def process_telegram_update(update):
                         barcode=barcode,
                         saved=bool(
                             result.get("saved_food_id")
+                        ),
+                        pantry_item_name=known_data.get(
+                            "pantry_nutrition_item_name"
                         ),
                     ),
                     chat_id=chat_id,
@@ -15317,6 +16428,17 @@ def process_telegram_update(update):
             return
 
         if current_step == "saved_food_add_serving":
+            if lowered == "back" and known_data.get(
+                "_pantry_nutrition_return"
+            ):
+                show_pantry_nutrition_options(
+                    chat_id=chat_id,
+                    pantry_item_id=int(
+                        known_data.get("pantry_nutrition_item_id") or 0
+                    ),
+                    known_data=known_data,
+                )
+                return
             serving = text.strip()
 
             if len(serving) < 2:
@@ -15349,6 +16471,17 @@ def process_telegram_update(update):
             "saved_food_add_sugar",
             "saved_food_add_sodium",
         }:
+            if lowered == "back" and known_data.get(
+                "_pantry_nutrition_return"
+            ):
+                show_pantry_nutrition_options(
+                    chat_id=chat_id,
+                    pantry_item_id=int(
+                        known_data.get("pantry_nutrition_item_id") or 0
+                    ),
+                    known_data=known_data,
+                )
+                return
             cleaned_number = (
                 text.strip().lower()
                 .replace(",", "")
@@ -15451,7 +16584,20 @@ def process_telegram_update(update):
             return
 
         if current_step == "saved_food_add_confirmation":
-            if lowered in {"2", "no"}:
+            if lowered in {"2", "no", "back"}:
+                if known_data.get("_pantry_nutrition_return"):
+                    send_telegram_msg(
+                        "No Saved Food was added. Nothing was linked.",
+                        chat_id=chat_id,
+                    )
+                    show_pantry_nutrition_options(
+                        chat_id=chat_id,
+                        pantry_item_id=int(
+                            known_data.get("pantry_nutrition_item_id") or 0
+                        ),
+                        known_data=known_data,
+                    )
+                    return
                 if known_data.get("_recipe_import_return"):
                     updated = dict(known_data)
                     updated["_recipe_builder_return"] = False
@@ -15553,6 +16699,29 @@ def process_telegram_update(update):
 
             food = result["food"]
             created = bool(result.get("created"))
+            if known_data.get("_pantry_nutrition_return"):
+                try:
+                    linked = link_pantry_item_to_food(
+                        int(
+                            known_data.get("pantry_nutrition_item_id") or 0
+                        ),
+                        food_id=int(food["food_id"]),
+                        source="saved_food",
+                    )
+                except (TypeError, ValueError) as exc:
+                    send_telegram_msg(
+                        "The Saved Food was created, but I couldn't link it "
+                        f"to the Pantry item: {exc}",
+                        chat_id=chat_id,
+                    )
+                    return
+                finish_pantry_nutrition_link(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    pantry_item=linked,
+                    food_name=str(food["canonical_name"]),
+                )
+                return
             if known_data.get("_recipe_import_return"):
                 pending = list(
                     known_data.get("_recipe_import_pending") or []

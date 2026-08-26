@@ -212,6 +212,7 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn("Add items manually", message)
         self.assertIn("Scan product into Pantry", message)
         self.assertIn("Add items from shelf photo", message)
+        self.assertIn("Complete Pantry nutrition", message)
         self.assertIn("Get meal ideas", message)
         self.assertIn("Smart Pantry swaps", message)
         self.assertIn("Shopping list", message)
@@ -227,6 +228,10 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn(
             ["Add items from shelf photo"],
+            keyboard["keyboard"],
+        )
+        self.assertIn(
+            ["Complete Pantry nutrition"],
             keyboard["keyboard"],
         )
         self.assertIn(
@@ -618,6 +623,402 @@ class PantryMenuTests(unittest.TestCase):
             "Send a clear photo of a product barcode",
             send.call_args.args[0],
         )
+
+    def test_pantry_routes_to_nutrition_completion_queue(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "show_pantry_nutrition_queue") as show_queue,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Complete Pantry nutrition",
+                }
+            })
+
+        show_queue.assert_called_once_with(chat_id=123, skipped_ids=[])
+
+    def test_pantry_nutrition_queue_filters_and_paginates(self) -> None:
+        incomplete = [
+            {
+                "pantry_item_id": index,
+                "display_name": f"Item {index:02d}",
+                "nutrition_version_id": None,
+                "calories": None,
+            }
+            for index in range(1, 12)
+        ]
+        ready = {
+            "pantry_item_id": 99,
+            "display_name": "Ready item",
+            "nutrition_version_id": 9,
+            "calories": 100,
+        }
+
+        queued = app.pantry_nutrition_items(
+            [*incomplete, ready],
+            skipped_ids=[2],
+        )
+        message = app.format_pantry_nutrition_choices(
+            queued,
+            page=0,
+            total_incomplete=11,
+        )
+
+        self.assertEqual(len(queued), 10)
+        self.assertNotIn("Item 02", message)
+        self.assertNotIn("Ready item", message)
+        self.assertIn("Needs nutrition: 11 item(s)", message)
+        self.assertIn("Page 1 of 1", message)
+
+    def test_skipping_nutrition_item_changes_nothing(self) -> None:
+        pantry_item = {
+            "pantry_item_id": 42,
+            "display_name": "Unlabeled food",
+            "nutrition_version_id": None,
+            "calories": None,
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_nutrition_options",
+            "known_data": {
+                "pantry_nutrition_item_id": 42,
+                "pantry_nutrition_item_name": "Unlabeled food",
+                "pantry_nutrition_page": 0,
+                "pantry_nutrition_skipped_ids": [],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_pantry_item_by_id",
+                return_value=pantry_item,
+            ),
+            patch.object(app, "show_pantry_nutrition_queue") as show_queue,
+            patch.object(app, "link_pantry_item_to_food") as link,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Skip",
+                }
+            })
+
+        link.assert_not_called()
+        show_queue.assert_called_once_with(
+            chat_id=123,
+            page=0,
+            skipped_ids=[42],
+        )
+        self.assertIn("Nothing was changed", send.call_args.args[0])
+
+    def test_saved_food_link_requires_confirmation(self) -> None:
+        saved_food = {
+            "food_id": 7,
+            "canonical_name": "Black Beans",
+            "serving_description": "1/2 cup",
+            "nutrition_version_id": 8,
+            "calories": 110,
+            "protein_g": 7,
+            "verification_source": "user_package_label",
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_nutrition_saved_food_select",
+            "known_data": {
+                "pantry_nutrition_item_id": 42,
+                "pantry_nutrition_item_name": "Beans",
+                "pantry_nutrition_saved_food_page": 0,
+                "pantry_nutrition_saved_food_ids": [7],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "list_user_saved_foods",
+                return_value=[saved_food],
+            ),
+            patch.object(
+                app,
+                "get_pantry_item_by_id",
+                return_value={"pantry_item_id": 42, "display_name": "Beans"},
+            ),
+            patch.object(app, "link_pantry_item_to_food") as link,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "1"}
+            })
+
+        link.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_nutrition_saved_food_confirmation",
+        )
+        self.assertIn("Nothing has been linked", send.call_args.args[0])
+
+    def test_confirmed_saved_food_links_selected_pantry_item(self) -> None:
+        saved_food = {
+            "food_id": 7,
+            "canonical_name": "Black Beans",
+            "nutrition_version_id": 8,
+            "calories": 110,
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_nutrition_saved_food_confirmation",
+            "known_data": {
+                "pantry_nutrition_item_id": 42,
+                "pantry_nutrition_food_id": 7,
+            },
+        }
+        linked = {"pantry_item_id": 42, "display_name": "Beans"}
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "list_user_saved_foods",
+                return_value=[saved_food],
+            ),
+            patch.object(
+                app,
+                "link_pantry_item_to_food",
+                return_value=linked,
+            ) as link,
+            patch.object(app, "finish_pantry_nutrition_link") as finish,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        link.assert_called_once_with(42, food_id=7, source="saved_food")
+        finish.assert_called_once()
+
+    def test_barcode_nutrition_links_without_adding_duplicate_pantry_item(
+        self,
+    ) -> None:
+        result = {
+            "found": True,
+            "food": {"canonical_name": "Test Food"},
+            "nutrition": {"calories": 100},
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "barcode_result",
+            "known_data": {
+                "barcode": "036000291452",
+                "barcode_result": result,
+                "pantry_nutrition_mode": True,
+                "pantry_nutrition_item_id": 42,
+            },
+        }
+        linked = {"pantry_item_id": 42, "display_name": "Existing item"}
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "save_barcode_product_result",
+                return_value={
+                    "food": {"food_id": 7, "canonical_name": "Test Food"}
+                },
+            ),
+            patch.object(
+                app,
+                "link_pantry_item_to_food",
+                return_value=linked,
+            ) as link,
+            patch.object(app, "add_pantry_item") as add_pantry,
+            patch.object(app, "finish_pantry_nutrition_link") as finish,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Link nutrition",
+                }
+            })
+
+        link.assert_called_once_with(
+            42,
+            food_id=7,
+            source="barcode",
+            barcode_text="036000291452",
+        )
+        add_pantry.assert_not_called()
+        finish.assert_called_once()
+
+    def test_barcode_nutrition_result_has_link_button(self) -> None:
+        message = app.format_barcode_product(
+            {
+                "found": True,
+                "food": {
+                    "canonical_name": "Black Beans",
+                    "serving_description": "1/2 cup",
+                },
+                "nutrition": {"calories": 110},
+                "verification": {"source": "USDA"},
+            },
+            barcode="036000291452",
+            saved=False,
+            pantry_item_name="Beans on shelf",
+        )
+
+        keyboard = app.menu_reply_markup(message)
+
+        self.assertIn("Selected Pantry item: Beans on shelf", message)
+        self.assertIn(["Link nutrition"], keyboard["keyboard"])
+        self.assertNotIn(
+            ["Add to Pantry", "Log It"],
+            keyboard["keyboard"],
+        )
+
+    def test_pantry_label_photo_requires_review_before_saving(self) -> None:
+        label = {
+            "readable": True,
+            "serving_description": "1 cup (240 g)",
+            "serving_amount": 240,
+            "serving_unit": "g",
+            "calories": 110,
+            "protein_g": 7,
+            "carbohydrates_g": 20,
+            "fat_g": 0,
+            "fiber_g": 6,
+            "sugar_g": 1,
+            "sodium_mg": 130,
+            "brand": "Test Brand",
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_nutrition_label_photo",
+            "known_data": {
+                "pantry_nutrition_item_id": 42,
+                "pantry_nutrition_item_name": "Black Beans",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "download_telegram_photo",
+                return_value=(b"image", "image/jpeg"),
+            ),
+            patch.object(
+                app,
+                "read_nutrition_label_photo",
+                return_value=label,
+            ),
+            patch.object(
+                app,
+                "get_pantry_item_by_id",
+                return_value={"pantry_item_id": 42, "display_name": "Black Beans"},
+            ),
+            patch.object(app, "add_food_with_nutrition") as add_food,
+            patch.object(app, "link_pantry_item_to_food") as link,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "photo": [{"file_id": "photo-1"}],
+                }
+            })
+
+        add_food.assert_not_called()
+        link.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_nutrition_label_confirmation",
+        )
+        self.assertIn("Nothing has been linked or saved yet", send.call_args.args[0])
+
+    def test_confirmed_pantry_label_saves_and_links(self) -> None:
+        label = {
+            "serving_description": "1 cup (240 g)",
+            "serving_amount": 240,
+            "serving_unit": "g",
+            "calories": 110,
+            "protein_g": 7,
+            "carbohydrates_g": 20,
+            "fat_g": 0,
+            "fiber_g": 6,
+            "sugar_g": 1,
+            "sodium_mg": 130,
+            "brand": "Test Brand",
+        }
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_nutrition_label_confirmation",
+            "known_data": {
+                "pantry_nutrition_item_id": 42,
+                "pantry_nutrition_item_name": "Black Beans",
+                "pantry_nutrition_label_result": label,
+            },
+        }
+        linked = {"pantry_item_id": 42, "display_name": "Black Beans"}
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "add_food_with_nutrition",
+                return_value={
+                    "food": {"food_id": 7, "canonical_name": "Black Beans"}
+                },
+            ) as add_food,
+            patch.object(
+                app,
+                "link_pantry_item_to_food",
+                return_value=linked,
+            ) as link,
+            patch.object(app, "finish_pantry_nutrition_link") as finish,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        self.assertEqual(
+            add_food.call_args.kwargs["verification_source"],
+            "user_package_label",
+        )
+        self.assertEqual(add_food.call_args.kwargs["calories"], 110)
+        link.assert_called_once_with(42, food_id=7, source="saved_food")
+        finish.assert_called_once()
 
     def test_pantry_routes_to_paginated_organizer(self) -> None:
         conversation = {

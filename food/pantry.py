@@ -350,6 +350,88 @@ def list_pantry_items() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def link_pantry_item_to_food(
+    pantry_item_id: int,
+    *,
+    food_id: int,
+    source: str | None = None,
+    barcode_text: str | None = None,
+) -> dict[str, Any]:
+    """Link one Pantry item to a nutrition-ready Food record."""
+    initialize_database()
+    cleaned_source = (
+        str(source).strip().lower()
+        if source is not None
+        else None
+    )
+    if cleaned_source is not None and cleaned_source not in PANTRY_SOURCES:
+        raise ValueError(
+            "source must be manual, barcode, saved_food, or shelf_photo."
+        )
+    cleaned_barcode = (
+        str(barcode_text).strip()
+        if barcode_text is not None
+        else None
+    ) or None
+
+    with get_connection(DATABASE_PATH) as connection:
+        pantry_row = connection.execute(
+            "SELECT pantry_item_id FROM pantry_items WHERE pantry_item_id = ?",
+            (int(pantry_item_id),),
+        ).fetchone()
+        if pantry_row is None:
+            raise ValueError(f"Pantry item not found: {pantry_item_id}")
+
+        food = connection.execute(
+            """
+            SELECT
+                foods.food_id,
+                foods.active_nutrition_version_id,
+                nutrition_versions.calories
+            FROM foods
+            LEFT JOIN nutrition_versions
+              ON nutrition_versions.nutrition_version_id =
+                 foods.active_nutrition_version_id
+            WHERE foods.food_id = ?
+            """,
+            (int(food_id),),
+        ).fetchone()
+        if (
+            food is None
+            or food["active_nutrition_version_id"] is None
+            or food["calories"] is None
+        ):
+            raise ValueError(
+                "That Saved Food does not have usable active nutrition."
+            )
+
+        connection.execute(
+            """
+            UPDATE pantry_items
+            SET
+                food_id = ?,
+                source = COALESCE(?, source),
+                barcode_text = COALESCE(?, barcode_text),
+                updated_at = ?
+            WHERE pantry_item_id = ?
+            """,
+            (
+                int(food_id),
+                cleaned_source,
+                cleaned_barcode,
+                current_timestamp(),
+                int(pantry_item_id),
+            ),
+        )
+        connection.commit()
+
+    return next(
+        item
+        for item in list_pantry_items()
+        if int(item["pantry_item_id"]) == int(pantry_item_id)
+    )
+
+
 def update_pantry_item_organization(
     pantry_item_id: int,
     *,

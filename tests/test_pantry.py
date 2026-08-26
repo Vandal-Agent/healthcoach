@@ -298,6 +298,50 @@ class PantryTests(unittest.TestCase):
         self.assertEqual(refreshed["food_id"], self.food_id)
         self.assertEqual(refreshed["source"], "barcode")
 
+    def test_link_nutrition_preserves_pantry_identity_and_organization(
+        self,
+    ) -> None:
+        added = pantry.add_pantry_item(
+            display_name="Beans on pantry shelf",
+            source="shelf_photo",
+            storage_area="pantry_shelf",
+            food_category="canned_jarred",
+        )
+
+        linked = pantry.link_pantry_item_to_food(
+            added["pantry_item_id"],
+            food_id=self.food_id,
+            source="saved_food",
+        )
+
+        self.assertEqual(linked["display_name"], "Beans on pantry shelf")
+        self.assertEqual(linked["storage_area"], "pantry_shelf")
+        self.assertEqual(linked["food_category"], "canned_jarred")
+        self.assertEqual(linked["food_id"], self.food_id)
+        self.assertEqual(linked["source"], "saved_food")
+        self.assertEqual(linked["calories"], 110)
+
+    def test_link_rejects_food_without_usable_calories(self) -> None:
+        incomplete = library.add_food_with_nutrition(
+            canonical_name="Incomplete Food",
+            serving_description="1 serving",
+            serving_amount=1,
+            serving_unit="serving",
+            verification_status="estimated",
+            verification_source="user_entered",
+            calories=None,
+        )
+        added = pantry.add_pantry_item(display_name="Unknown product")
+
+        with self.assertRaisesRegex(ValueError, "usable active nutrition"):
+            pantry.link_pantry_item_to_food(
+                added["pantry_item_id"],
+                food_id=int(incomplete["food"]["food_id"]),
+            )
+
+        item = pantry.list_pantry_items()[0]
+        self.assertIsNone(item["food_id"])
+
     def test_remove_and_clear_do_not_change_saved_food(self) -> None:
         first = pantry.add_pantry_item(display_name="Rice")
         pantry.add_pantry_item(display_name="Cucumbers")
