@@ -327,10 +327,12 @@ Each Pantry item has two independent organizational labels:
 The organized Pantry view groups items by storage area, shows the food type
 and nutrition-readiness status, reports total nutrition coverage, and uses
 12-item pages so large Pantry lists stay usable in Telegram. The Pantry
-Organizer can rename an item or change its organizational labels, always
-after explicit confirmation. Renaming preserves the Pantry item's Saved Food
-link, nutrition version, source, storage area, and food type. A rename cannot
-silently merge two existing Pantry items.
+Organizer can rename an item, change its organizational labels, or delete its
+Pantry presence, always after explicit confirmation. Renaming preserves the
+Pantry item's Saved Food link, nutrition version, source, storage area, and food
+type. A rename cannot silently merge two existing Pantry items. Organizer
+deletion removes only the Pantry row; it preserves Saved Foods, nutrition,
+recipes, and historical Food Ledger entries.
 Existing items migrate to Unsorted without losing their names, Saved Food
 links, sources, or history. New shelf-photo items default to Pantry shelf;
 all other additions remain Unsorted until organized.
@@ -359,11 +361,15 @@ Supported workflow:
   do not yet have usable linked nutrition. The queue uses 10-item pages and
   allows an item to be skipped for the current review session without changing
   it.
-- Complete an item's nutrition by explicitly linking a nutrition-ready Saved
-  Food, confirming one exact verified lookup, scanning its barcode,
+- Complete an item's nutrition by explicitly linking trusted existing
+  nutrition, confirming one exact verified lookup, scanning its barcode,
   photographing and confirming its complete Nutrition Facts label, or entering
   its package nutrition manually. Never infer nutrition from the Pantry name or
   silently accept a provider result.
+- Include verified user-entered, package-label, USDA, and other approved-source
+  Foods in the existing-nutrition chooser. Exclude recipes, restaurant items,
+  estimates, and untrusted records. Rank likely name matches first for review,
+  but never select or link a match automatically.
 - Preserve the Pantry display name, storage area, and food type when nutrition
   is linked. Linking points the existing Pantry row to the trusted Food record;
   it does not add a duplicate Pantry item or log anything as eaten.

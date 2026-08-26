@@ -76,6 +76,43 @@ class SavedFoodLibraryTests(unittest.TestCase):
         )
         self.assertEqual(foods[0]["calories"], 500)
 
+    def test_lists_verified_nutrition_from_user_and_usda_sources(self):
+        user_food = self.create_food()
+        usda_food = library.add_food_with_nutrition(
+            canonical_name="USDA Black Olives",
+            serving_description="100 g",
+            serving_amount=100,
+            serving_unit="g",
+            verification_status="verified",
+            verification_source="fdc.nal.usda.gov",
+            calories=116,
+            protein_g=0.8,
+            carbohydrates_g=6,
+            fat_g=10.9,
+            fiber_g=1.6,
+            sugar_g=0,
+            sodium_mg=735,
+        )
+        library.add_food_with_nutrition(
+            canonical_name="Incomplete Estimate",
+            serving_description="1 serving",
+            serving_amount=1,
+            serving_unit="serving",
+            verification_status="estimated",
+            verification_source="visual_estimate",
+            calories=100,
+        )
+
+        foods = library.list_nutrition_ready_foods()
+
+        self.assertEqual(
+            {food["food_id"] for food in foods},
+            {
+                user_food["food"]["food_id"],
+                usda_food["food"]["food_id"],
+            },
+        )
+
     def test_new_version_affects_only_future_logs(self):
         created = self.create_food()
         food_id = created["food"]["food_id"]

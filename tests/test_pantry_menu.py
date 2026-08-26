@@ -680,6 +680,64 @@ class PantryMenuTests(unittest.TestCase):
         self.assertIn("Needs nutrition: 11 item(s)", message)
         self.assertIn("Page 1 of 1", message)
 
+    def test_existing_nutrition_includes_usda_and_ranks_name_matches(
+        self,
+    ) -> None:
+        foods = [
+            {
+                "food_id": 1,
+                "canonical_name": "Chicken Breast",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "fdc.nal.usda.gov",
+                "nutrition_version_id": 11,
+                "calories": 165,
+            },
+            {
+                "food_id": 2,
+                "canonical_name": "Extra Large Pitted Ripe Olives",
+                "brand": "Test Brand",
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "fdc.nal.usda.gov",
+                "nutrition_version_id": 12,
+                "calories": 25,
+            },
+            {
+                "food_id": 3,
+                "canonical_name": "Restaurant Olives",
+                "brand": None,
+                "restaurant": "Test Restaurant",
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "fdc.nal.usda.gov",
+                "nutrition_version_id": 13,
+                "calories": 30,
+            },
+        ]
+
+        with patch.object(
+            app,
+            "list_nutrition_ready_foods",
+            return_value=foods,
+        ):
+            matches = app.pantry_linkable_foods("black olives")
+
+        self.assertEqual(
+            [food["food_id"] for food in matches],
+            [2, 1],
+        )
+
+        message = app.format_pantry_saved_food_choices(
+            matches,
+            pantry_name="black olives",
+        )
+        self.assertIn("Likely name matches are listed first", message)
+        self.assertIn("fdc.nal.usda.gov", message)
+
     def test_skipping_nutrition_item_changes_nothing(self) -> None:
         pantry_item = {
             "pantry_item_id": 42,
@@ -755,7 +813,7 @@ class PantryMenuTests(unittest.TestCase):
             ),
             patch.object(
                 app,
-                "list_user_saved_foods",
+                "pantry_linkable_foods",
                 return_value=[saved_food],
             ),
             patch.object(
@@ -802,7 +860,7 @@ class PantryMenuTests(unittest.TestCase):
             ),
             patch.object(
                 app,
-                "list_user_saved_foods",
+                "pantry_linkable_foods",
                 return_value=[saved_food],
             ),
             patch.object(
@@ -1096,6 +1154,79 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn("Change name", send.call_args.args[0])
         self.assertIn("Change storage and food type", send.call_args.args[0])
+        self.assertIn("Delete Pantry item", send.call_args.args[0])
+
+    def test_pantry_organizer_delete_requires_confirmation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_action",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Old crackers",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "remove_pantry_item") as remove,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Delete Pantry item",
+                }
+            })
+
+        remove.assert_not_called()
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_organize_delete_confirmation",
+        )
+        self.assertIn("Only its Pantry presence", send.call_args.args[0])
+        self.assertIn("Nothing has been deleted", send.call_args.args[0])
+
+    def test_confirmed_organizer_delete_preserves_linked_data(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_delete_confirmation",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Old crackers",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "remove_pantry_item",
+                return_value=True,
+            ) as remove,
+            patch.object(
+                app,
+                "list_pantry_items",
+                return_value=[{"pantry_item_id": 99}],
+            ),
+            patch.object(app, "show_pantry_organizer_page") as show,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        remove.assert_called_once_with(42)
+        show.assert_called_once_with(chat_id=123, page=0)
+        self.assertIn("Saved Food, nutrition, recipes", send.call_args.args[0])
 
     def test_pantry_organizer_rename_requires_confirmation(self) -> None:
         rename_conversation = {

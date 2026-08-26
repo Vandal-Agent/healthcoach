@@ -36,6 +36,7 @@ from food.library import (
     add_food_with_nutrition,
     add_user_nutrition_version,
     archive_user_saved_food,
+    list_nutrition_ready_foods,
     list_user_saved_foods,
     save_barcode_mapping,
     update_user_saved_food_identity,
@@ -134,7 +135,11 @@ from food.menu_photo_advisor import (
 from food.barcode_provider import lookup_barcode_nutrition
 from food.restaurant_advisor import recommend_restaurant_entrees
 from food.usda_provider import normalize_barcode
-from food.resolver import resolve_food
+from food.resolver import (
+    is_trusted_saved_food,
+    normalized_food_tokens,
+    resolve_food,
+)
 from conversation_engine import (
     cancel_conversation,
     complete_conversation,
@@ -421,6 +426,7 @@ def menu_reply_markup(message):
             "Remove this Saved Food?",
             "Add these items to My Pantry?",
             "Remove this Pantry item?",
+            "Delete this Pantry item from My Pantry?",
             "Clear My Pantry?",
             "Add these items to the Shopping List?",
             "Mark this Shopping List item purchased?",
@@ -733,6 +739,7 @@ def menu_reply_markup(message):
         rows = [
             ["Change name"],
             ["Change storage and food type"],
+            ["Delete Pantry item"],
             ["Back", "Cancel"],
         ]
         one_time = True
@@ -756,14 +763,14 @@ def menu_reply_markup(message):
         one_time = True
     elif message.startswith("Complete Pantry Nutrition — Options"):
         rows = [
-            ["Link Saved Food"],
+            ["Link existing nutrition"],
             ["Try verified lookup"],
             ["Scan barcode", "Photograph label"],
             ["Enter manually", "Skip"],
             ["Back", "Cancel"],
         ]
         one_time = True
-    elif message.startswith("Complete Pantry Nutrition — Saved Foods"):
+    elif message.startswith("Complete Pantry Nutrition — Existing Nutrition"):
         choices = re.findall(r"(?m)^(\d+)\. ", message)
         rows = [
             choices[index : index + 3]
@@ -5510,7 +5517,8 @@ def format_pantry_organize_action(item: dict) -> str:
         f"Food type: {category}\n\n"
         "1. Change name\n"
         "2. Change storage and food type\n"
-        "3. Back"
+        "3. Delete Pantry item\n"
+        "4. Back"
     )
 
 
@@ -5552,7 +5560,7 @@ def format_pantry_nutrition_options(item: dict) -> str:
     return (
         "Complete Pantry Nutrition — Options\n\n"
         f"Item: {item.get('display_name') or 'Pantry item'}\n\n"
-        "1. Link Saved Food\n"
+        "1. Link existing nutrition\n"
         "2. Try verified lookup\n"
         "3. Scan barcode\n"
         "4. Photograph label\n"
@@ -5569,23 +5577,27 @@ def format_pantry_saved_food_choices(
     pantry_name: str,
     page: int = 0,
 ) -> str:
-    """Show one page of nutrition-ready Saved Foods to link."""
+    """Show one page of trusted existing nutrition to link."""
     page_foods, safe_page, total_pages = simple_page(
         foods,
         page=page,
         page_size=PANTRY_SAVED_FOOD_PAGE_SIZE,
     )
     lines = [
-        "Complete Pantry Nutrition — Saved Foods",
+        "Complete Pantry Nutrition — Existing Nutrition",
         f"Pantry item: {pantry_name}",
         f"Page {safe_page + 1} of {total_pages}",
+        "",
+        "Likely name matches are listed first. Review the product, serving, "
+        "and source before linking.",
         "",
     ]
     for index, food in enumerate(page_foods, start=1):
         lines.append(
             f"{index}. {food.get('canonical_name') or 'Saved Food'} — "
             f"{food.get('serving_description') or '1 serving'} — "
-            f"{format_display_number(float(food.get('calories') or 0), decimals=0)} cal"
+            f"{format_display_number(float(food.get('calories') or 0), decimals=0)} cal — "
+            f"{food.get('verification_source') or 'saved source'}"
         )
     lines.extend([
         "",
@@ -5867,28 +5879,62 @@ def show_pantry_nutrition_options(
     return True
 
 
+def pantry_linkable_foods(pantry_name: str) -> list[dict]:
+    """Return trusted nutrition Foods with likely name matches first."""
+    requested_tokens = normalized_food_tokens(pantry_name)
+
+    def match_rank(food: dict) -> tuple:
+        candidate_tokens = normalized_food_tokens(
+            " ".join(
+                str(value)
+                for value in (
+                    food.get("canonical_name"),
+                    food.get("brand"),
+                )
+                if value
+            )
+        )
+        overlap = len(requested_tokens & candidate_tokens)
+        exact = bool(requested_tokens) and requested_tokens == candidate_tokens
+        contained = bool(requested_tokens) and (
+            requested_tokens.issubset(candidate_tokens)
+            or candidate_tokens.issubset(requested_tokens)
+        )
+        return (
+            0 if exact else 1 if contained else 2 if overlap else 3,
+            -overlap,
+            str(food.get("canonical_name") or "").lower(),
+            int(food.get("food_id") or 0),
+        )
+
+    return sorted(
+        (
+            food
+            for food in list_nutrition_ready_foods()
+            if is_trusted_saved_food(food)
+            and food.get("restaurant") is None
+            and str(food.get("food_type") or "food") in {"food", "drink"}
+        ),
+        key=match_rank,
+    )
+
+
 def show_pantry_saved_food_page(
     *,
     chat_id: int | str,
     known_data: dict,
     page: int = 0,
 ) -> bool:
-    """Show nutrition-ready Saved Foods for one Pantry item."""
-    foods = sorted(
-        (
-            food
-            for food in list_user_saved_foods()
-            if food.get("calories") is not None
-            and food.get("nutrition_version_id") is not None
-        ),
-        key=lambda food: (
-            str(food.get("canonical_name") or "").lower(),
-            int(food.get("food_id") or 0),
-        ),
+    """Show trusted existing nutrition for one Pantry item."""
+    foods = pantry_linkable_foods(
+        str(
+            known_data.get("pantry_nutrition_item_name")
+            or "Pantry item"
+        )
     )
     if not foods:
         send_telegram_msg(
-            "There are no nutrition-ready Saved Foods to link yet.",
+            "There are no trusted nutrition-ready Foods to link yet.",
             chat_id=chat_id,
         )
         show_pantry_nutrition_options(
@@ -11082,7 +11128,12 @@ def process_telegram_update(update):
                     ),
                 )
                 return
-            if lowered in {"1", "link saved food", "saved food"}:
+            if lowered in {
+                "1",
+                "link existing nutrition",
+                "link saved food",
+                "saved food",
+            }:
                 show_pantry_saved_food_page(
                     chat_id=chat_id,
                     known_data=known_data,
@@ -11280,14 +11331,19 @@ def process_telegram_update(update):
             selected = next(
                 (
                     food
-                    for food in list_user_saved_foods()
+                    for food in pantry_linkable_foods(
+                        str(
+                            known_data.get("pantry_nutrition_item_name")
+                            or "Pantry item"
+                        )
+                    )
                     if int(food["food_id"]) == food_id
                 ),
                 None,
             )
             if selected is None or selected.get("calories") is None:
                 send_telegram_msg(
-                    "That Saved Food is no longer nutrition-ready.",
+                    "That nutrition record is no longer available to link.",
                     chat_id=chat_id,
                 )
                 show_pantry_saved_food_page(
@@ -11349,7 +11405,12 @@ def process_telegram_update(update):
             selected = next(
                 (
                     food
-                    for food in list_user_saved_foods()
+                    for food in pantry_linkable_foods(
+                        str(
+                            known_data.get("pantry_nutrition_item_name")
+                            or "Pantry item"
+                        )
+                    )
                     if int(food["food_id"]) == food_id
                 ),
                 None,
@@ -11362,7 +11423,7 @@ def process_telegram_update(update):
                 )
             except (TypeError, ValueError) as exc:
                 send_telegram_msg(
-                    f"I couldn't link that Saved Food: {exc}\n\n"
+                    f"I couldn't link that nutrition record: {exc}\n\n"
                     "Nothing was changed.",
                     chat_id=chat_id,
                 )
@@ -11582,7 +11643,7 @@ def process_telegram_update(update):
             pantry_item_id = int(
                 known_data.get("pantry_organize_id") or 0
             )
-            if lowered in {"3", "back"}:
+            if lowered in {"4", "back"}:
                 show_pantry_organizer_page(chat_id=chat_id, page=page)
                 return
             if lowered in {"1", "change name", "rename"}:
@@ -11621,11 +11682,92 @@ def process_telegram_update(update):
                     chat_id=chat_id,
                 )
                 return
+            if lowered in {
+                "3",
+                "delete pantry item",
+                "delete item",
+                "delete",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_organize_delete_confirmation",
+                    known_data=known_data,
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Delete this Pantry item from My Pantry?\n\n"
+                    f"Item: {known_data.get('pantry_organize_name')}\n\n"
+                    "Its Saved Food, nutrition, recipes, and previous food "
+                    "logs will be preserved. Only its Pantry presence will "
+                    "be removed.\n\n"
+                    "Nothing has been deleted yet.\n\n"
+                    "1. Yes\n"
+                    "2. No",
+                    chat_id=chat_id,
+                )
+                return
             show_pantry_organize_action(
                 chat_id=chat_id,
                 pantry_item_id=pantry_item_id,
                 page=page,
             )
+            return
+
+        if current_step == "pantry_organize_delete_confirmation":
+            page = int(known_data.get("pantry_page") or 0)
+            pantry_item_id = int(
+                known_data.get("pantry_organize_id") or 0
+            )
+            if lowered in {"2", "no", "back"}:
+                send_telegram_msg("Nothing was deleted.", chat_id=chat_id)
+                show_pantry_organize_action(
+                    chat_id=chat_id,
+                    pantry_item_id=pantry_item_id,
+                    page=page,
+                )
+                return
+            if lowered not in {"1", "yes", "delete"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+            name = str(
+                known_data.get("pantry_organize_name") or "Pantry item"
+            )
+            try:
+                removed = remove_pantry_item(pantry_item_id)
+            except Exception:
+                logging.exception("Pantry Organizer deletion failed")
+                send_telegram_msg(
+                    "I couldn't delete that Pantry item. Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            message = (
+                f"Deleted {name} from My Pantry."
+                if removed
+                else "That Pantry item was already removed."
+            )
+            if list_pantry_items():
+                send_telegram_msg(
+                    message
+                    + "\n\nIts Saved Food, nutrition, recipes, and previous "
+                    "logs were preserved.",
+                    chat_id=chat_id,
+                )
+                show_pantry_organizer_page(chat_id=chat_id, page=page)
+            else:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    message + "\n\n" + healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
             return
 
         if current_step == "pantry_organize_rename":

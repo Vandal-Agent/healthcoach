@@ -495,6 +495,36 @@ def list_user_saved_foods() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def list_nutrition_ready_foods() -> list[dict[str, Any]]:
+    """List Foods with active verified nutrition and usable calories."""
+    initialize_database()
+
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                foods.*,
+                nutrition_versions.version_number,
+                nutrition_versions.calories,
+                nutrition_versions.protein_g,
+                nutrition_versions.carbohydrates_g,
+                nutrition_versions.fat_g,
+                nutrition_versions.fiber_g,
+                nutrition_versions.sugar_g,
+                nutrition_versions.sodium_mg
+            FROM foods
+            JOIN nutrition_versions
+              ON nutrition_versions.nutrition_version_id =
+                 foods.active_nutrition_version_id
+            WHERE foods.verification_status = 'verified'
+              AND nutrition_versions.calories IS NOT NULL
+            ORDER BY lower(foods.canonical_name), foods.food_id
+            """
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
 def update_user_saved_food_identity(
     *,
     food_id: int,
