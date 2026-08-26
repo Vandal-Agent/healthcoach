@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from typing import Any
 
 from food.database import (
@@ -380,6 +381,71 @@ def update_pantry_item_organization(
         if cursor.rowcount != 1:
             raise ValueError(f"Pantry item not found: {pantry_item_id}")
         connection.commit()
+        row = connection.execute(
+            "SELECT * FROM pantry_items WHERE pantry_item_id = ?",
+            (int(pantry_item_id),),
+        ).fetchone()
+
+    return dict(row)
+
+
+def rename_pantry_item(
+    pantry_item_id: int,
+    *,
+    display_name: str,
+) -> dict[str, Any]:
+    """Rename one Pantry item without changing its linked data."""
+    initialize_database()
+    cleaned_name = clean_pantry_name(display_name)
+    normalized_name = pantry_name_key(cleaned_name)
+
+    with get_connection(DATABASE_PATH) as connection:
+        current = connection.execute(
+            "SELECT * FROM pantry_items WHERE pantry_item_id = ?",
+            (int(pantry_item_id),),
+        ).fetchone()
+        if current is None:
+            raise ValueError(f"Pantry item not found: {pantry_item_id}")
+
+        candidates = connection.execute(
+            """
+            SELECT pantry_item_id, display_name
+            FROM pantry_items
+            WHERE pantry_item_id != ?
+            """,
+            (int(pantry_item_id),),
+        ).fetchall()
+        if any(
+            pantry_name_key(candidate["display_name"]) == normalized_name
+            for candidate in candidates
+        ):
+            raise ValueError(
+                "A Pantry item with that name already exists."
+            )
+
+        try:
+            connection.execute(
+                """
+                UPDATE pantry_items
+                SET
+                    display_name = ?,
+                    normalized_name = ?,
+                    updated_at = ?
+                WHERE pantry_item_id = ?
+                """,
+                (
+                    cleaned_name,
+                    normalized_name,
+                    current_timestamp(),
+                    int(pantry_item_id),
+                ),
+            )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(
+                "A Pantry item with that name already exists."
+            ) from exc
+
         row = connection.execute(
             "SELECT * FROM pantry_items WHERE pantry_item_id = ?",
             (int(pantry_item_id),),

@@ -23,8 +23,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   detected items remain unsaved until explicit confirmation and do not invent
   quantities or nutrition
 - Organizes large Pantry lists with separate storage-area and food-type labels,
-  12-item Telegram pages, explicit edit confirmation, and visible linked-
-  nutrition coverage
+  safe item renaming, 12-item Telegram pages, explicit edit confirmation, and
+  visible linked-nutrition coverage
 - Saves Pantry meal ideas as reusable recipes and builds new recipes from a
   numbered, paginated My Pantry chooser backed by version-linked Saved Food
   ingredients, explicit amounts, serving yields, calculated per-serving

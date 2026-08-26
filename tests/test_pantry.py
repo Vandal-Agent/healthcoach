@@ -203,6 +203,47 @@ class PantryTests(unittest.TestCase):
         self.assertEqual(updated["storage_area"], "freezer")
         self.assertEqual(updated["food_category"], "protein")
 
+    def test_rename_preserves_link_and_organization(self) -> None:
+        added = pantry.add_pantry_item(
+            display_name="Original chicken",
+            source="manual",
+            storage_area="freezer",
+            food_category="protein",
+        )
+
+        renamed = pantry.rename_pantry_item(
+            added["pantry_item_id"],
+            display_name="Chicken breast",
+        )
+
+        self.assertEqual(renamed["display_name"], "Chicken breast")
+        self.assertEqual(renamed["normalized_name"], "chicken_breast")
+        self.assertEqual(renamed["source"], "manual")
+        self.assertEqual(renamed["storage_area"], "freezer")
+        self.assertEqual(renamed["food_category"], "protein")
+
+    def test_rename_rejects_an_existing_pantry_name(self) -> None:
+        first = pantry.add_pantry_item(
+            display_name="Black beans",
+            source="manual",
+        )
+        pantry.add_pantry_item(
+            display_name="Rice and beans",
+            source="manual",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "already exists",
+        ):
+            pantry.rename_pantry_item(
+                first["pantry_item_id"],
+                display_name="Rice & beans",
+            )
+
+        names = [item["display_name"] for item in pantry.list_pantry_items()]
+        self.assertEqual(names, ["Black beans", "Rice and beans"])
+
     def test_version_twelve_migration_preserves_and_unsorts_items(self) -> None:
         pantry.add_pantry_item(display_name="Rice", source="manual")
         with database.get_connection(self.database_path) as connection:

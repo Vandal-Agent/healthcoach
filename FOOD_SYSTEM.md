@@ -327,7 +327,10 @@ Each Pantry item has two independent organizational labels:
 The organized Pantry view groups items by storage area, shows the food type
 and nutrition-readiness status, reports total nutrition coverage, and uses
 12-item pages so large Pantry lists stay usable in Telegram. The Pantry
-Organizer changes one item's labels only after explicit confirmation.
+Organizer can rename an item or change its organizational labels, always
+after explicit confirmation. Renaming preserves the Pantry item's Saved Food
+link, nutrition version, source, storage area, and food type. A rename cannot
+silently merge two existing Pantry items.
 Existing items migrate to Unsorted without losing their names, Saved Food
 links, sources, or history. New shelf-photo items default to Pantry shelf;
 all other additions remain Unsorted until organized.

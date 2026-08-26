@@ -660,6 +660,116 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn("Chicken breast", send.call_args.args[0])
 
+    def test_pantry_organizer_item_offers_rename_or_categories(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_select",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_item_ids": [42],
+            },
+        }
+        item = {
+            "pantry_item_id": 42,
+            "display_name": "Chicken breast",
+            "storage_area": "freezer",
+            "food_category": "protein",
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "list_pantry_items", return_value=[item]),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "1"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_organize_action",
+        )
+        self.assertIn("Change name", send.call_args.args[0])
+        self.assertIn("Change storage and food type", send.call_args.args[0])
+
+    def test_pantry_organizer_rename_requires_confirmation(self) -> None:
+        rename_conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_rename",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Chicken breast package",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=rename_conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Chicken breast",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_organize_rename_confirmation",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "pantry_organize_new_name"
+            ],
+            "Chicken breast",
+        )
+        self.assertIn("Nothing has been changed", send.call_args.args[0])
+
+        confirmation_conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_rename_confirmation",
+            "known_data": update.call_args.kwargs["known_data"],
+        }
+        renamed = {
+            "pantry_item_id": 42,
+            "display_name": "Chicken breast",
+            "storage_area": "freezer",
+            "food_category": "protein",
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=confirmation_conversation,
+            ),
+            patch.object(
+                app,
+                "rename_pantry_item",
+                return_value=renamed,
+            ) as rename,
+            patch.object(app, "list_pantry_items", return_value=[renamed]),
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as confirmation_send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        rename.assert_called_once_with(42, display_name="Chicken breast")
+        self.assertIn(
+            "Pantry item renamed",
+            confirmation_send.call_args_list[0].args[0],
+        )
+
     def test_pantry_organizer_confirms_before_updating(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",
