@@ -76,11 +76,14 @@ class PantryPhotoTests(unittest.TestCase):
 
     def test_session_merge_deduplicates_and_preserves_order(self) -> None:
         merged = pantry_photo.merge_pantry_photo_names(
-            ["Black beans", "Rice"],
-            ["black beans", "Pasta"],
+            ["Black beans", "Rice", "Cilantro Lime Rice"],
+            ["black beans", "Pasta", "Cilantro & Lime Rice"],
         )
 
-        self.assertEqual(merged, ["Black beans", "Rice", "Pasta"])
+        self.assertEqual(
+            merged,
+            ["Black beans", "Rice", "Cilantro Lime Rice", "Pasta"],
+        )
 
     def test_unsupported_photo_type_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported"):

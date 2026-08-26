@@ -32,6 +32,11 @@ def pantry_name_key(value: str) -> str:
     """Return a stable case-insensitive Pantry identity."""
     cleaned = clean_pantry_name(value)
     key = normalize_key_part(cleaned)
+    key = "_".join(
+        part
+        for part in key.split("_")
+        if part != "and"
+    )
 
     if not key:
         raise ValueError("Pantry item name must contain letters or numbers.")
@@ -110,12 +115,71 @@ def add_pantry_item(
 
         existing = connection.execute(
             """
-            SELECT pantry_item_id
+            SELECT pantry_item_id, display_name, normalized_name
             FROM pantry_items
             WHERE normalized_name = ?
             """,
             (normalized_name,),
         ).fetchone()
+
+        if existing is None:
+            candidates = connection.execute(
+                """
+                SELECT pantry_item_id, display_name, normalized_name
+                FROM pantry_items
+                """
+            ).fetchall()
+            existing = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if pantry_name_key(candidate["display_name"])
+                    == normalized_name
+                ),
+                None,
+            )
+
+        if existing is not None:
+            connection.execute(
+                """
+                UPDATE pantry_items
+                SET
+                    display_name = CASE
+                        WHEN ? IS NOT NULL THEN ?
+                        ELSE display_name
+                    END,
+                    food_id = COALESCE(?, food_id),
+                    source = CASE
+                        WHEN ? IS NOT NULL THEN ?
+                        ELSE source
+                    END,
+                    barcode_text = COALESCE(?, barcode_text),
+                    updated_at = ?
+                WHERE pantry_item_id = ?
+                """,
+                (
+                    int(food_id) if food_id is not None else None,
+                    cleaned_name,
+                    int(food_id) if food_id is not None else None,
+                    int(food_id) if food_id is not None else None,
+                    cleaned_source,
+                    cleaned_barcode,
+                    timestamp,
+                    int(existing["pantry_item_id"]),
+                ),
+            )
+            connection.commit()
+            row = connection.execute(
+                """
+                SELECT *
+                FROM pantry_items
+                WHERE pantry_item_id = ?
+                """,
+                (int(existing["pantry_item_id"]),),
+            ).fetchone()
+            result = dict(row)
+            result["created"] = False
+            return result
 
         connection.execute(
             """
@@ -173,7 +237,7 @@ def add_pantry_item(
         ).fetchone()
 
     result = dict(row)
-    result["created"] = existing is None
+    result["created"] = True
     return result
 
 

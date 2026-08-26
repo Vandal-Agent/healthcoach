@@ -327,13 +327,16 @@ Supported workflow:
 - Select Add items from shelf photo, send one or more shelf or cupboard
   photos, and review the combined list of clearly visible foods before adding
   anything. The review can remove individual detections, accept another photo,
-  or add all remaining items after explicit confirmation.
+  correct an item name, or add all remaining items after explicit
+  confirmation.
 - Reuse an unprompted Telegram photo for this workflow by choosing Add visible
   items to Pantry in the Universal Photo Chooser.
 - Treat shelf-photo items as presence-only names. Do not infer package
   nutrition, quantities, barcode values, or hidden products from the image.
 - Deduplicate detected names within the review and against existing Pantry
-  items. Limit each review session to 30 items.
+  items. Treat punctuation and a standalone "and" or ampersand as equivalent
+  for Pantry identity without broadly fuzzy-matching different products.
+  Limit each review session to 30 items.
 - Remove one Pantry item without deleting its Saved Food or Food Ledger
   history.
 - Clear the entire Pantry only after explicit confirmation.

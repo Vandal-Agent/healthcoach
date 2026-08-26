@@ -118,6 +118,24 @@ class PantryTests(unittest.TestCase):
             ["Chicken breast", "Romaine", "Tomatoes"],
         )
 
+    def test_connector_and_punctuation_variants_are_not_duplicated(self) -> None:
+        pantry.add_pantry_item(
+            display_name="Cilantro Lime Rice",
+            source="manual",
+        )
+
+        result = pantry.add_pantry_items(
+            ["Cilantro & Lime Rice"],
+            source="shelf_photo",
+        )
+
+        self.assertEqual(result["created"], [])
+        self.assertEqual(len(result["existing"]), 1)
+        self.assertEqual(
+            [item["display_name"] for item in pantry.list_pantry_items()],
+            ["Cilantro Lime Rice"],
+        )
+
     def test_bulk_items_can_record_shelf_photo_source(self) -> None:
         result = pantry.add_pantry_items(
             ["Black beans", "Rice"],

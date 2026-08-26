@@ -755,6 +755,126 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn("Removed Black Beans", send.call_args.args[0])
 
+    def test_shelf_photo_review_opens_name_editor(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_photo_review",
+            "known_data": {
+                "pantry_photo_names": ["Campbell's Condensed Soup"],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Edit item name",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_photo_edit",
+        )
+        self.assertIn("Campbell's Condensed Soup", send.call_args.args[0])
+        keyboard = app.menu_reply_markup(
+            app.format_pantry_photo_review(
+                ["Campbell's Condensed Soup"]
+            )
+        )
+        self.assertIn(
+            ["Edit item name", "Remove an item"],
+            keyboard["keyboard"],
+        )
+
+    def test_shelf_photo_name_edit_merges_pending_duplicate(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_photo_edit_name",
+            "known_data": {
+                "pantry_photo_names": [
+                    "Cilantro & Lime Rice",
+                    "Cilantro Lime Rice",
+                    "Black Beans",
+                ],
+                "pantry_photo_edit_index": 0,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Cilantro Lime Rice",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_photo_review",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["pantry_photo_names"],
+            ["Cilantro Lime Rice", "Black Beans"],
+        )
+        self.assertIn(
+            "duplicate pending item was merged",
+            send.call_args.args[0],
+        )
+
+    def test_shelf_photo_editor_selects_item_before_renaming(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_photo_edit",
+            "known_data": {
+                "pantry_photo_names": [
+                    "Campbell's Condensed Soup",
+                    "Black Beans",
+                ],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "1"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_photo_edit_name",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "pantry_photo_edit_index"
+            ],
+            0,
+        )
+        self.assertIn(
+            "Current name: Campbell's Condensed Soup",
+            send.call_args.args[0],
+        )
+
     def test_shelf_photo_add_requires_explicit_review_confirmation(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",

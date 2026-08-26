@@ -65,6 +65,7 @@ from food.goals import (
 from food.pantry import (
     add_pantry_item,
     add_pantry_items,
+    clean_pantry_name,
     clear_pantry,
     list_pantry_items,
     parse_pantry_item_list,
@@ -650,6 +651,7 @@ def menu_reply_markup(message):
         or "Send a clear photo of a product barcode." in message
         or "Send a clear photo of the Nutrition Facts label." in message
         or "Send a clear photo of one Pantry shelf." in message
+        or "Type the corrected Pantry item name." in message
         or "Type the barcode number printed beneath the bars." in message
     ):
         rows = [["Back", "Cancel"]]
@@ -689,9 +691,18 @@ def menu_reply_markup(message):
     elif message.startswith("Pantry Shelf Photo — Review"):
         rows = [
             ["Add all to Pantry"],
-            ["Remove an item", "Add another photo"],
+            ["Edit item name", "Remove an item"],
+            ["Add another photo"],
             ["Cancel"],
         ]
+        one_time = True
+    elif message.startswith("Pantry Shelf Photo — Edit Item"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index : index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        rows.append(["Back", "Cancel"])
         one_time = True
     elif message.startswith("Pantry Shelf Photo — Remove Item"):
         choices = re.findall(r"(?m)^(\d+)\. ", message)
@@ -5120,8 +5131,8 @@ def format_pantry_photo_review(names: list[str]) -> str:
         "Photo names are presence-only and do not create nutrition data.",
         "Nothing has been added yet.",
         "",
-        "Reply Add all to Pantry, Remove an item, Add another photo, or "
-        "Cancel.",
+        "Reply Add all to Pantry, Edit item name, Remove an item, Add "
+        "another photo, or Cancel.",
     ])
     return "\n".join(lines)
 
@@ -5139,6 +5150,22 @@ def format_pantry_photo_remove_choices(names: list[str]) -> str:
         for index, name in enumerate(names, start=1)
     )
     lines.extend(["", "Reply Back to return without removing anything."])
+    return "\n".join(lines)
+
+
+def format_pantry_photo_edit_choices(names: list[str]) -> str:
+    """Show pending photo items whose display name may be corrected."""
+    lines = [
+        "Pantry Shelf Photo — Edit Item",
+        "",
+        "Choose an item whose name should be corrected:",
+        "",
+    ]
+    lines.extend(
+        f"{index}. {name}"
+        for index, name in enumerate(names, start=1)
+    )
+    lines.extend(["", "Reply Back to return without changing a name."])
     return "\n".join(lines)
 
 
@@ -7141,6 +7168,8 @@ def process_telegram_update(update):
             "pantry_photo_result",
             "pantry_photo_review",
             "pantry_photo_remove",
+            "pantry_photo_edit",
+            "pantry_photo_edit_name",
             "await_recipe_photo",
             "recipe_import_input",
             "await_barcode_photo",
@@ -7229,6 +7258,8 @@ def process_telegram_update(update):
             "pantry_photo_result",
             "pantry_photo_review",
             "pantry_photo_remove",
+            "pantry_photo_edit",
+            "pantry_photo_edit_name",
         }
 
         if label_photo:
@@ -8728,6 +8759,29 @@ def process_telegram_update(update):
                 )
                 return
             if lowered in {
+                "edit",
+                "edit item",
+                "edit item name",
+                "rename",
+            }:
+                if not names:
+                    send_telegram_msg(
+                        "No pending items can be edited.",
+                        chat_id=chat_id,
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_photo_edit",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_photo_edit_choices(names),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {
                 "add",
                 "add all",
                 "add all to pantry",
@@ -8832,6 +8886,106 @@ def process_telegram_update(update):
                     "Send another clear Pantry shelf photo or reply Back.",
                     chat_id=chat_id,
                 )
+            return
+
+        if current_step == "pantry_photo_edit":
+            names = list(known_data.get("pantry_photo_names") or [])
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_photo_review",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_photo_review(names),
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                selected_index = int(text.strip()) - 1
+            except (TypeError, ValueError):
+                selected_index = -1
+            if selected_index < 0 or selected_index >= len(names):
+                send_telegram_msg(
+                    format_pantry_photo_edit_choices(names),
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_photo_edit_name",
+                known_data={
+                    "pantry_photo_names": names,
+                    "pantry_photo_edit_index": selected_index,
+                },
+                missing_fields=["pantry_photo_item_name"],
+            )
+            send_telegram_msg(
+                f"Current name: {names[selected_index]}\n\n"
+                "Type the corrected Pantry item name.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_photo_edit_name":
+            names = list(known_data.get("pantry_photo_names") or [])
+            try:
+                selected_index = int(
+                    known_data.get("pantry_photo_edit_index")
+                )
+            except (TypeError, ValueError):
+                selected_index = -1
+            if selected_index < 0 or selected_index >= len(names):
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_photo_review",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_photo_review(names),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_photo_edit",
+                    known_data={"pantry_photo_names": names},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_photo_edit_choices(names),
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                corrected_name = clean_pantry_name(text)
+            except ValueError as exc:
+                send_telegram_msg(
+                    f"That name could not be used: {exc}\n\n"
+                    "Type the corrected Pantry item name.",
+                    chat_id=chat_id,
+                )
+                return
+            previous_name = names[selected_index]
+            names[selected_index] = corrected_name
+            revised_names = merge_pantry_photo_names([], names)
+            duplicate_merged = len(revised_names) < len(names)
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_photo_review",
+                known_data={"pantry_photo_names": revised_names},
+                missing_fields=[],
+            )
+            notice = f"Changed {previous_name} to {corrected_name}."
+            if duplicate_merged:
+                notice += " The duplicate pending item was merged."
+            send_telegram_msg(
+                notice + "\n\n" + format_pantry_photo_review(revised_names),
+                chat_id=chat_id,
+            )
             return
 
         if current_step == "pantry_swaps":
