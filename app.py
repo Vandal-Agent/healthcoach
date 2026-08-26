@@ -154,6 +154,8 @@ from memory.cases import (
 
 app = Flask(__name__)
 
+TELEGRAM_UPDATE_LOCK = threading.Lock()
+
 PACIFIC_TZ = pytz.timezone("US/Pacific")
 
 CHAT_ID = os.getenv("HEALTH_CHAT_ID")
@@ -22643,33 +22645,27 @@ def process_telegram_update(update):
 
 
 def process_telegram_update_safely(update):
-    """Process one update without allowing it to block later updates."""
-    update_id = update.get("update_id")
+    """Claim and process one update without allowing duplicate handling."""
+    with TELEGRAM_UPDATE_LOCK:
+        update_id = update.get("update_id")
 
-    try:
-        process_telegram_update(update)
-    except Exception:
-        logging.exception(
-            "Telegram update %s failed and will be skipped",
-            update_id,
-        )
-        chat_id = (
-            update.get("message", {})
-            .get("chat", {})
-            .get("id")
-        )
-        if chat_id is not None:
-            send_telegram_msg(
-                "I couldn't finish processing that message. "
-                "It was skipped so HealthCoach can continue. "
-                "Please send /menu or try again.",
-                chat_id=chat_id,
-            )
-    finally:
         if update_id is not None:
             state = load_state()
-            next_offset = int(update_id) + 1
             current_offset = state.get("telegram_update_offset")
+            if (
+                current_offset is not None
+                and int(update_id) < int(current_offset)
+            ):
+                logging.info(
+                    "Telegram update %s was already processed; skipping",
+                    update_id,
+                )
+                return
+
+            # Claim the update before conversation state changes. If Telegram
+            # repeats the same update, its numeric reply must not cross into
+            # the next selection or confirmation step.
+            next_offset = int(update_id) + 1
             if current_offset is not None:
                 next_offset = max(
                     next_offset,
@@ -22677,6 +22673,26 @@ def process_telegram_update_safely(update):
                 )
             state["telegram_update_offset"] = next_offset
             save_state(state)
+
+        try:
+            process_telegram_update(update)
+        except Exception:
+            logging.exception(
+                "Telegram update %s failed and will be skipped",
+                update_id,
+            )
+            chat_id = (
+                update.get("message", {})
+                .get("chat", {})
+                .get("id")
+            )
+            if chat_id is not None:
+                send_telegram_msg(
+                    "I couldn't finish processing that message. "
+                    "It was skipped so HealthCoach can continue. "
+                    "Please send /menu or try again.",
+                    chat_id=chat_id,
+                )
 
 
 def telegram_poll_loop():

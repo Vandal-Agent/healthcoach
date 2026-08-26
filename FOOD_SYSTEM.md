@@ -15,6 +15,7 @@ Build a trustworthy food logging system that understands natural language, verif
 5. Every nutrition value has a source.
 6. Every change is versioned.
 7. Historical entries never change.
+8. One Telegram update may advance only one conversation step.
 
 ---
 

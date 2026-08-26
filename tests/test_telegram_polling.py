@@ -10,6 +10,55 @@ app.CHAT_ID = None
 
 
 class TelegramPollingTests(unittest.TestCase):
+    def test_update_is_claimed_before_conversation_processing(self) -> None:
+        events = []
+
+        with (
+            patch.object(
+                app,
+                "load_state",
+                return_value={"telegram_update_offset": 10},
+            ),
+            patch.object(
+                app,
+                "save_state",
+                side_effect=lambda state: events.append(
+                    ("saved", state["telegram_update_offset"])
+                ),
+            ),
+            patch.object(
+                app,
+                "process_telegram_update",
+                side_effect=lambda update: events.append(
+                    ("processed", update["update_id"])
+                ),
+            ),
+        ):
+            app.process_telegram_update_safely({
+                "update_id": 12,
+                "message": {"chat": {"id": 123}, "text": "1"},
+            })
+
+        self.assertEqual(events, [("saved", 13), ("processed", 12)])
+
+    def test_already_claimed_update_is_not_processed_twice(self) -> None:
+        with (
+            patch.object(
+                app,
+                "load_state",
+                return_value={"telegram_update_offset": 13},
+            ),
+            patch.object(app, "save_state") as save,
+            patch.object(app, "process_telegram_update") as process,
+        ):
+            app.process_telegram_update_safely({
+                "update_id": 12,
+                "message": {"chat": {"id": 123}, "text": "1"},
+            })
+
+        save.assert_not_called()
+        process.assert_not_called()
+
     def test_successful_update_advances_offset(self) -> None:
         with (
             patch.object(app, "process_telegram_update") as process,

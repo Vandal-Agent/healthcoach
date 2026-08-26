@@ -56,6 +56,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Sends daily and weekly coaching through Telegram
 - Skips and reports an individual failed Telegram update so one malformed
   interaction cannot freeze all later messages
+- Claims each Telegram update before handling it so a repeated numeric reply
+  cannot cross into and confirm the next conversation step
 - Runs scheduled health checks and reminders
 
 ## Project Location
