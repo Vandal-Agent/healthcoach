@@ -698,12 +698,29 @@ If it isn't sure, it asks.
 
 If it cannot verify, it says so.
 
-## Saved Foods Library
+## Food Library and Entered Foods
 
-The Telegram Food menu includes a Saved Foods submenu.
+The Telegram Food menu includes a Food Library submenu. The Food Library is
+the complete reusable nutrition catalog: USDA, package-label, barcode,
+restaurant, recipe, estimated, historical, and manually entered records may
+all exist there. A Food Library record does not by itself mean the food is
+currently in My Pantry, is a Saved Recipe, or is a Favorite.
+
+Food Finder searches Food names, brands, and aliases across the complete
+catalog. For each result it shows the active serving and nutrition source and
+reports whether the record is also in My Pantry, Saved Recipes, Favorites, the
+editable Entered Foods list, or previous Food Ledger entries. Food Finder is
+read-only: searching or viewing a result never reclassifies, duplicates,
+deletes, saves, or logs anything.
+
+Entered Foods is the smaller editable subset whose nutrition was entered by
+the user from a package label or manually. Nutrition provenance remains
+separate from where a food is used. A verified USDA food can therefore be
+found in Food Finder even when it is not an Entered Food.
 
 Supported actions:
 
+- Find any reusable nutrition record and see exactly where it is used.
 - Browse manually entered foods and view complete nutrition.
 - Add foods to the library without logging them as eaten.
 - Rename a Saved Food or change its serving description after confirmation.
@@ -730,7 +747,7 @@ Saved Foods accept these nutrition fields:
 Duplicate food names and serving descriptions are not created.
 Renames are rejected when another Food already uses the resulting name and
 serving identity. Removed foods are marked unverified so they no longer
-appear in Saved Foods or resolve as trusted Saved Foods.
+appear in Entered Foods or resolve as trusted entered foods.
 
 Food logging normalizes simple possessive and plural differences when one
 trusted Saved Food is the only unambiguous match. For example, `tracy salad`

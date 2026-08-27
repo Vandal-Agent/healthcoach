@@ -45,7 +45,11 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   numbered editor for correcting amounts, replacing foods, adding missing
   ingredients, and removing optional ingredients before save
 - Edits or deletes Saved Recipes without rewriting previously logged meals
-- Renames, updates, or removes Saved Foods while preserving food-log history
+- Searches the complete Food Library by name, brand, or alias and explains
+  whether each record is in My Pantry, Saved Recipes, Favorites, Entered
+  Foods, or only prior Food Ledger history
+- Renames, updates, or removes manually Entered Foods while preserving
+  food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the
   entire day after confirmation
 - Logs a forgotten food only to the immediately preceding day through either

@@ -41,6 +41,10 @@ from food.library import (
     save_barcode_mapping,
     update_user_saved_food_identity,
 )
+from food.finder import (
+    get_food_location,
+    search_food_locations,
+)
 from food.ledger import (
     add_food_entry,
     copy_food_entries_to_date,
@@ -368,6 +372,9 @@ def menu_reply_markup(message):
             "Choose a saved food to view:",
             "Choose a saved food to edit:",
             "Choose a saved food to delete:",
+            "Choose an entered food to view:",
+            "Choose an entered food to edit:",
+            "Choose an entered food to remove:",
             "Choose a saved recipe to view:",
             "Choose a saved recipe to edit:",
             "Choose a saved recipe to delete:",
@@ -453,19 +460,28 @@ def menu_reply_markup(message):
             ["Search again", "Back"],
             ["Cancel"],
         ]
-    elif "Saved Food Details\n\n" in message:
+    elif "Entered Food Details\n\n" in message:
         rows = [
-            ["Edit Saved Food", "Delete Saved Food"],
+            ["Edit Entered Food", "Remove Entered Food"],
             ["Back", "Cancel"],
         ]
-    elif "Saved Foods Menu\n\n" in message:
+    elif "Food Library Menu\n\n" in message:
         rows = [
-            ["Browse saved foods", "Add saved food"],
-            ["Edit saved food"],
-            ["Delete saved food"],
+            ["Find a food", "Browse entered foods"],
+            ["Add entered food", "Edit entered food"],
+            ["Remove entered food"],
             ["Back", "Cancel"],
         ]
-    elif "Saved Food Edit Menu\n\n" in message:
+    elif "Food Finder — Results\n\n" in message:
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index:index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        rows.extend([["Search again"], ["Back", "Cancel"]])
+    elif "Food Finder — Details\n\n" in message:
+        rows = [["Search again"], ["Back", "Cancel"]]
+    elif "Entered Food Edit Menu\n\n" in message:
         rows = [
             ["Name", "Serving description"],
             ["Nutrition"],
@@ -684,7 +700,7 @@ def menu_reply_markup(message):
             ["Show today"],
             ["Edit today", "Undo last"],
             ["Same as yesterday"],
-            ["Favorites", "Saved foods"],
+            ["Favorites", "Food Library"],
             ["Saved recipes", "My Pantry"],
             ["Photo tools", "Restaurant"],
             ["Update unknown foods"],
@@ -3533,7 +3549,7 @@ def healthcoach_food_menu_text() -> str:
         "6. Same as yesterday\n\n"
         "MY FOODS\n"
         "7. Favorites\n"
-        "8. Saved foods\n"
+        "8. Food Library\n"
         "9. Saved recipes\n"
         "10. My Pantry\n\n"
         "TOOLS\n"
@@ -3860,12 +3876,16 @@ def format_barcode_product(
 
 def healthcoach_saved_foods_menu_text() -> str:
     return (
-        "Saved Foods Menu\n\n"
-        "1. Browse saved foods\n"
-        "2. Add saved food\n"
-        "3. Edit saved food\n"
-        "4. Delete saved food\n"
-        "5. Back"
+        "Food Library Menu\n\n"
+        "1. Find a food\n"
+        "2. Browse entered foods\n"
+        "3. Add entered food\n"
+        "4. Edit entered food\n"
+        "5. Remove entered food\n"
+        "6. Back\n\n"
+        "Food Library search includes USDA, package-label, barcode, "
+        "recipe, and manually entered nutrition records. Entered foods "
+        "are the records you created and can edit directly."
     )
 
 
@@ -3879,7 +3899,7 @@ def healthcoach_saved_recipes_menu_text() -> str:
         "5. Delete saved recipe\n"
         "6. Back\n\n"
         "Import pasted recipe text or a recipe photo, create recipes "
-        "from Saved Foods, or save them from Pantry meal ideas. "
+        "from Food Library records, or save them from Pantry meal ideas. "
         "Saving a recipe does not log it as eaten."
     )
 
@@ -6270,8 +6290,164 @@ def show_pantry_remove_page(
     return True
 
 
+def food_finder_location_labels(food: dict) -> list[str]:
+    """Return short, user-facing labels for one Food record."""
+    labels = []
+    if int(food.get("pantry_count") or 0):
+        labels.append("Pantry")
+    if bool(food.get("is_saved_recipe")):
+        labels.append("Recipe")
+    if int(food.get("favorite_count") or 0):
+        labels.append("Favorite")
+    if bool(food.get("is_entered_food")):
+        labels.append("Entered food")
+    if int(food.get("log_count") or 0):
+        labels.append("Logged before")
+    return labels or ["Nutrition record only"]
+
+
+def format_food_finder_results(
+    foods: list[dict],
+    *,
+    query: str,
+) -> str:
+    """Show concise search results with their current locations."""
+    lines = [
+        "Food Finder — Results",
+        f"Search: {query}",
+        "",
+    ]
+    for index, food in enumerate(foods, start=1):
+        brand = str(food.get("brand") or "").strip()
+        brand_label = f" — {brand}" if brand else ""
+        labels = ", ".join(food_finder_location_labels(food))
+        lines.append(
+            f"{index}. {food.get('canonical_name') or 'Food'}"
+            f"{brand_label} — {labels}"
+        )
+    lines.extend([
+        "",
+        "Choose a number to see exactly where the food is stored and used.",
+        "Reply Search again, Back, or Cancel.",
+    ])
+    return "\n".join(lines)
+
+
+def format_food_finder_details(food: dict) -> str:
+    """Explain one Food record without changing its classification."""
+    def nutrient(field: str, suffix: str) -> str:
+        value = food.get(field)
+        if value is None:
+            return "not available"
+        return f"{format_display_number(float(value))} {suffix}".strip()
+
+    pantry_count = int(food.get("pantry_count") or 0)
+    pantry_text = (
+        f"Yes — {food.get('pantry_locations')}"
+        if pantry_count
+        else "No"
+    )
+    log_count = int(food.get("log_count") or 0)
+    log_text = "No"
+    if log_count:
+        log_word = "entry" if log_count == 1 else "entries"
+        log_text = (
+            f"{log_count} {log_word}; last logged "
+            f"{food.get('last_logged_date') or 'date unavailable'}"
+        )
+    source = str(food.get("verification_source") or "unknown source")
+    brand = str(food.get("brand") or "").strip()
+    restaurant = str(food.get("restaurant") or "").strip()
+    identity_lines = [
+        f"Food: {food.get('canonical_name') or 'Food'}",
+    ]
+    if brand:
+        identity_lines.append(f"Brand: {brand}")
+    if restaurant:
+        identity_lines.append(f"Restaurant: {restaurant}")
+    identity_lines.extend([
+        f"Type: {str(food.get('food_type') or 'food').title()}",
+        f"Serving: {food.get('serving_description') or 'not available'}",
+        f"Nutrition source: {source}",
+        "",
+        "Nutrition",
+        f"- Calories: {nutrient('calories', 'cal')}",
+        f"- Protein: {nutrient('protein_g', 'g')}",
+        f"- Carbohydrates: {nutrient('carbohydrates_g', 'g')}",
+        f"- Fat: {nutrient('fat_g', 'g')}",
+        f"- Fiber: {nutrient('fiber_g', 'g')}",
+        f"- Sugar: {nutrient('sugar_g', 'g')}",
+        f"- Sodium: {nutrient('sodium_mg', 'mg')}",
+        "",
+        "Where it is",
+        "- Food Library: Yes — reusable nutrition record",
+        "- Entered Foods list: "
+        + ("Yes" if food.get("is_entered_food") else "No"),
+        f"- My Pantry: {pantry_text}",
+        "- Saved Recipes: "
+        + ("Yes" if food.get("is_saved_recipe") else "No"),
+        "- Favorites: "
+        + ("Yes" if int(food.get("favorite_count") or 0) else "No"),
+        f"- Food history: {log_text}",
+        "",
+        "A Food Library record provides reusable nutrition. It does not "
+        "mean the food is currently in My Pantry or is a Saved Recipe.",
+        "",
+        "Reply Search again, Back, or Cancel.",
+    ])
+    return "Food Finder — Details\n\n" + "\n".join(identity_lines)
+
+
+def show_food_finder_results(
+    *,
+    chat_id: int | str,
+    query: str,
+) -> bool:
+    """Search the Food Library and preserve a reviewable result list."""
+    try:
+        foods = search_food_locations(query)
+    except ValueError as exc:
+        send_telegram_msg(
+            f"{exc}\n\nSend a more specific food name or reply Back.",
+            chat_id=chat_id,
+            remove_keyboard=True,
+        )
+        return False
+
+    if not foods:
+        send_telegram_msg(
+            "I couldn't find that name in the Food Library, My Pantry, "
+            "Saved Recipes, Favorites, or previous food logs.\n\n"
+            "Try another spelling, a shorter product name, or a brand. "
+            "Nothing was changed.",
+            chat_id=chat_id,
+            remove_keyboard=True,
+        )
+        return False
+
+    update_conversation(
+        chat_id=chat_id,
+        current_step="food_finder_results",
+        known_data={
+            "food_finder_query": str(query).strip(),
+            "food_finder_ids": [
+                int(food["food_id"]) for food in foods
+            ],
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_food_finder_results(
+            foods,
+            query=str(query).strip(),
+        ),
+        chat_id=chat_id,
+    )
+    return True
+
+
 def format_saved_food_choices(foods: list[dict]) -> str:
-    lines = ["Choose a saved food to view:", ""]
+    lines = ["Choose an entered food to view:", ""]
 
     for index, food in enumerate(foods, start=1):
         lines.append(
@@ -6286,7 +6462,7 @@ def format_saved_food_choices(foods: list[dict]) -> str:
 def format_saved_food_edit_choices(
     foods: list[dict],
 ) -> str:
-    lines = ["Choose a saved food to edit:", ""]
+    lines = ["Choose an entered food to edit:", ""]
 
     for index, food in enumerate(foods, start=1):
         lines.append(
@@ -6301,7 +6477,7 @@ def format_saved_food_edit_choices(
 def format_saved_food_delete_choices(
     foods: list[dict],
 ) -> str:
-    lines = ["Choose a saved food to delete:", ""]
+    lines = ["Choose an entered food to remove:", ""]
 
     for index, food in enumerate(foods, start=1):
         lines.append(
@@ -6315,8 +6491,8 @@ def format_saved_food_delete_choices(
 
 def format_saved_food_edit_menu(food: dict) -> str:
     return (
-        "Saved Food Edit Menu\n\n"
-        f"Food: {food.get('canonical_name') or 'Saved food'}\n"
+        "Entered Food Edit Menu\n\n"
+        f"Food: {food.get('canonical_name') or 'Entered food'}\n"
         "Serving: "
         f"{food.get('serving_description') or '1 serving'}\n"
         "Current nutrition version: "
@@ -6341,7 +6517,7 @@ def format_saved_food_details(food: dict) -> str:
     ).replace("_", " ").title()
 
     return (
-        "Saved Food Details\n\n"
+        "Entered Food Details\n\n"
         f"Food: {food['canonical_name']}\n"
         f"Serving: "
         f"{food.get('serving_description') or '1 serving'}\n"
@@ -6355,7 +6531,7 @@ def format_saved_food_details(food: dict) -> str:
         f"Fiber: {nutrient('fiber_g', 'g')}\n"
         f"Sugar: {nutrient('sugar_g', 'g')}\n"
         f"Sodium: {nutrient('sodium_mg', 'mg')}\n\n"
-        "Reply Edit Saved Food, Delete Saved Food, Back, or Cancel."
+        "Reply Edit Entered Food, Remove Entered Food, Back, or Cancel."
     )
 
 
@@ -9152,6 +9328,8 @@ def process_telegram_update(update):
 
             if lowered in {
                 "8",
+                "food library",
+                "library",
                 "saved foods",
                 "saved food",
             }:
@@ -16232,14 +16410,41 @@ def process_telegram_update(update):
         if current_step == "saved_foods":
             if lowered in {
                 "1",
+                "find",
+                "find a food",
+                "search",
+                "search foods",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_finder_query",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Food Finder\n\n"
+                    "What food would you like to find?\n\n"
+                    "Search by food name, brand, or a name you used before. "
+                    "For example: homemade protein bars.\n\n"
+                    "Reply Back to return or Cancel to close.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
+            if lowered in {
+                "2",
                 "browse",
                 "browse saved foods",
+                "browse entered foods",
+                "entered foods",
             }:
                 foods = list_user_saved_foods()
 
                 if not foods:
                     send_telegram_msg(
-                        "There are no manually saved foods yet.",
+                        "There are no manually entered foods yet. Use Find "
+                        "a food to search every reusable nutrition record.",
                         chat_id=chat_id,
                     )
                     return
@@ -16262,9 +16467,10 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "2",
+                "3",
                 "add",
                 "add saved food",
+                "add entered food",
             }:
                 update_conversation(
                     chat_id=chat_id,
@@ -16281,9 +16487,10 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "3",
+                "4",
                 "edit",
                 "edit saved food",
+                "edit entered food",
             }:
                 foods = list_user_saved_foods()
 
@@ -16312,9 +16519,10 @@ def process_telegram_update(update):
                 return
 
             if lowered in {
-                "4",
+                "5",
                 "delete",
                 "delete saved food",
+                "remove entered food",
             }:
                 foods = list_user_saved_foods()
 
@@ -16342,7 +16550,7 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"5", "back"}:
+            if lowered in {"6", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -16357,6 +16565,127 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_saved_foods_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_finder_query":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            show_food_finder_results(
+                chat_id=chat_id,
+                query=text,
+            )
+            return
+
+        if current_step == "food_finder_results":
+            if lowered in {"search again", "new search", "search"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_finder_query",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Food Finder\n\n"
+                    "What food would you like to find?\n\n"
+                    "Search by food name, brand, or a name you used before.\n\n"
+                    "Reply Back to return or Cancel to close.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            food_ids = list(known_data.get("food_finder_ids") or [])
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(food_ids):
+                send_telegram_msg(
+                    "Choose one of the numbered Food Finder results, "
+                    "Search again, Back, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+
+            food = get_food_location(int(food_ids[selection - 1]))
+            if food is None:
+                send_telegram_msg(
+                    "That Food Library record is no longer available. "
+                    "Search again to refresh the results.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food_finder_details",
+                known_data={
+                    **known_data,
+                    "food_finder_food_id": int(food["food_id"]),
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_food_finder_details(food),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_finder_details":
+            if lowered in {"search again", "new search", "search"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_finder_query",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Food Finder\n\n"
+                    "What food would you like to find?\n\n"
+                    "Search by food name, brand, or a name you used before.\n\n"
+                    "Reply Back to return or Cancel to close.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+            if lowered == "back":
+                show_food_finder_results(
+                    chat_id=chat_id,
+                    query=str(
+                        known_data.get("food_finder_query") or "food"
+                    ),
+                )
+                return
+            send_telegram_msg(
+                format_food_finder_details(
+                    get_food_location(
+                        int(known_data.get("food_finder_food_id") or 0)
+                    )
+                    or {}
+                ),
                 chat_id=chat_id,
             )
             return
@@ -17540,7 +17869,11 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"edit", "edit saved food"}:
+            if lowered in {
+                "edit",
+                "edit saved food",
+                "edit entered food",
+            }:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="saved_food_edit_menu",
@@ -17553,7 +17886,11 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"delete", "delete saved food"}:
+            if lowered in {
+                "delete",
+                "delete saved food",
+                "remove entered food",
+            }:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="saved_food_delete_confirmation",
