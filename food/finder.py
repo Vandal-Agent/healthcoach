@@ -65,6 +65,11 @@ def _all_food_locations() -> list[dict[str, Any]]:
                 ) AS favorite_count,
                 (
                     SELECT COUNT(*)
+                    FROM barcode_mappings
+                    WHERE barcode_mappings.food_id = foods.food_id
+                ) AS barcode_count,
+                (
+                    SELECT COUNT(*)
                     FROM food_entries
                     WHERE food_entries.food_id = foods.food_id
                 ) AS log_count,

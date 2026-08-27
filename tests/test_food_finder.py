@@ -102,6 +102,22 @@ class FoodFinderTests(unittest.TestCase):
         self.assertEqual([result["food_id"] for result in results], [food_id])
         self.assertFalse(results[0]["is_entered_food"])
 
+    def test_personal_alias_finds_provider_food_without_renaming_it(self) -> None:
+        food_id = self.create_food(
+            name="Protein bar",
+            brand="Homemade",
+            source="usda.gov",
+        )
+        database.save_food_alias(
+            food_id=food_id,
+            alias_text="Tracy's breakfast bar",
+        )
+
+        results = finder.search_food_locations("Tracy breakfast bars")
+
+        self.assertEqual([result["food_id"] for result in results], [food_id])
+        self.assertEqual(results[0]["canonical_name"], "Protein bar")
+
     def test_reports_pantry_favorite_recipe_and_history_locations(self) -> None:
         food_id = self.create_food(
             name="Homemade Protein Bars",
@@ -154,6 +170,7 @@ class FoodFinderTests(unittest.TestCase):
         self.assertIn("Protein Bars", result["pantry_locations"])
         self.assertEqual(result["is_saved_recipe"], 1)
         self.assertEqual(result["favorite_count"], 1)
+        self.assertEqual(result["barcode_count"], 0)
         self.assertEqual(result["log_count"], 1)
         self.assertEqual(result["last_logged_date"], "2026-08-26")
         self.assertTrue(result["is_entered_food"])

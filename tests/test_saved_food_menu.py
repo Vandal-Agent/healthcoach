@@ -43,9 +43,18 @@ FINDER_FOOD = {
     "pantry_locations": None,
     "is_saved_recipe": 0,
     "favorite_count": 0,
+    "barcode_count": 0,
     "log_count": 1,
     "last_logged_date": "2026-08-26",
     "is_entered_food": False,
+}
+
+PANTRY_ITEM = {
+    "pantry_item_id": 9,
+    "display_name": "Protein bar",
+    "food_id": 79,
+    "storage_area": "unsorted",
+    "food_category": "unsorted",
 }
 
 
@@ -202,7 +211,249 @@ class SavedFoodMenuTests(unittest.TestCase):
         self.assertIn("Entered Foods list: No", message)
         self.assertIn("My Pantry: No", message)
         self.assertIn("Saved Recipes: No", message)
+        self.assertIn("Barcode mapping: No", message)
         self.assertIn("Food history: 1 entry", message)
+
+    def test_food_finder_details_offer_management(self) -> None:
+        message = app.format_food_finder_details(FINDER_FOOD)
+        keyboard = app.menu_reply_markup(message)
+
+        self.assertIn(
+            ["Manage Food", "Search again"],
+            keyboard["keyboard"],
+        )
+
+    def test_provider_food_management_is_source_aware(self) -> None:
+        with patch.object(app, "finder_pantry_items", return_value=[]):
+            message = app.format_food_library_manage(FINDER_FOOD)
+
+        self.assertIn("Add a personal search name", message)
+        self.assertIn("Add to Pantry", message)
+        self.assertIn("Change nutrition", message)
+        self.assertIn("Review removal options", message)
+
+    def test_manage_from_food_finder_details(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_finder_details",
+            "known_data": {"food_finder_food_id": 79},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_food_location",
+                return_value=FINDER_FOOD,
+            ),
+            patch.object(app, "list_pantry_items", return_value=[]),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Manage Food"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "food_library_manage",
+        )
+        self.assertIn("Food Library — Manage Food", send.call_args.args[0])
+
+    def test_confirmed_personal_search_name_preserves_source_name(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_library_name_confirmation",
+            "known_data": {
+                "food_finder_food_id": 79,
+                "food_library_name_is_alias": True,
+                "food_library_new_name": "Tracy's protein bars",
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "save_food_alias") as alias,
+            patch.object(
+                app,
+                "get_food_location",
+                return_value=FINDER_FOOD,
+            ),
+            patch.object(app, "list_pantry_items", return_value=[]),
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        alias.assert_called_once_with(
+            food_id=79,
+            alias_text="Tracy's protein bars",
+        )
+        self.assertTrue(
+            any(
+                "verified source name was preserved" in call.args[0]
+                for call in send.call_args_list
+            )
+        )
+
+    def test_confirmed_add_to_pantry_links_existing_nutrition(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_library_add_pantry_confirmation",
+            "known_data": {"food_finder_food_id": 79},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_food_location",
+                return_value=FINDER_FOOD,
+            ),
+            patch.object(
+                app,
+                "list_pantry_items",
+                side_effect=[[], [PANTRY_ITEM]],
+            ),
+            patch.object(
+                app,
+                "add_pantry_item",
+                return_value=PANTRY_ITEM,
+            ) as add,
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        add.assert_called_once_with(
+            display_name="Protein bar",
+            food_id=79,
+            source="saved_food",
+        )
+        self.assertIn("Food Library — Pantry Item", send.call_args.args[0])
+
+    def test_food_library_nutrition_correction_uses_versioned_editor(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_library_manage",
+            "known_data": {"food_finder_food_id": 79},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_food_location",
+                return_value=FINDER_FOOD,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Change nutrition",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "saved_food_edit_calories",
+        )
+        self.assertTrue(
+            update.call_args.kwargs["known_data"]["_food_finder_return"]
+        )
+        self.assertIn("past logs remain preserved", send.call_args.args[0])
+
+    def test_provider_record_cannot_delete_history(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_library_manage",
+            "known_data": {"food_finder_food_id": 79},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_food_location",
+                return_value=FINDER_FOOD,
+            ),
+            patch.object(app, "list_pantry_items", return_value=[]),
+            patch.object(app, "archive_user_saved_food") as archive,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Delete"}
+            })
+
+        archive.assert_not_called()
+        self.assertIn("nothing personal to delete", send.call_args.args[0])
+
+    def test_confirmed_pantry_organization_is_scoped_to_pantry(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_library_pantry_organization_confirmation",
+            "known_data": {
+                "food_finder_food_id": 79,
+                "food_library_pantry_item_id": 9,
+                "food_library_pantry_storage": "pantry_shelf",
+                "food_library_pantry_category": "snacks",
+            },
+        }
+        organized = dict(PANTRY_ITEM)
+        organized.update({
+            "storage_area": "pantry_shelf",
+            "food_category": "snacks",
+        })
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "update_pantry_item_organization",
+                return_value=organized,
+            ) as update_item,
+            patch.object(
+                app,
+                "list_pantry_items",
+                return_value=[organized],
+            ),
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        update_item.assert_called_once_with(
+            9,
+            storage_area="pantry_shelf",
+            food_category="snacks",
+        )
+        self.assertIn("Food Library — Pantry Item", send.call_args.args[0])
 
     def test_edit_selection_opens_edit_menu(self) -> None:
         conversation = {

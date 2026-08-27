@@ -713,6 +713,21 @@ editable Entered Foods list, or previous Food Ledger entries. Food Finder is
 read-only: searching or viewing a result never reclassifies, duplicates,
 deletes, saves, or logs anything.
 
+After a result is opened, Manage Food provides one contextual place to:
+
+- rename an Entered Food or add a personal searchable name without changing
+  a verified provider identity;
+- add the Food to My Pantry, then assign its Pantry storage location and food
+  type, or update/remove an existing Pantry placement;
+- create a new user-entered Nutrition Version for future uses while retaining
+  the prior source version, logged snapshots, and saved recipe calculations;
+- archive an unused Entered Food while refusing to erase source-backed or
+  historical records, saved barcode mappings, or past food logs.
+
+Pantry placement remains separate from nutrition identity. Changing Pantry
+storage or removing Pantry presence does not delete the Food, nutrition
+versions, Favorites, recipes, or historical logs.
+
 Entered Foods is the smaller editable subset whose nutrition was entered by
 the user from a package label or manually. Nutrition provenance remains
 separate from where a food is used. A verified USDA food can therefore be

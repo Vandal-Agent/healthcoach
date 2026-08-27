@@ -21,6 +21,7 @@ from food.database import (
     get_pending_unresolved_foods,
     get_portion_profile,
     get_unresolved_food,
+    save_food_alias,
     save_portion_profile,
     save_unresolved_food,
     set_unresolved_food_status,
@@ -434,6 +435,12 @@ def menu_reply_markup(message):
             "Save these nutrition changes?",
             "Save this Saved Food change?",
             "Remove this Saved Food?",
+            "Add this food to My Pantry?",
+            "Add this personal search name?",
+            "Save this Food Library name change?",
+            "Archive this entered food?",
+            "Save this Pantry organization?",
+            "Remove this item from My Pantry?",
             "Add these items to My Pantry?",
             "Remove this Pantry item?",
             "Delete this Pantry item from My Pantry?",
@@ -480,7 +487,22 @@ def menu_reply_markup(message):
         ]
         rows.extend([["Search again"], ["Back", "Cancel"]])
     elif "Food Finder — Details\n\n" in message:
-        rows = [["Search again"], ["Back", "Cancel"]]
+        rows = [["Manage Food", "Search again"], ["Back", "Cancel"]]
+    elif "Food Library — Manage Food\n\n" in message:
+        rows = [
+            ["Change name", "Pantry location and type"],
+            ["Change nutrition", "Remove or archive"],
+            ["Back", "Cancel"],
+        ]
+    elif "Food Library — Pantry Item\n\n" in message:
+        rows = [
+            ["Change location and type"],
+            ["Remove from Pantry"],
+            ["Back", "Cancel"],
+        ]
+    elif "Food Library — Choose Pantry Item\n\n" in message:
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [choices, ["Back", "Cancel"]]
     elif "Entered Food Edit Menu\n\n" in message:
         rows = [
             ["Name", "Serving description"],
@@ -6299,6 +6321,8 @@ def food_finder_location_labels(food: dict) -> list[str]:
         labels.append("Recipe")
     if int(food.get("favorite_count") or 0):
         labels.append("Favorite")
+    if int(food.get("barcode_count") or 0):
+        labels.append("Barcode")
     if bool(food.get("is_entered_food")):
         labels.append("Entered food")
     if int(food.get("log_count") or 0):
@@ -6388,14 +6412,153 @@ def format_food_finder_details(food: dict) -> str:
         + ("Yes" if food.get("is_saved_recipe") else "No"),
         "- Favorites: "
         + ("Yes" if int(food.get("favorite_count") or 0) else "No"),
+        "- Barcode mapping: "
+        + (
+            f"Yes — {int(food.get('barcode_count') or 0)} saved"
+            if int(food.get("barcode_count") or 0)
+            else "No"
+        ),
         f"- Food history: {log_text}",
         "",
         "A Food Library record provides reusable nutrition. It does not "
         "mean the food is currently in My Pantry or is a Saved Recipe.",
         "",
-        "Reply Search again, Back, or Cancel.",
+        "Reply Manage Food, Search again, Back, or Cancel.",
     ])
     return "Food Finder — Details\n\n" + "\n".join(identity_lines)
+
+
+def finder_pantry_items(food_id: int) -> list[dict]:
+    """Return Pantry placements linked to one Food record."""
+    return [
+        item
+        for item in list_pantry_items()
+        if int(item.get("food_id") or 0) == int(food_id)
+    ]
+
+
+def format_food_library_manage(food: dict) -> str:
+    """Show safe management actions for one Food Library record."""
+    pantry_items = finder_pantry_items(int(food.get("food_id") or 0))
+    name_action = (
+        "Change name"
+        if food.get("is_entered_food")
+        else "Add a personal search name"
+    )
+    pantry_action = (
+        "Manage Pantry location and type"
+        if pantry_items
+        else "Add to Pantry"
+    )
+    remove_action = (
+        "Remove or archive"
+        if food.get("is_entered_food") or pantry_items
+        else "Review removal options"
+    )
+    return (
+        "Food Library — Manage Food\n\n"
+        f"Food: {food.get('canonical_name') or 'Food'}\n"
+        f"Source: {food.get('verification_source') or 'unknown source'}\n\n"
+        f"1. {name_action}\n"
+        f"2. {pantry_action}\n"
+        "3. Change nutrition\n"
+        f"4. {remove_action}\n"
+        "5. Back\n\n"
+        "Name and nutrition changes affect future use only. Past logs and "
+        "saved recipe calculations stay unchanged."
+    )
+
+
+def show_food_library_manage(
+    *,
+    chat_id: int | str,
+    food_id: int,
+) -> bool:
+    """Refresh and show one Food Library management page."""
+    food = get_food_location(food_id)
+    if food is None:
+        send_telegram_msg(
+            "That Food Library record is no longer available.",
+            chat_id=chat_id,
+        )
+        return False
+    update_conversation(
+        chat_id=chat_id,
+        current_step="food_library_manage",
+        known_data={"food_finder_food_id": int(food_id)},
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_food_library_manage(food),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def format_food_library_pantry_item(item: dict) -> str:
+    """Show one linked Pantry placement from Food Library management."""
+    storage = PANTRY_STORAGE_AREAS.get(
+        str(item.get("storage_area") or "unsorted"),
+        "Unsorted",
+    )
+    category = PANTRY_FOOD_CATEGORIES.get(
+        str(item.get("food_category") or "unsorted"),
+        "Unsorted",
+    )
+    return (
+        "Food Library — Pantry Item\n\n"
+        f"Item: {item.get('display_name') or 'Pantry item'}\n"
+        f"Storage: {storage}\n"
+        f"Food type: {category}\n\n"
+        "1. Change location and type\n"
+        "2. Remove from Pantry\n"
+        "3. Back\n\n"
+        "The Food Library nutrition record and past history are preserved."
+    )
+
+
+def show_food_library_pantry_item(
+    *,
+    chat_id: int | str,
+    pantry_item_id: int,
+) -> bool:
+    """Refresh and show one Food Library Pantry placement."""
+    item = get_pantry_item_by_id(pantry_item_id)
+    if item is None:
+        send_telegram_msg(
+            "That Pantry item is no longer available.",
+            chat_id=chat_id,
+        )
+        return False
+    update_conversation(
+        chat_id=chat_id,
+        current_step="food_library_pantry_item",
+        known_data={
+            "food_library_pantry_item_id": int(pantry_item_id),
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_food_library_pantry_item(item),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def format_food_library_pantry_choices(items: list[dict]) -> str:
+    """Choose one of multiple Pantry placements linked to a Food."""
+    lines = ["Food Library — Choose Pantry Item", ""]
+    for index, item in enumerate(items, start=1):
+        storage = PANTRY_STORAGE_AREAS.get(
+            str(item.get("storage_area") or "unsorted"),
+            "Unsorted",
+        )
+        lines.append(
+            f"{index}. {item.get('display_name') or 'Pantry item'} "
+            f"— {storage}"
+        )
+    lines.extend(["", "Choose a number or reply Back."])
+    return "\n".join(lines)
 
 
 def show_food_finder_results(
@@ -16655,6 +16818,14 @@ def process_telegram_update(update):
             return
 
         if current_step == "food_finder_details":
+            if lowered in {"manage food", "manage", "edit food"}:
+                show_food_library_manage(
+                    chat_id=chat_id,
+                    food_id=int(
+                        known_data.get("food_finder_food_id") or 0
+                    ),
+                )
+                return
             if lowered in {"search again", "new search", "search"}:
                 update_conversation(
                     chat_id=chat_id,
@@ -16688,6 +16859,609 @@ def process_telegram_update(update):
                 ),
                 chat_id=chat_id,
             )
+            return
+
+        if current_step == "food_library_manage":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            food = get_food_location(food_id)
+            if food is None:
+                send_telegram_msg(
+                    "That Food Library record is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"5", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_finder_details",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_food_finder_details(food),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {
+                "1",
+                "change name",
+                "add a personal search name",
+                "personal search name",
+            }:
+                is_alias = not bool(food.get("is_entered_food"))
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_library_name",
+                    known_data={"food_library_name_is_alias": is_alias},
+                    missing_fields=[],
+                )
+                if is_alias:
+                    prompt = (
+                        f"Verified name: {food['canonical_name']}\n\n"
+                        "What personal name should also find this food?\n\n"
+                        "The verified source name will remain unchanged."
+                    )
+                else:
+                    prompt = (
+                        f"Current name: {food['canonical_name']}\n\n"
+                        "What should this entered food be called?"
+                    )
+                send_telegram_msg(
+                    prompt + "\n\nReply Back to return without changing it.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+            if lowered in {
+                "2",
+                "pantry location and type",
+                "manage pantry location and type",
+                "add to pantry",
+            }:
+                pantry_items = finder_pantry_items(food_id)
+                if not pantry_items:
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="food_library_add_pantry_confirmation",
+                        known_data={},
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        "Add this food to My Pantry?\n\n"
+                        f"Food: {food['canonical_name']}\n"
+                        "Storage and food type will start as Unsorted, and "
+                        "you can organize them next.\n\n"
+                        "The existing nutrition will be linked. Nothing "
+                        "will be logged as eaten.\n\n"
+                        "1. Yes\n"
+                        "2. No",
+                        chat_id=chat_id,
+                    )
+                    return
+                if len(pantry_items) == 1:
+                    show_food_library_pantry_item(
+                        chat_id=chat_id,
+                        pantry_item_id=int(
+                            pantry_items[0]["pantry_item_id"]
+                        ),
+                    )
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_library_pantry_select",
+                    known_data={
+                        "food_library_pantry_ids": [
+                            int(item["pantry_item_id"])
+                            for item in pantry_items
+                        ],
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_food_library_pantry_choices(pantry_items),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"3", "change nutrition", "nutrition"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_food_edit_calories",
+                    known_data={
+                        "_food_finder_return": True,
+                        "_saved_food_edit_id": food_id,
+                        "_saved_food_edit_name": str(
+                            food.get("canonical_name") or "Food"
+                        ),
+                        "_saved_food_edit_serving": str(
+                            food.get("serving_description") or "1 serving"
+                        ),
+                        "_saved_food_edit_old_version": int(
+                            food.get("version_number") or 1
+                        ),
+                    },
+                    missing_fields=[],
+                )
+                source_note = (
+                    "This creates a user-entered nutrition version for "
+                    "future use. The original source version and all past "
+                    "logs remain preserved.\n\n"
+                    if not food.get("is_entered_food")
+                    else "This creates a new nutrition version for future "
+                    "use. Past logs remain unchanged.\n\n"
+                )
+                send_telegram_msg(
+                    f"Changing nutrition for {food['canonical_name']}\n"
+                    f"Serving: {food.get('serving_description') or '1 serving'}\n\n"
+                    + source_note
+                    + "Enter the new calories for one serving.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+            if lowered in {
+                "4",
+                "remove or archive",
+                "review removal options",
+                "remove",
+                "delete",
+            }:
+                pantry_items = finder_pantry_items(food_id)
+                if pantry_items:
+                    if len(pantry_items) == 1:
+                        show_food_library_pantry_item(
+                            chat_id=chat_id,
+                            pantry_item_id=int(
+                                pantry_items[0]["pantry_item_id"]
+                            ),
+                        )
+                    else:
+                        update_conversation(
+                            chat_id=chat_id,
+                            current_step="food_library_pantry_select",
+                            known_data={
+                                "food_library_pantry_ids": [
+                                    int(item["pantry_item_id"])
+                                    for item in pantry_items
+                                ],
+                            },
+                            missing_fields=[],
+                        )
+                        send_telegram_msg(
+                            "Choose which Pantry placement to manage.\n\n"
+                            + format_food_library_pantry_choices(
+                                pantry_items
+                            ),
+                            chat_id=chat_id,
+                        )
+                    return
+                if food.get("is_entered_food"):
+                    if (
+                        food.get("is_saved_recipe")
+                        or int(food.get("favorite_count") or 0)
+                        or int(food.get("barcode_count") or 0)
+                    ):
+                        send_telegram_msg(
+                            "This entered food is still used by a Saved "
+                            "Recipe, Favorite, or saved barcode, so it cannot "
+                            "be archived yet. Remove those active uses first. "
+                            "Past food logs never need to be deleted.",
+                            chat_id=chat_id,
+                        )
+                        return
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="food_library_archive_confirmation",
+                        known_data={},
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        "Archive this entered food?\n\n"
+                        f"Food: {food['canonical_name']}\n\n"
+                        "It will leave the Entered Foods list. Past logs "
+                        "and nutrition history will remain available.\n\n"
+                        "Nothing has been changed yet.\n\n"
+                        "1. Yes\n"
+                        "2. No",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(
+                    "This is a verified source or historical nutrition "
+                    "record, not an active personal Pantry or Entered Food "
+                    "item. There is nothing personal to delete. Keeping the "
+                    "record protects past logs and prevents nutrition from "
+                    "being silently lost.",
+                    chat_id=chat_id,
+                )
+                return
+            show_food_library_manage(chat_id=chat_id, food_id=food_id)
+            return
+
+        if current_step == "food_library_name":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            if lowered == "back":
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            revised_name = " ".join(text.strip().split())
+            if len(revised_name) < 2:
+                send_telegram_msg(
+                    "Enter a name with at least two characters.",
+                    chat_id=chat_id,
+                )
+                return
+            food = get_food_location(food_id)
+            if food is None:
+                send_telegram_msg(
+                    "That Food Library record is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            is_alias = bool(known_data.get("food_library_name_is_alias"))
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food_library_name_confirmation",
+                known_data={"food_library_new_name": revised_name},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                ("Add this personal search name?" if is_alias else
+                 "Save this Food Library name change?")
+                + "\n\n"
+                f"Current name: {food['canonical_name']}\n"
+                f"New name: {revised_name}\n\n"
+                + (
+                    "The verified source name remains unchanged.\n\n"
+                    if is_alias else
+                    "Nutrition and past logs remain unchanged.\n\n"
+                )
+                + "1. Yes\n2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_library_name_confirmation":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            if lowered in {"2", "no", "back"}:
+                send_telegram_msg("Nothing was changed.", chat_id=chat_id)
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            revised_name = str(known_data.get("food_library_new_name") or "")
+            try:
+                if known_data.get("food_library_name_is_alias"):
+                    save_food_alias(food_id=food_id, alias_text=revised_name)
+                    result_text = (
+                        f"Added {revised_name} as a personal search name. "
+                        "The verified source name was preserved."
+                    )
+                else:
+                    update_user_saved_food_identity(
+                        food_id=food_id,
+                        canonical_name=revised_name,
+                    )
+                    result_text = (
+                        f"Changed the entered food name to {revised_name}. "
+                        "Nutrition and past logs were preserved."
+                    )
+            except (RuntimeError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't save that name: {exc}\n\n"
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(result_text, chat_id=chat_id)
+            show_food_library_manage(chat_id=chat_id, food_id=food_id)
+            return
+
+        if current_step == "food_library_add_pantry_confirmation":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            if lowered in {"2", "no", "back"}:
+                send_telegram_msg("Nothing was added.", chat_id=chat_id)
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            if lowered not in {"1", "yes", "add"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            food = get_food_location(food_id)
+            if food is None:
+                send_telegram_msg(
+                    "That Food Library record is no longer available.",
+                    chat_id=chat_id,
+                )
+                return
+            same_name = next(
+                (
+                    item for item in list_pantry_items()
+                    if str(item.get("display_name") or "").casefold()
+                    == str(food["canonical_name"]).casefold()
+                    and item.get("food_id") is not None
+                    and int(item["food_id"]) != food_id
+                ),
+                None,
+            )
+            if same_name is not None:
+                send_telegram_msg(
+                    "A different linked Pantry item already uses that "
+                    "name. Rename that Pantry item first so nothing is "
+                    "silently relinked. Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                item = add_pantry_item(
+                    display_name=str(food["canonical_name"]),
+                    food_id=food_id,
+                    source="saved_food",
+                )
+            except ValueError as exc:
+                send_telegram_msg(
+                    f"I couldn't add that Pantry item: {exc}\n\n"
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                f"Added {item['display_name']} to My Pantry with its "
+                "existing nutrition linked. Nothing was logged as eaten.",
+                chat_id=chat_id,
+            )
+            show_food_library_pantry_item(
+                chat_id=chat_id,
+                pantry_item_id=int(item["pantry_item_id"]),
+            )
+            return
+
+        if current_step == "food_library_pantry_select":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            if lowered == "back":
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            pantry_ids = list(known_data.get("food_library_pantry_ids") or [])
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(pantry_ids):
+                send_telegram_msg(
+                    "Choose one of the numbered Pantry items or reply Back.",
+                    chat_id=chat_id,
+                )
+                return
+            show_food_library_pantry_item(
+                chat_id=chat_id,
+                pantry_item_id=int(pantry_ids[selection - 1]),
+            )
+            return
+
+        if current_step == "food_library_pantry_item":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            pantry_item_id = int(
+                known_data.get("food_library_pantry_item_id") or 0
+            )
+            item = get_pantry_item_by_id(pantry_item_id)
+            if item is None:
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            if lowered in {"3", "back"}:
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            if lowered in {
+                "1",
+                "change location and type",
+                "change storage and food type",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_library_pantry_storage",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_pantry_storage_choices(item["display_name"]),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {"2", "remove from pantry", "remove", "delete"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_library_pantry_remove_confirmation",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Remove this item from My Pantry?\n\n"
+                    f"Item: {item['display_name']}\n\n"
+                    "Its Food Library nutrition, recipes, Favorites, and "
+                    "past logs will be preserved.\n\n"
+                    "Nothing has been removed yet.\n\n"
+                    "1. Yes\n2. No",
+                    chat_id=chat_id,
+                )
+                return
+            show_food_library_pantry_item(
+                chat_id=chat_id,
+                pantry_item_id=pantry_item_id,
+            )
+            return
+
+        if current_step == "food_library_pantry_storage":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            pantry_item_id = int(
+                known_data.get("food_library_pantry_item_id") or 0
+            )
+            if lowered == "back":
+                show_food_library_pantry_item(
+                    chat_id=chat_id,
+                    pantry_item_id=pantry_item_id,
+                )
+                return
+            storage = pantry_choice_key(text, PANTRY_STORAGE_AREAS)
+            if storage is None:
+                send_telegram_msg(
+                    "Choose one of the listed storage locations or Back.",
+                    chat_id=chat_id,
+                )
+                return
+            item = get_pantry_item_by_id(pantry_item_id)
+            if item is None:
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food_library_pantry_category",
+                known_data={"food_library_pantry_storage": storage},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_pantry_category_choices(item["display_name"]),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_library_pantry_category":
+            pantry_item_id = int(
+                known_data.get("food_library_pantry_item_id") or 0
+            )
+            if lowered == "back":
+                item = get_pantry_item_by_id(pantry_item_id)
+                if item is not None:
+                    send_telegram_msg(
+                        format_pantry_storage_choices(item["display_name"]),
+                        chat_id=chat_id,
+                    )
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="food_library_pantry_storage",
+                        known_data={},
+                        missing_fields=[],
+                    )
+                return
+            category = pantry_choice_key(text, PANTRY_FOOD_CATEGORIES)
+            if category is None:
+                send_telegram_msg(
+                    "Choose one of the listed food types or Back.",
+                    chat_id=chat_id,
+                )
+                return
+            item = get_pantry_item_by_id(pantry_item_id)
+            if item is None:
+                show_food_library_manage(
+                    chat_id=chat_id,
+                    food_id=int(known_data.get("food_finder_food_id") or 0),
+                )
+                return
+            storage = str(known_data.get("food_library_pantry_storage"))
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food_library_pantry_organization_confirmation",
+                known_data={"food_library_pantry_category": category},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Save this Pantry organization?\n\n"
+                f"Item: {item['display_name']}\n"
+                f"Storage: {PANTRY_STORAGE_AREAS[storage]}\n"
+                f"Food type: {PANTRY_FOOD_CATEGORIES[category]}\n\n"
+                "Nothing has been changed yet.\n\n"
+                "1. Yes\n2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_library_pantry_organization_confirmation":
+            pantry_item_id = int(
+                known_data.get("food_library_pantry_item_id") or 0
+            )
+            if lowered in {"2", "no", "back"}:
+                send_telegram_msg("Nothing was changed.", chat_id=chat_id)
+                show_food_library_pantry_item(
+                    chat_id=chat_id,
+                    pantry_item_id=pantry_item_id,
+                )
+                return
+            if lowered not in {"1", "yes", "save"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            try:
+                update_pantry_item_organization(
+                    pantry_item_id,
+                    storage_area=str(
+                        known_data["food_library_pantry_storage"]
+                    ),
+                    food_category=str(
+                        known_data["food_library_pantry_category"]
+                    ),
+                )
+            except (KeyError, ValueError) as exc:
+                send_telegram_msg(
+                    f"I couldn't save that organization: {exc}\n\n"
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                "Pantry location and food type updated.",
+                chat_id=chat_id,
+            )
+            show_food_library_pantry_item(
+                chat_id=chat_id,
+                pantry_item_id=pantry_item_id,
+            )
+            return
+
+        if current_step == "food_library_pantry_remove_confirmation":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            pantry_item_id = int(
+                known_data.get("food_library_pantry_item_id") or 0
+            )
+            if lowered in {"2", "no", "back"}:
+                send_telegram_msg("Nothing was removed.", chat_id=chat_id)
+                show_food_library_pantry_item(
+                    chat_id=chat_id,
+                    pantry_item_id=pantry_item_id,
+                )
+                return
+            if lowered not in {"1", "yes", "remove"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            removed = remove_pantry_item(pantry_item_id)
+            send_telegram_msg(
+                "Removed the item from My Pantry. Its Food Library "
+                "nutrition and history were preserved."
+                if removed else
+                "That Pantry item was already removed.",
+                chat_id=chat_id,
+            )
+            show_food_library_manage(chat_id=chat_id, food_id=food_id)
+            return
+
+        if current_step == "food_library_archive_confirmation":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            if lowered in {"2", "no", "back"}:
+                send_telegram_msg("Nothing was changed.", chat_id=chat_id)
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            if lowered not in {"1", "yes", "archive"}:
+                send_telegram_msg("Please choose Yes or No.", chat_id=chat_id)
+                return
+            try:
+                archived = archive_user_saved_food(food_id)
+            except ValueError as exc:
+                send_telegram_msg(
+                    f"I couldn't archive that food: {exc}\n\n"
+                    "Nothing was changed.",
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                f"Archived {archived['canonical_name']} from Entered Foods. "
+                "Past logs and nutrition history were preserved.",
+                chat_id=chat_id,
+            )
+            show_food_library_manage(chat_id=chat_id, food_id=food_id)
             return
 
         if current_step == "saved_food_edit_select":
@@ -17026,6 +17800,14 @@ def process_telegram_update(update):
             "saved_food_edit_sodium",
         }:
             if lowered == "back":
+                if known_data.get("_food_finder_return"):
+                    show_food_library_manage(
+                        chat_id=chat_id,
+                        food_id=int(
+                            known_data.get("food_finder_food_id") or 0
+                        ),
+                    )
+                    return
                 if known_data.get(
                     "_pantry_organizer_nutrition_return"
                 ):
@@ -17176,6 +17958,18 @@ def process_telegram_update(update):
 
         if current_step == "saved_food_edit_confirmation":
             if lowered in {"2", "no", "back"}:
+                if known_data.get("_food_finder_return"):
+                    send_telegram_msg(
+                        "No nutrition changes were saved.",
+                        chat_id=chat_id,
+                    )
+                    show_food_library_manage(
+                        chat_id=chat_id,
+                        food_id=int(
+                            known_data.get("food_finder_food_id") or 0
+                        ),
+                    )
+                    return
                 if known_data.get(
                     "_pantry_organizer_nutrition_return"
                 ):
@@ -17262,6 +18056,21 @@ def process_telegram_update(update):
             food_name = str(
                 known_data["_saved_food_edit_name"]
             )
+            if known_data.get("_food_finder_return"):
+                send_telegram_msg(
+                    f"Updated {food_name} to nutrition version "
+                    f"{version['version_number']}.\n"
+                    "Past logs and saved recipe calculations were not "
+                    "changed.",
+                    chat_id=chat_id,
+                )
+                show_food_library_manage(
+                    chat_id=chat_id,
+                    food_id=int(
+                        known_data.get("food_finder_food_id") or 0
+                    ),
+                )
+                return
             if known_data.get("_pantry_organizer_nutrition_return"):
                 send_telegram_msg(
                     f"Updated {food_name} to nutrition version "

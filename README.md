@@ -48,6 +48,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Searches the complete Food Library by name, brand, or alias and explains
   whether each record is in My Pantry, Saved Recipes, Favorites, Entered
   Foods, or only prior Food Ledger history
+- Manages a found Food from one contextual page: personal/search name,
+  Pantry placement and classification, versioned nutrition correction, and
+  safe removal or archival without rewriting past logs
 - Renames, updates, or removes manually Entered Foods while preserving
   food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the
