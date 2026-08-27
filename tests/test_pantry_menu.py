@@ -806,6 +806,52 @@ class PantryMenuTests(unittest.TestCase):
 
         self.assertEqual([food["food_id"] for food in matches], [2])
 
+    def test_existing_nutrition_rejects_unrelated_rice_dishes(self) -> None:
+        foods = [
+            {
+                "food_id": 1,
+                "canonical_name": "Cilantro Lime Rice",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "user_entered",
+                "nutrition_version_id": 11,
+                "calories": 360,
+            },
+            {
+                "food_id": 2,
+                "canonical_name": "bean, rice and turkey burrito",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "user_package_label",
+                "nutrition_version_id": 12,
+                "calories": 590,
+            },
+            {
+                "food_id": 3,
+                "canonical_name": "Original Rice Cracker Snacks",
+                "brand": None,
+                "restaurant": None,
+                "food_type": "food",
+                "verification_status": "verified",
+                "verification_source": "fdc.nal.usda.gov",
+                "nutrition_version_id": 13,
+                "calories": 130,
+            },
+        ]
+
+        with patch.object(
+            app,
+            "list_nutrition_ready_foods",
+            return_value=foods,
+        ):
+            matches = app.pantry_linkable_foods("Cilantro & Lime Rice")
+
+        self.assertEqual([food["food_id"] for food in matches], [1])
+
     def test_skipping_nutrition_item_changes_nothing(self) -> None:
         pantry_item = {
             "pantry_item_id": 42,

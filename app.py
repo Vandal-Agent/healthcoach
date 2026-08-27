@@ -5986,6 +5986,7 @@ def pantry_linkable_foods(pantry_name: str) -> list[dict]:
         "medium",
         "original",
         "red",
+        "rice",
         "shredded",
         "sliced",
         "small",
