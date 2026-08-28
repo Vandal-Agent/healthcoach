@@ -46,6 +46,11 @@ from food.finder import (
     get_food_location,
     search_food_locations,
 )
+from food.health_check import (
+    build_food_library_health_check,
+    health_check_food_items,
+    health_check_food_reason,
+)
 from food.cleanup import (
     consolidate_food_records,
     list_possible_food_duplicates,
@@ -487,6 +492,24 @@ def menu_reply_markup(message):
             ["Add entered food", "Edit entered food"],
             ["Remove entered food"],
             ["Review possible duplicates"],
+            ["Library health check"],
+            ["Back", "Cancel"],
+        ]
+    elif "Food Library Health Check — Item\n\n" in message:
+        rows = [["Manage Food"], ["Back", "Cancel"]]
+    elif message.startswith("Food Library Health Check — "):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index:index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        rows.extend([["Previous", "Next"], ["Back", "Cancel"]])
+    elif "Food Library Health Check\n\n" in message:
+        rows = [
+            ["Complete Pantry nutrition"],
+            ["Organize Pantry"],
+            ["Review nutrition gaps"],
+            ["Review sources", "Review source rechecks"],
             ["Back", "Cancel"],
         ]
     elif "Food Library Cleanup — Possible Duplicates\n\n" in message:
@@ -3987,7 +4010,8 @@ def healthcoach_saved_foods_menu_text() -> str:
         "4. Edit entered food\n"
         "5. Remove entered food\n"
         "6. Review possible duplicates\n"
-        "7. Back\n\n"
+        "7. Library health check\n"
+        "8. Back\n\n"
         "Food Library search includes USDA, package-label, barcode, "
         "recipe, and manually entered nutrition records. Entered foods "
         "are the records you created and can edit directly."
@@ -6565,6 +6589,7 @@ def show_food_library_manage(
     *,
     chat_id: int | str,
     food_id: int,
+    return_data: dict | None = None,
 ) -> bool:
     """Refresh and show one Food Library management page."""
     food = get_food_location(food_id)
@@ -6574,10 +6599,12 @@ def show_food_library_manage(
             chat_id=chat_id,
         )
         return False
+    known_data = {"food_finder_food_id": int(food_id)}
+    known_data.update(return_data or {})
     update_conversation(
         chat_id=chat_id,
         current_step="food_library_manage",
-        known_data={"food_finder_food_id": int(food_id)},
+        known_data=known_data,
         missing_fields=[],
     )
     send_telegram_msg(
@@ -6825,6 +6852,156 @@ def show_food_duplicate_list(*, chat_id: int | str) -> bool:
         chat_id=chat_id,
     )
     return True
+
+
+FOOD_HEALTH_CHECK_PAGE_SIZE = 10
+FOOD_HEALTH_CHECK_LABELS = {
+    "nutrition_gaps": "Nutrition Details",
+    "source_review": "Source Review",
+    "source_rechecks": "Source Rechecks",
+}
+
+
+def format_food_library_health_check(report: dict) -> str:
+    """Summarize actionable Food Library and Pantry maintenance."""
+    preserved = int(report.get("preserved_versions") or 0)
+    return (
+        "Food Library Health Check\n\n"
+        f"Reusable foods reviewed: {int(report.get('food_count') or 0)}\n"
+        f"Pantry items reviewed: {int(report.get('pantry_count') or 0)}\n\n"
+        "1. Complete Pantry nutrition — "
+        f"{len(report.get('pantry_nutrition') or [])} need attention\n"
+        "2. Organize Pantry — "
+        f"{len(report.get('pantry_organization') or [])} unsorted\n"
+        "3. Review nutrition gaps — "
+        f"{len(report.get('nutrition_gaps') or [])} foods\n"
+        "4. Review sources — "
+        f"{len(report.get('source_review') or [])} foods\n"
+        "5. Review source rechecks — "
+        f"{len(report.get('source_rechecks') or [])} due\n"
+        "6. Back\n\n"
+        f"Previous Nutrition Versions on current foods: {preserved}. These "
+        "are preserved on purpose so previous logs and saved recipe "
+        "calculations never change.\n\n"
+        "This is a review report. It never changes or deletes anything "
+        "automatically."
+    )
+
+
+def show_food_library_health_check(*, chat_id: int | str) -> dict:
+    """Refresh and display the read-only Food Library health check."""
+    report = build_food_library_health_check()
+    update_conversation(
+        chat_id=chat_id,
+        current_step="food_health_check",
+        known_data={},
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_food_library_health_check(report),
+        chat_id=chat_id,
+    )
+    return report
+
+
+def format_food_health_check_list(
+    foods: list[dict],
+    *,
+    category: str,
+    page: int,
+) -> str:
+    """Format one stable page of Food Library health-check findings."""
+    page_foods, safe_page, total_pages = simple_page(
+        foods,
+        page=page,
+        page_size=FOOD_HEALTH_CHECK_PAGE_SIZE,
+    )
+    label = FOOD_HEALTH_CHECK_LABELS[category]
+    lines = [
+        f"Food Library Health Check — {label}",
+        f"Page {safe_page + 1} of {total_pages}",
+        "",
+    ]
+    for index, food in enumerate(page_foods, start=1):
+        brand = str(food.get("brand") or "").strip()
+        identity = str(food.get("canonical_name") or "Food")
+        if brand:
+            identity += f" — {brand}"
+        lines.append(f"{index}. {identity}")
+        lines.append(f"   {health_check_food_reason(food, category)}")
+    lines.extend([
+        "",
+        f"Items needing review: {len(foods)}",
+        "Choose a number for details, Next, Previous, Back, or Cancel.",
+        "Nothing changes unless you choose and confirm a management action.",
+    ])
+    return "\n".join(lines)
+
+
+def show_food_health_check_list(
+    *,
+    chat_id: int | str,
+    category: str,
+    page: int = 0,
+) -> bool:
+    """Refresh one Food Library health-check category."""
+    report = build_food_library_health_check()
+    foods = health_check_food_items(report, category)
+    if not foods:
+        send_telegram_msg(
+            f"{FOOD_HEALTH_CHECK_LABELS[category]} is clear. No foods need "
+            "attention in this section.\n\n"
+            + format_food_library_health_check(report),
+            chat_id=chat_id,
+        )
+        update_conversation(
+            chat_id=chat_id,
+            current_step="food_health_check",
+            known_data={},
+            missing_fields=[],
+        )
+        return False
+    page_foods, safe_page, _ = simple_page(
+        foods,
+        page=page,
+        page_size=FOOD_HEALTH_CHECK_PAGE_SIZE,
+    )
+    update_conversation(
+        chat_id=chat_id,
+        current_step="food_health_check_list",
+        known_data={
+            "food_health_check_category": category,
+            "food_health_check_page": safe_page,
+            "food_health_check_ids": [
+                int(food["food_id"]) for food in page_foods
+            ],
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_food_health_check_list(
+            foods,
+            category=category,
+            page=safe_page,
+        ),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def format_food_health_check_item(food: dict, *, category: str) -> str:
+    """Show a health-check reason with the existing Food Finder details."""
+    details = format_food_finder_details(food)
+    details = details.split("\n\n", 1)[-1]
+    details = details.replace(
+        "Reply Manage Food, Search again, Back, or Cancel.",
+        "Reply Manage Food, Back, or Cancel.",
+    )
+    return (
+        "Food Library Health Check — Item\n\n"
+        f"Why it is listed: {health_check_food_reason(food, category)}\n\n"
+        + details
+    )
 
 
 def format_saved_food_choices(foods: list[dict]) -> str:
@@ -16941,7 +17118,16 @@ def process_telegram_update(update):
                 show_food_duplicate_list(chat_id=chat_id)
                 return
 
-            if lowered in {"7", "back"}:
+            if lowered in {
+                "7",
+                "library health check",
+                "food library health check",
+                "health check",
+            }:
+                show_food_library_health_check(chat_id=chat_id)
+                return
+
+            if lowered in {"8", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -16956,6 +17142,211 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_saved_foods_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_health_check":
+            report = build_food_library_health_check()
+            if lowered in {"6", "back"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {
+                "1",
+                "complete pantry nutrition",
+                "pantry nutrition",
+            }:
+                if not report.get("pantry_nutrition"):
+                    send_telegram_msg(
+                        "Pantry nutrition is already complete.",
+                        chat_id=chat_id,
+                    )
+                    show_food_library_health_check(chat_id=chat_id)
+                    return
+                show_pantry_nutrition_queue(
+                    chat_id=chat_id,
+                    page=0,
+                    skipped_ids=[],
+                )
+                return
+            if lowered in {"2", "organize pantry", "pantry organization"}:
+                if not report.get("pantry_organization"):
+                    send_telegram_msg(
+                        "Every Pantry item already has a storage location "
+                        "and food type.",
+                        chat_id=chat_id,
+                    )
+                    show_food_library_health_check(chat_id=chat_id)
+                    return
+                show_pantry_organizer_page(chat_id=chat_id, page=0)
+                return
+            if lowered in {
+                "3",
+                "review nutrition gaps",
+                "nutrition gaps",
+            }:
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category="nutrition_gaps",
+                )
+                return
+            if lowered in {"4", "review sources", "source review"}:
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category="source_review",
+                )
+                return
+            if lowered in {
+                "5",
+                "review source rechecks",
+                "source rechecks",
+                "rechecks",
+            }:
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category="source_rechecks",
+                )
+                return
+            send_telegram_msg(
+                format_food_library_health_check(report),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_health_check_list":
+            category = str(
+                known_data.get("food_health_check_category") or ""
+            )
+            if category not in FOOD_HEALTH_CHECK_LABELS:
+                show_food_library_health_check(chat_id=chat_id)
+                return
+            page = int(known_data.get("food_health_check_page") or 0)
+            if lowered == "back":
+                show_food_library_health_check(chat_id=chat_id)
+                return
+            if lowered == "next":
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category=category,
+                    page=page + 1,
+                )
+                return
+            if lowered == "previous":
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category=category,
+                    page=page - 1,
+                )
+                return
+            ids = list(known_data.get("food_health_check_ids") or [])
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(ids):
+                send_telegram_msg(
+                    "Choose one of the numbered foods, Next, Previous, "
+                    "Back, or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+            food_id = int(ids[selection - 1])
+            latest_report = build_food_library_health_check()
+            selected = next(
+                (
+                    food
+                    for food in health_check_food_items(
+                        latest_report,
+                        category,
+                    )
+                    if int(food.get("food_id") or 0) == food_id
+                ),
+                None,
+            )
+            if selected is None:
+                send_telegram_msg(
+                    "That finding changed since this list was opened. The "
+                    "health check has been refreshed.",
+                    chat_id=chat_id,
+                )
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category=category,
+                    page=page,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food_health_check_item",
+                known_data={
+                    "food_health_check_category": category,
+                    "food_health_check_page": page,
+                    "food_health_check_food_id": food_id,
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_food_health_check_item(selected, category=category),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_health_check_item":
+            category = str(
+                known_data.get("food_health_check_category") or ""
+            )
+            if category not in FOOD_HEALTH_CHECK_LABELS:
+                show_food_library_health_check(chat_id=chat_id)
+                return
+            page = int(known_data.get("food_health_check_page") or 0)
+            food_id = int(known_data.get("food_health_check_food_id") or 0)
+            if lowered == "back":
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category=category,
+                    page=page,
+                )
+                return
+            if lowered in {"manage food", "manage", "edit food"}:
+                show_food_library_manage(
+                    chat_id=chat_id,
+                    food_id=food_id,
+                    return_data={
+                        "_food_health_check_category": category,
+                        "_food_health_check_page": page,
+                    },
+                )
+                return
+            latest_report = build_food_library_health_check()
+            selected = next(
+                (
+                    food
+                    for food in health_check_food_items(
+                        latest_report,
+                        category,
+                    )
+                    if int(food.get("food_id") or 0) == food_id
+                ),
+                None,
+            )
+            if selected is None:
+                show_food_health_check_list(
+                    chat_id=chat_id,
+                    category=category,
+                    page=page,
+                )
+                return
+            send_telegram_msg(
+                format_food_health_check_item(selected, category=category),
                 chat_id=chat_id,
             )
             return
@@ -17284,6 +17675,50 @@ def process_telegram_update(update):
                 )
                 return
             if lowered in {"5", "back"}:
+                health_category = str(
+                    known_data.get("_food_health_check_category") or ""
+                )
+                if health_category in FOOD_HEALTH_CHECK_LABELS:
+                    health_page = int(
+                        known_data.get("_food_health_check_page") or 0
+                    )
+                    report = build_food_library_health_check()
+                    health_food = next(
+                        (
+                            item
+                            for item in health_check_food_items(
+                                report,
+                                health_category,
+                            )
+                            if int(item.get("food_id") or 0) == food_id
+                        ),
+                        None,
+                    )
+                    if health_food is None:
+                        show_food_health_check_list(
+                            chat_id=chat_id,
+                            category=health_category,
+                            page=health_page,
+                        )
+                        return
+                    update_conversation(
+                        chat_id=chat_id,
+                        current_step="food_health_check_item",
+                        known_data={
+                            "food_health_check_category": health_category,
+                            "food_health_check_page": health_page,
+                            "food_health_check_food_id": food_id,
+                        },
+                        missing_fields=[],
+                    )
+                    send_telegram_msg(
+                        format_food_health_check_item(
+                            health_food,
+                            category=health_category,
+                        ),
+                        chat_id=chat_id,
+                    )
+                    return
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food_finder_details",

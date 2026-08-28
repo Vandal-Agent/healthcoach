@@ -55,6 +55,12 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Reviews conservative possible Food Library duplicates, lets the user keep
   both or choose the future primary record, and redirects reusable links while
   preserving old logs, Nutrition Versions, and saved recipe calculations
+- Runs a read-only Food Library health check that counts Pantry items needing
+  nutrition or organization, foods with unavailable nutrient fields,
+  non-recipe records with untrusted sources, provider records due for a source
+  recheck, and intentionally preserved Nutrition Version history; each finding
+  routes to an existing confirmed management workflow and nothing is changed
+  automatically
 - Renames, updates, or removes manually Entered Foods while preserving
   food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the

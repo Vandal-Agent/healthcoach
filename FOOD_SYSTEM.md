@@ -741,6 +741,32 @@ Past Food Ledger entries and saved recipe ingredient/version references are
 not rewritten. Saved Recipe Food records are excluded from Food cleanup and
 must continue to be managed through Saved Recipes.
 
+Food Library Health Check is a separate read-only maintenance report. It
+reviews current Food Library and Pantry records and reports:
+
+- Pantry items that do not yet have usable linked calories;
+- Pantry items whose storage area or food type is still Unsorted;
+- active Foods whose current Nutrition Version has unavailable calories,
+  protein, carbohydrates, fat, fiber, sugar, or sodium;
+- non-recipe Foods whose verification status or source is not trusted; and
+- trusted provider-backed Foods whose source is due for rechecking under the
+  existing age-and-use rules.
+
+User-entered and user-confirmed package-label nutrition are trusted sources;
+they are not presented as questionable merely because the user supplied them.
+Calculated Saved Recipe records are also excluded from source warnings because
+their estimated provenance is intentional and is managed through Saved
+Recipes. Zero nutrient values remain valid and are never mistaken for missing
+values.
+
+The summary counts previous Nutrition Versions for current Food records but
+does not treat them as clutter or errors. Those versions are preserved on
+purpose for past Food Ledger entries and saved recipe calculations. Opening the
+health check never changes Food Library or Pantry records. Pantry findings
+route to the existing Pantry nutrition or organizer workflows, and Food
+findings route to the existing Food Finder/Manage Food workflow, where normal
+confirmation rules still apply.
+
 Pantry placement remains separate from nutrition identity. Changing Pantry
 storage or removing Pantry presence does not delete the Food, nutrition
 versions, Favorites, recipes, or historical logs.

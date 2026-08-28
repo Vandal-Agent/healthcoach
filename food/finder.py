@@ -26,6 +26,10 @@ def _all_food_locations() -> list[dict[str, Any]]:
                 foods.serving_description,
                 foods.verification_status,
                 foods.verification_source,
+                foods.last_verified_at,
+                foods.uses_since_verification,
+                foods.next_verification_due,
+                foods.active_nutrition_version_id,
                 nutrition_versions.version_number,
                 nutrition_versions.calories,
                 nutrition_versions.protein_g,
@@ -34,6 +38,11 @@ def _all_food_locations() -> list[dict[str, Any]]:
                 nutrition_versions.fiber_g,
                 nutrition_versions.sugar_g,
                 nutrition_versions.sodium_mg,
+                (
+                    SELECT COUNT(*)
+                    FROM nutrition_versions AS version_history
+                    WHERE version_history.food_id = foods.food_id
+                ) AS nutrition_version_count,
                 (
                     SELECT GROUP_CONCAT(food_aliases.alias_text, ' | ')
                     FROM food_aliases
@@ -124,6 +133,11 @@ def _all_food_locations() -> list[dict[str, Any]]:
     return results
 
 
+def list_food_locations() -> list[dict[str, Any]]:
+    """List active Food Library records with their current uses."""
+    return _all_food_locations()
+
+
 def _search_rank(food: dict[str, Any], query: str) -> tuple | None:
     """Return a deterministic conservative search rank or no match."""
     requested_tokens = normalized_food_tokens(query)
@@ -183,7 +197,7 @@ def search_food_locations(
         raise ValueError("limit must be positive.")
 
     ranked = []
-    for food in _all_food_locations():
+    for food in list_food_locations():
         rank = _search_rank(food, cleaned)
         if rank is not None:
             ranked.append((rank, food))
@@ -197,7 +211,7 @@ def get_food_location(food_id: int) -> dict[str, Any] | None:
     return next(
         (
             food
-            for food in _all_food_locations()
+            for food in list_food_locations()
             if int(food["food_id"]) == int(food_id)
         ),
         None,
