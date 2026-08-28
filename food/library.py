@@ -12,6 +12,7 @@ from food.database import (
     normalize_key_part,
     save_food_alias,
 )
+from food.nutrition_provider import parse_serving_description
 from food.usda_provider import barcode_match_key, normalize_barcode
 
 REVERIFY_USE_COUNT = 20
@@ -687,12 +688,13 @@ def add_user_nutrition_version(
     *,
     food_id: int,
     calories: float,
-    protein_g: float,
-    carbohydrates_g: float,
-    fat_g: float,
-    fiber_g: float,
-    sugar_g: float,
-    sodium_mg: float,
+    protein_g: float | None,
+    carbohydrates_g: float | None,
+    fat_g: float | None,
+    fiber_g: float | None,
+    sugar_g: float | None,
+    sodium_mg: float | None,
+    serving_description: str | None = None,
     verification_status: str = "verified",
     verification_source: str = "user_entered",
 ) -> dict[str, Any]:
@@ -722,6 +724,12 @@ def add_user_nutrition_version(
     normalized = {}
 
     for field, value in nutrient_values.items():
+        if value is None:
+            if field == "calories":
+                raise ValueError("calories is required.")
+            normalized[field] = None
+            continue
+
         number = float(value)
 
         if number < 0:
@@ -741,6 +749,42 @@ def add_user_nutrition_version(
 
         if food is None:
             raise ValueError(f"Food not found: {food_id}")
+
+        revised_serving = (
+            str(serving_description).strip()
+            if serving_description is not None
+            else str(food["serving_description"])
+        )
+        if not revised_serving:
+            raise ValueError("serving_description is required.")
+        if serving_description is not None:
+            revised_amount, revised_unit = parse_serving_description(
+                revised_serving
+            )
+        else:
+            revised_amount = float(food["serving_amount"])
+            revised_unit = str(food["serving_unit"])
+
+        revised_search_key = build_search_key(
+            canonical_name=str(food["canonical_name"]),
+            serving_description=revised_serving,
+            brand=food["brand"],
+            restaurant=food["restaurant"],
+        )
+        conflict = connection.execute(
+            """
+            SELECT food_id
+            FROM foods
+            WHERE lower(search_key) = lower(?)
+              AND food_id != ?
+            LIMIT 1
+            """,
+            (revised_search_key, int(food_id)),
+        ).fetchone()
+        if conflict is not None:
+            raise ValueError(
+                "Another Food already uses that name and serving."
+            )
 
         version_row = connection.execute(
             """
@@ -789,8 +833,8 @@ def add_user_nutrition_version(
                 normalized["fiber_g"],
                 normalized["sugar_g"],
                 normalized["sodium_mg"],
-                float(food["serving_amount"]),
-                str(food["serving_unit"]),
+                revised_amount,
+                revised_unit,
                 status,
                 source,
                 timestamp,
@@ -802,8 +846,14 @@ def add_user_nutrition_version(
             """
             UPDATE foods
             SET active_nutrition_version_id = ?,
+                serving_description = ?,
+                serving_amount = ?,
+                serving_unit = ?,
+                search_key = ?,
                 verification_status = ?,
                 verification_source = ?,
+                source_item_id = NULL,
+                source_url = NULL,
                 last_verified_at = ?,
                 uses_since_verification = 0,
                 updated_at = ?
@@ -811,6 +861,10 @@ def add_user_nutrition_version(
             """,
             (
                 cursor.lastrowid,
+                revised_serving,
+                revised_amount,
+                revised_unit,
+                revised_search_key,
                 status,
                 source,
                 timestamp,

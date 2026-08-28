@@ -374,12 +374,165 @@ class SavedFoodMenuTests(unittest.TestCase):
 
         self.assertEqual(
             update.call_args.kwargs["current_step"],
-            "saved_food_edit_calories",
+            "food_library_nutrition_serving",
         )
         self.assertTrue(
             update.call_args.kwargs["known_data"]["_food_finder_return"]
         )
         self.assertIn("past logs remain preserved", send.call_args.args[0])
+        self.assertIn("What should one serving be", send.call_args.args[0])
+
+    def test_food_library_nutrition_correction_accepts_new_serving(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_library_nutrition_serving",
+            "known_data": {
+                "food_finder_food_id": 79,
+                "_food_finder_return": True,
+                "_saved_food_edit_id": 79,
+                "_saved_food_edit_name": "Protein bar",
+                "_saved_food_edit_serving": "1 bar (53 g)",
+                "_saved_food_edit_old_version": 1,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "1 half bar (26.5 g)",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "saved_food_edit_calories",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "_saved_food_edit_serving"
+            ],
+            "1 half bar (26.5 g)",
+        )
+        self.assertIn(
+            "Serving for future logs: 1 half bar (26.5 g)",
+            send.call_args.args[0],
+        )
+
+    def test_nutrition_correction_accepts_unknown_optional_nutrient(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "saved_food_edit_fiber",
+            "known_data": {
+                "_saved_food_edit_id": 79,
+                "_saved_food_edit_name": "Protein bar",
+                "_saved_food_edit_serving": "1 half bar (26.5 g)",
+                "_saved_food_edit_old_version": 1,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Unknown"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "saved_food_edit_sugar",
+        )
+        self.assertIsNone(
+            update.call_args.kwargs["known_data"][
+                "_saved_food_edit_fiber_g"
+            ]
+        )
+        self.assertIn("grams of sugar", send.call_args.args[0])
+
+    def test_food_library_confirmation_saves_half_bar_and_unknowns(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "saved_food_edit_confirmation",
+            "known_data": {
+                "food_finder_food_id": 79,
+                "_food_finder_return": True,
+                "_saved_food_edit_id": 79,
+                "_saved_food_edit_name": "Protein bar",
+                "_saved_food_edit_serving": "1 half bar (26.5 g)",
+                "_saved_food_edit_old_version": 1,
+                "_saved_food_edit_calories": 109,
+                "_saved_food_edit_protein_g": 8.05,
+                "_saved_food_edit_carbohydrates_g": 10.2,
+                "_saved_food_edit_fat_g": 4.05,
+                "_saved_food_edit_fiber_g": None,
+                "_saved_food_edit_sugar_g": None,
+                "_saved_food_edit_sodium_mg": None,
+            },
+        }
+        revised_food = dict(FINDER_FOOD)
+        revised_food.update({
+            "serving_description": "1 half bar (26.5 g)",
+            "verification_source": "user_entered",
+            "version_number": 2,
+            "calories": 109,
+            "protein_g": 8.05,
+            "carbohydrates_g": 10.2,
+            "fat_g": 4.05,
+            "is_entered_food": True,
+        })
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "add_user_nutrition_version",
+                return_value={"version_number": 2},
+            ) as add_version,
+            patch.object(
+                app,
+                "get_food_location",
+                return_value=revised_food,
+            ),
+            patch.object(app, "list_pantry_items", return_value=[]),
+            patch.object(app, "update_conversation"),
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        add_version.assert_called_once_with(
+            food_id=79,
+            calories=109.0,
+            protein_g=8.05,
+            carbohydrates_g=10.2,
+            fat_g=4.05,
+            fiber_g=None,
+            sugar_g=None,
+            sodium_mg=None,
+            serving_description="1 half bar (26.5 g)",
+        )
+        self.assertTrue(
+            any(
+                "Updated Protein bar to nutrition version 2" in call.args[0]
+                for call in send.call_args_list
+            )
+        )
 
     def test_provider_record_cannot_delete_history(self) -> None:
         conversation = {

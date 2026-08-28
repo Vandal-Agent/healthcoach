@@ -125,7 +125,10 @@ from food.recipe_importer import (
     parse_recipe_text,
     suggest_generic_ingredient_name,
 )
-from food.nutrition_provider import lookup_official_nutrition
+from food.nutrition_provider import (
+    lookup_official_nutrition,
+    parse_serving_description,
+)
 from food.menu_photo_advisor import (
     analyze_food_photo,
     analyze_menu_photo,
@@ -3205,6 +3208,65 @@ def format_display_number(
         return f"{number:.0f}"
 
     return f"{number:.{decimals}f}".rstrip("0").rstrip(".")
+
+
+UNAVAILABLE_NUTRITION_INPUTS = {
+    "n/a",
+    "na",
+    "none",
+    "not available",
+    "not known",
+    "unavailable",
+    "unknown",
+}
+
+
+def parse_nutrition_edit_number(
+    value: str,
+    *,
+    allow_unavailable: bool,
+) -> float | None:
+    """Parse one nutrition correction without inventing missing values."""
+    lowered = " ".join(str(value or "").strip().lower().split())
+    if lowered in UNAVAILABLE_NUTRITION_INPUTS:
+        if allow_unavailable:
+            return None
+        raise ValueError("Calories are required and cannot be unavailable.")
+
+    cleaned = (
+        lowered
+        .replace(",", "")
+        .replace("calories", "")
+        .replace("calorie", "")
+        .replace("cals", "")
+        .replace("cal", "")
+        .replace("grams", "")
+        .replace("gram", "")
+        .replace("mg", "")
+        .replace("g", "")
+        .strip()
+    )
+    try:
+        number = float(cleaned)
+    except ValueError as exc:
+        raise ValueError(
+            "Enter a non-negative number or reply Unknown."
+            if allow_unavailable
+            else "Enter a non-negative calorie number."
+        ) from exc
+    if number < 0:
+        raise ValueError("Nutrition values cannot be negative.")
+    return number
+
+
+def format_nutrition_edit_value(
+    value: float | int | None,
+    suffix: str,
+) -> str:
+    """Display a proposed nutrient while preserving unavailable values."""
+    if value is None:
+        return "not available"
+    return f"{format_display_number(value)} {suffix}".strip()
 
 
 def format_food_display_name(
@@ -16965,7 +17027,7 @@ def process_telegram_update(update):
             if lowered in {"3", "change nutrition", "nutrition"}:
                 update_conversation(
                     chat_id=chat_id,
-                    current_step="saved_food_edit_calories",
+                    current_step="food_library_nutrition_serving",
                     known_data={
                         "_food_finder_return": True,
                         "_saved_food_edit_id": food_id,
@@ -16993,7 +17055,10 @@ def process_telegram_update(update):
                     f"Changing nutrition for {food['canonical_name']}\n"
                     f"Serving: {food.get('serving_description') or '1 serving'}\n\n"
                     + source_note
-                    + "Enter the new calories for one serving.",
+                    + "What should one serving be for future logs?\n\n"
+                    "Example: 1 half bar (26.5 g)\n\n"
+                    "Reply Keep current to leave the serving unchanged, "
+                    "or Back to return.",
                     chat_id=chat_id,
                     remove_keyboard=True,
                 )
@@ -17075,6 +17140,42 @@ def process_telegram_update(update):
                 )
                 return
             show_food_library_manage(chat_id=chat_id, food_id=food_id)
+            return
+
+        if current_step == "food_library_nutrition_serving":
+            food_id = int(known_data.get("food_finder_food_id") or 0)
+            if lowered == "back":
+                show_food_library_manage(chat_id=chat_id, food_id=food_id)
+                return
+            if lowered in {"keep", "keep current", "same", "no change"}:
+                serving = str(
+                    known_data.get("_saved_food_edit_serving")
+                    or "1 serving"
+                )
+            else:
+                serving = " ".join(text.strip().split())
+                try:
+                    parse_serving_description(serving)
+                except ValueError:
+                    send_telegram_msg(
+                        "Describe one serving with a number and unit.\n\n"
+                        "Examples: 1 half bar (26.5 g), 1 bowl, or 3 oz.\n"
+                        "Reply Keep current or Back.",
+                        chat_id=chat_id,
+                    )
+                    return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="saved_food_edit_calories",
+                known_data={"_saved_food_edit_serving": serving},
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                f"Serving for future logs: {serving}\n\n"
+                "Enter the calories for that serving.",
+                chat_id=chat_id,
+                remove_keyboard=True,
+            )
             return
 
         if current_step == "food_library_name":
@@ -17841,32 +17942,16 @@ def process_telegram_update(update):
                 )
                 return
 
-            cleaned_number = (
-                text.strip().lower()
-                .replace(",", "")
-                .replace("calories", "")
-                .replace("calorie", "")
-                .replace("cals", "")
-                .replace("cal", "")
-                .replace("grams", "")
-                .replace("gram", "")
-                .replace("mg", "")
-                .replace("g", "")
-                .strip()
-            )
-
             try:
-                number = float(cleaned_number)
-            except ValueError:
-                send_telegram_msg(
-                    "Please enter a non-negative number.",
-                    chat_id=chat_id,
+                number = parse_nutrition_edit_number(
+                    text,
+                    allow_unavailable=(
+                        current_step != "saved_food_edit_calories"
+                    ),
                 )
-                return
-
-            if number < 0:
+            except ValueError as exc:
                 send_telegram_msg(
-                    "Nutrition values cannot be negative.",
+                    str(exc),
                     chat_id=chat_id,
                 )
                 return
@@ -17875,32 +17960,32 @@ def process_telegram_update(update):
                 "saved_food_edit_calories": (
                     "_saved_food_edit_calories",
                     "saved_food_edit_protein",
-                    "Enter the new grams of protein.",
+                    "Enter the new grams of protein, or reply Unknown.",
                 ),
                 "saved_food_edit_protein": (
                     "_saved_food_edit_protein_g",
                     "saved_food_edit_carbohydrates",
-                    "Enter the new grams of carbohydrates.",
+                    "Enter the new grams of carbohydrates, or reply Unknown.",
                 ),
                 "saved_food_edit_carbohydrates": (
                     "_saved_food_edit_carbohydrates_g",
                     "saved_food_edit_fat",
-                    "Enter the new grams of fat.",
+                    "Enter the new grams of fat, or reply Unknown.",
                 ),
                 "saved_food_edit_fat": (
                     "_saved_food_edit_fat_g",
                     "saved_food_edit_fiber",
-                    "Enter the new grams of fiber.",
+                    "Enter the new grams of fiber, or reply Unknown.",
                 ),
                 "saved_food_edit_fiber": (
                     "_saved_food_edit_fiber_g",
                     "saved_food_edit_sugar",
-                    "Enter the new grams of sugar.",
+                    "Enter the new grams of sugar, or reply Unknown.",
                 ),
                 "saved_food_edit_sugar": (
                     "_saved_food_edit_sugar_g",
                     "saved_food_edit_sodium",
-                    "Enter the new milligrams of sodium.",
+                    "Enter the new milligrams of sodium, or reply Unknown.",
                 ),
             }
 
@@ -17935,19 +18020,19 @@ def process_telegram_update(update):
                 f"Serving: {updated['_saved_food_edit_serving']}\n"
                 f"New nutrition version: {new_version}\n\n"
                 f"Calories: "
-                f"{format_display_number(updated['_saved_food_edit_calories'])}\n"
+                f"{format_nutrition_edit_value(updated['_saved_food_edit_calories'], 'cal')}\n"
                 f"Protein: "
-                f"{format_display_number(updated['_saved_food_edit_protein_g'])} g\n"
+                f"{format_nutrition_edit_value(updated['_saved_food_edit_protein_g'], 'g')}\n"
                 f"Carbohydrates: "
-                f"{format_display_number(updated['_saved_food_edit_carbohydrates_g'])} g\n"
+                f"{format_nutrition_edit_value(updated['_saved_food_edit_carbohydrates_g'], 'g')}\n"
                 f"Fat: "
-                f"{format_display_number(updated['_saved_food_edit_fat_g'])} g\n"
+                f"{format_nutrition_edit_value(updated['_saved_food_edit_fat_g'], 'g')}\n"
                 f"Fiber: "
-                f"{format_display_number(updated['_saved_food_edit_fiber_g'])} g\n"
+                f"{format_nutrition_edit_value(updated['_saved_food_edit_fiber_g'], 'g')}\n"
                 f"Sugar: "
-                f"{format_display_number(updated['_saved_food_edit_sugar_g'])} g\n"
+                f"{format_nutrition_edit_value(updated['_saved_food_edit_sugar_g'], 'g')}\n"
                 f"Sodium: "
-                f"{format_display_number(updated['_saved_food_edit_sodium_mg'])} mg\n\n"
+                f"{format_nutrition_edit_value(updated['_saved_food_edit_sodium_mg'], 'mg')}\n\n"
                 "Previously logged entries and saved recipe calculations "
                 "will not change.\n\n"
                 "1. Yes\n"
@@ -18016,34 +18101,53 @@ def process_telegram_update(update):
                 return
 
             try:
-                version = add_user_nutrition_version(
-                    food_id=int(
-                        known_data["_saved_food_edit_id"]
-                    ),
-                    calories=float(
+                version_values = {
+                    "food_id": int(known_data["_saved_food_edit_id"]),
+                    "calories": float(
                         known_data["_saved_food_edit_calories"]
                     ),
-                    protein_g=float(
-                        known_data["_saved_food_edit_protein_g"]
+                    "protein_g": (
+                        None
+                        if known_data["_saved_food_edit_protein_g"] is None
+                        else float(known_data["_saved_food_edit_protein_g"])
                     ),
-                    carbohydrates_g=float(
-                        known_data[
+                    "carbohydrates_g": (
+                        None
+                        if known_data[
                             "_saved_food_edit_carbohydrates_g"
-                        ]
+                        ] is None
+                        else float(
+                            known_data[
+                                "_saved_food_edit_carbohydrates_g"
+                            ]
+                        )
                     ),
-                    fat_g=float(
-                        known_data["_saved_food_edit_fat_g"]
+                    "fat_g": (
+                        None
+                        if known_data["_saved_food_edit_fat_g"] is None
+                        else float(known_data["_saved_food_edit_fat_g"])
                     ),
-                    fiber_g=float(
-                        known_data["_saved_food_edit_fiber_g"]
+                    "fiber_g": (
+                        None
+                        if known_data["_saved_food_edit_fiber_g"] is None
+                        else float(known_data["_saved_food_edit_fiber_g"])
                     ),
-                    sugar_g=float(
-                        known_data["_saved_food_edit_sugar_g"]
+                    "sugar_g": (
+                        None
+                        if known_data["_saved_food_edit_sugar_g"] is None
+                        else float(known_data["_saved_food_edit_sugar_g"])
                     ),
-                    sodium_mg=float(
-                        known_data["_saved_food_edit_sodium_mg"]
+                    "sodium_mg": (
+                        None
+                        if known_data["_saved_food_edit_sodium_mg"] is None
+                        else float(known_data["_saved_food_edit_sodium_mg"])
                     ),
-                )
+                }
+                if known_data.get("_food_finder_return"):
+                    version_values["serving_description"] = str(
+                        known_data["_saved_food_edit_serving"]
+                    )
+                version = add_user_nutrition_version(**version_values)
             except Exception:
                 logging.exception("Could not edit saved food")
                 send_telegram_msg(

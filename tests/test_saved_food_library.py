@@ -157,6 +157,66 @@ class SavedFoodLibraryTests(unittest.TestCase):
             new_version["nutrition_version_id"],
         )
 
+    def test_user_version_preserves_unknowns_and_changes_future_serving(self):
+        created = library.add_food_with_nutrition(
+            canonical_name="Protein bar",
+            brand="Homemade",
+            serving_description="1 bar (53 g)",
+            serving_amount=1,
+            serving_unit="bar",
+            verification_status="verified",
+            verification_source="usda.gov",
+            source_item_id="old-usda-record",
+            source_url="https://example.com/usda",
+            calories=218,
+            protein_g=16.1,
+            carbohydrates_g=20.4,
+            fat_g=8.1,
+        )
+        food_id = int(created["food"]["food_id"])
+        old_version_id = int(
+            created["nutrition"]["nutrition_version_id"]
+        )
+
+        new_version = library.add_user_nutrition_version(
+            food_id=food_id,
+            serving_description="1 half bar (26.5 g)",
+            calories=109,
+            protein_g=8.05,
+            carbohydrates_g=10.2,
+            fat_g=4.05,
+            fiber_g=None,
+            sugar_g=None,
+            sodium_mg=None,
+        )
+        updated = library.get_food(food_id)
+
+        self.assertEqual(updated["serving_description"], "1 half bar (26.5 g)")
+        self.assertEqual(updated["serving_amount"], 1)
+        self.assertEqual(updated["serving_unit"], "half bar (26.5 g)")
+        self.assertEqual(updated["verification_source"], "user_entered")
+        self.assertIsNone(updated["source_item_id"])
+        self.assertIsNone(updated["source_url"])
+        self.assertEqual(new_version["calories"], 109)
+        self.assertEqual(new_version["protein_g"], 8.05)
+        self.assertIsNone(new_version["fiber_g"])
+        self.assertIsNone(new_version["sugar_g"])
+        self.assertIsNone(new_version["sodium_mg"])
+
+        with database.get_connection(self.database_path) as connection:
+            old_version = connection.execute(
+                """
+                SELECT *
+                FROM nutrition_versions
+                WHERE nutrition_version_id = ?
+                """,
+                (old_version_id,),
+            ).fetchone()
+
+        self.assertEqual(old_version["calories"], 218)
+        self.assertEqual(old_version["serving_unit"], "bar")
+        self.assertEqual(old_version["verification_source"], "usda.gov")
+
     def test_rejects_negative_nutrition(self):
         created = self.create_food()
 

@@ -721,6 +721,9 @@ After a result is opened, Manage Food provides one contextual place to:
   type, or update/remove an existing Pantry placement;
 - create a new user-entered Nutrition Version for future uses while retaining
   the prior source version, logged snapshots, and saved recipe calculations;
+  Food Finder corrections may also revise the serving used for future logs,
+  while calories remain required and unavailable protein, carbohydrate, fat,
+  fiber, sugar, or sodium values remain unknown rather than becoming zeros;
 - archive an unused Entered Food while refusing to erase source-backed or
   historical records, saved barcode mappings, or past food logs.
 
@@ -747,7 +750,9 @@ Supported actions:
 
 Saved Food nutrition is versioned. Editing nutrition creates a new active
 version for future food logs. Previously logged entries keep their original
-nutrition snapshots and are not recalculated.
+nutrition snapshots and are not recalculated. Calories are required for every
+new version. Any other nutrient may be entered as `Unknown`; the database
+stores it as unavailable rather than inventing a zero.
 
 Saved Foods accept these nutrition fields:
 
