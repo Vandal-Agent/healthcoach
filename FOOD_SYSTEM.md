@@ -392,6 +392,10 @@ Supported workflow:
 - Clear the entire Pantry only after explicit confirmation.
 - Keep Pantry items available until the user removes or clears them.
 - Avoid quantity and depletion tracking in this version.
+- From Organize Pantry, allow a read-only partial search across the Pantry
+  display name, linked Food name, and linked brand. Search results open the
+  existing Organizer item page, so name, storage/type, nutrition, and deletion
+  continue to use their established review and confirmation safeguards.
 - Request Smart Pantry Swaps to receive up to three optional, practical
   replacement ideas ranked by likely value.
 - Ground swap reasoning in saved package nutrition when it is available.

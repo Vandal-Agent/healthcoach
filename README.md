@@ -22,9 +22,10 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Builds a reviewable, deduplicated Pantry list from one or more shelf photos;
   detected items remain unsaved until explicit confirmation and do not invent
   quantities or nutrition
-- Organizes large Pantry lists with separate storage-area and food-type labels,
-  safe item renaming, versioned nutrition correction or relinking, Pantry-only
-  unlinking and deletion, 12-item Telegram pages, explicit confirmation, and
+- Organizes large Pantry lists with partial-name search across Pantry names,
+  linked Food names, and brands; separate storage-area and food-type labels;
+  safe item renaming; versioned nutrition correction or relinking; Pantry-only
+  unlinking and deletion; 12-item Telegram pages; explicit confirmation; and
   visible linked-nutrition coverage
 - Guides the user through Pantry items that still need nutrition and links each
   existing item—after review—to trusted existing user, package-label, USDA, or

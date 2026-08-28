@@ -820,6 +820,26 @@ def menu_reply_markup(message):
                 navigation.append("Next")
             if navigation:
                 rows.append(navigation)
+        rows.append(["Search"])
+        rows.append(["Back", "Cancel"])
+        one_time = True
+    elif message.startswith("Pantry Organizer — Search Results"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index : index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        match = re.search(r"Page (\d+) of (\d+)", message)
+        if match:
+            current_page, total_pages = map(int, match.groups())
+            navigation = []
+            if current_page > 1:
+                navigation.append("Previous")
+            if current_page < total_pages:
+                navigation.append("Next")
+            if navigation:
+                rows.append(navigation)
+        rows.append(["Search again"])
         rows.append(["Back", "Cancel"])
         one_time = True
     elif message.startswith("Pantry Organizer — Item"):
@@ -5664,7 +5684,84 @@ def format_pantry_organize_choices(
         )
     lines.extend([
         "",
-        "Choose a number, Next, Previous, or Back.",
+        "Choose a number, Search, Next, Previous, or Back.",
+    ])
+    return "\n".join(lines)
+
+
+def pantry_organizer_search_items(
+    items: list[dict],
+    query: str,
+) -> list[dict]:
+    """Return Pantry items matching a partial personal or linked name."""
+    normalized_query = " ".join(
+        re.sub(r"[^a-z0-9]+", " ", str(query or "").casefold()).split()
+    )
+    if not normalized_query:
+        return []
+    query_tokens = normalized_query.split()
+    matches = []
+    for item in items:
+        searchable = " ".join(
+            str(item.get(field) or "")
+            for field in ("display_name", "canonical_name", "brand")
+        )
+        normalized_searchable = " ".join(
+            re.sub(
+                r"[^a-z0-9]+",
+                " ",
+                searchable.casefold(),
+            ).split()
+        )
+        if (
+            normalized_query in normalized_searchable
+            or all(token in normalized_searchable for token in query_tokens)
+        ):
+            matches.append(item)
+    return sorted(
+        matches,
+        key=lambda item: (
+            str(item.get("display_name") or "").casefold(),
+            int(item.get("pantry_item_id") or 0),
+        ),
+    )
+
+
+def format_pantry_organizer_search_results(
+    items: list[dict],
+    *,
+    query: str,
+    page: int = 0,
+) -> str:
+    """Show one review-only page of Pantry organizer search matches."""
+    page_items, safe_page, total_pages = simple_page(
+        items,
+        page=page,
+        page_size=PANTRY_PAGE_SIZE,
+    )
+    lines = [
+        "Pantry Organizer — Search Results",
+        f"Search: {query}",
+        f"Page {safe_page + 1} of {total_pages}",
+        "",
+    ]
+    for index, item in enumerate(page_items, start=1):
+        storage = PANTRY_STORAGE_AREAS.get(
+            str(item.get("storage_area") or "unsorted"),
+            "Unsorted",
+        )
+        category = PANTRY_FOOD_CATEGORIES.get(
+            str(item.get("food_category") or "unsorted"),
+            "Unsorted",
+        )
+        lines.append(
+            f"{index}. {item.get('display_name') or 'Pantry item'} "
+            f"— {storage}; {category}"
+        )
+    lines.extend([
+        "",
+        f"Matches: {len(items)}",
+        "Choose a number, Search again, Next, Previous, or Back.",
     ])
     return "\n".join(lines)
 
@@ -5957,6 +6054,58 @@ def show_pantry_organizer_page(
     )
     send_telegram_msg(
         format_pantry_organize_choices(items, page=safe_page),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def show_pantry_organizer_search_results(
+    *,
+    chat_id: int | str,
+    query: str,
+    page: int = 0,
+) -> bool:
+    """Search current Pantry items and show one selectable result page."""
+    matches = pantry_organizer_search_items(list_pantry_items(), query)
+    if not matches:
+        update_conversation(
+            chat_id=chat_id,
+            current_step="pantry_organize_search_query",
+            known_data={"pantry_page": 0},
+            missing_fields=["pantry_search_query"],
+        )
+        send_telegram_msg(
+            "No Pantry items matched that search.\n\n"
+            "Try part of the Pantry name, linked Food name, or brand. "
+            "Reply Back to return.",
+            chat_id=chat_id,
+            remove_keyboard=True,
+        )
+        return False
+    page_items, safe_page, _ = simple_page(
+        matches,
+        page=page,
+        page_size=PANTRY_PAGE_SIZE,
+    )
+    update_conversation(
+        chat_id=chat_id,
+        current_step="pantry_organize_search_results",
+        known_data={
+            "pantry_search_query": str(query).strip(),
+            "pantry_search_page": safe_page,
+            "pantry_search_item_ids": [
+                int(item["pantry_item_id"])
+                for item in page_items
+            ],
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_pantry_organizer_search_results(
+            matches,
+            query=str(query).strip(),
+            page=safe_page,
+        ),
         chat_id=chat_id,
     )
     return True
@@ -6320,6 +6469,8 @@ def show_pantry_organize_action(
     chat_id: int | str,
     pantry_item_id: int,
     page: int = 0,
+    search_query: str | None = None,
+    search_page: int = 0,
 ) -> bool:
     """Show the editable actions for one Pantry item."""
     selected = next(
@@ -6337,14 +6488,21 @@ def show_pantry_organize_action(
         )
         show_pantry_organizer_page(chat_id=chat_id, page=page)
         return False
+    action_data = {
+        "pantry_page": int(page),
+        "pantry_organize_id": int(pantry_item_id),
+        "pantry_organize_name": selected["display_name"],
+    }
+    if search_query:
+        action_data.update({
+            "pantry_search_query": str(search_query),
+            "pantry_search_page": int(search_page),
+            "_pantry_organizer_search_return": True,
+        })
     update_conversation(
         chat_id=chat_id,
         current_step="pantry_organize_action",
-        known_data={
-            "pantry_page": int(page),
-            "pantry_organize_id": int(pantry_item_id),
-            "pantry_organize_name": selected["display_name"],
-        },
+        known_data=action_data,
         missing_fields=[],
     )
     send_telegram_msg(
@@ -12544,6 +12702,27 @@ def process_telegram_update(update):
                 )
                 return
 
+            if lowered in {"search", "find", "find item"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_organize_search_query",
+                    known_data={
+                        "pantry_page": int(
+                            known_data.get("pantry_page") or 0
+                        )
+                    },
+                    missing_fields=["pantry_search_query"],
+                )
+                send_telegram_msg(
+                    "Pantry Organizer — Search\n\n"
+                    "Type all or part of the Pantry item name. You can "
+                    "also search its linked Food name or brand.\n\n"
+                    "Reply Back to return.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+
             page = int(known_data.get("pantry_page") or 0)
             if lowered in {"next", "next page"}:
                 show_pantry_organizer_page(
@@ -12589,13 +12768,106 @@ def process_telegram_update(update):
             )
             return
 
+        if current_step == "pantry_organize_search_query":
+            if lowered == "back":
+                show_pantry_organizer_page(
+                    chat_id=chat_id,
+                    page=int(known_data.get("pantry_page") or 0),
+                )
+                return
+            if not text.strip():
+                send_telegram_msg(
+                    "Type all or part of the Pantry item name, linked "
+                    "Food name, or brand. Reply Back to return.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+            show_pantry_organizer_search_results(
+                chat_id=chat_id,
+                query=text,
+                page=0,
+            )
+            return
+
+        if current_step == "pantry_organize_search_results":
+            query = str(known_data.get("pantry_search_query") or "")
+            search_page = int(known_data.get("pantry_search_page") or 0)
+            if lowered == "back":
+                show_pantry_organizer_page(chat_id=chat_id, page=0)
+                return
+            if lowered in {"search", "search again", "new search"}:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_organize_search_query",
+                    known_data={"pantry_page": 0},
+                    missing_fields=["pantry_search_query"],
+                )
+                send_telegram_msg(
+                    "Pantry Organizer — Search\n\n"
+                    "Type all or part of the Pantry item name. You can "
+                    "also search its linked Food name or brand.\n\n"
+                    "Reply Back to return.",
+                    chat_id=chat_id,
+                    remove_keyboard=True,
+                )
+                return
+            if lowered in {"next", "next page"}:
+                show_pantry_organizer_search_results(
+                    chat_id=chat_id,
+                    query=query,
+                    page=search_page + 1,
+                )
+                return
+            if lowered in {"previous", "previous page", "prev"}:
+                show_pantry_organizer_search_results(
+                    chat_id=chat_id,
+                    query=query,
+                    page=search_page - 1,
+                )
+                return
+
+            pantry_ids = list(
+                known_data.get("pantry_search_item_ids") or []
+            )
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(pantry_ids):
+                show_pantry_organizer_search_results(
+                    chat_id=chat_id,
+                    query=query,
+                    page=search_page,
+                )
+                return
+            show_pantry_organize_action(
+                chat_id=chat_id,
+                pantry_item_id=int(pantry_ids[selection - 1]),
+                page=0,
+                search_query=query,
+                search_page=search_page,
+            )
+            return
+
         if current_step == "pantry_organize_action":
             page = int(known_data.get("pantry_page") or 0)
             pantry_item_id = int(
                 known_data.get("pantry_organize_id") or 0
             )
             if lowered in {"5", "back"}:
-                show_pantry_organizer_page(chat_id=chat_id, page=page)
+                if known_data.get("_pantry_organizer_search_return"):
+                    show_pantry_organizer_search_results(
+                        chat_id=chat_id,
+                        query=str(
+                            known_data.get("pantry_search_query") or ""
+                        ),
+                        page=int(
+                            known_data.get("pantry_search_page") or 0
+                        ),
+                    )
+                else:
+                    show_pantry_organizer_page(chat_id=chat_id, page=page)
                 return
             if lowered in {"1", "change name", "rename"}:
                 update_conversation(

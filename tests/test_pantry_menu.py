@@ -1233,6 +1233,181 @@ class PantryMenuTests(unittest.TestCase):
         )
         self.assertIn("Chicken breast", send.call_args.args[0])
 
+    def test_pantry_organizer_search_matches_names_and_brand(self) -> None:
+        items = [
+            {
+                "pantry_item_id": 1,
+                "display_name": "breakfast bars",
+                "canonical_name": "Protein bar",
+                "brand": "Homemade",
+            },
+            {
+                "pantry_item_id": 2,
+                "display_name": "Cilantro Lime Rice",
+                "canonical_name": "Cilantro & Lime Rice",
+                "brand": "Kroger",
+            },
+            {
+                "pantry_item_id": 3,
+                "display_name": "Black beans",
+                "canonical_name": "Black Beans",
+                "brand": "Generic",
+            },
+        ]
+
+        self.assertEqual(
+            [item["pantry_item_id"] for item in
+             app.pantry_organizer_search_items(items, "protein")],
+            [1],
+        )
+        self.assertEqual(
+            [item["pantry_item_id"] for item in
+             app.pantry_organizer_search_items(items, "krog")],
+            [2],
+        )
+        self.assertEqual(
+            app.pantry_organizer_search_items(items, "turkey"),
+            [],
+        )
+
+    def test_pantry_organizer_search_opens_query_prompt(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_select",
+            "known_data": {
+                "pantry_page": 2,
+                "pantry_item_ids": [42],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Search"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_organize_search_query",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"]["pantry_page"],
+            2,
+        )
+        self.assertIn("linked Food name or brand", send.call_args.args[0])
+
+    def test_pantry_organizer_search_query_shows_matching_items(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_search_query",
+            "known_data": {"pantry_page": 0},
+        }
+        items = [
+            {
+                "pantry_item_id": 42,
+                "display_name": "Homemade protein bar",
+                "canonical_name": "Protein bar",
+                "brand": "Homemade",
+                "storage_area": "freezer",
+                "food_category": "snacks",
+            }
+        ]
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "list_pantry_items", return_value=items),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "protein"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "pantry_organize_search_results",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "pantry_search_item_ids"
+            ],
+            [42],
+        )
+        self.assertIn("Homemade protein bar", send.call_args.args[0])
+
+    def test_pantry_search_result_opens_existing_item_actions(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_search_results",
+            "known_data": {
+                "pantry_search_query": "protein",
+                "pantry_search_page": 1,
+                "pantry_search_item_ids": [42],
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "show_pantry_organize_action") as show,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "1"}
+            })
+
+        show.assert_called_once_with(
+            chat_id=123,
+            pantry_item_id=42,
+            page=0,
+            search_query="protein",
+            search_page=1,
+        )
+
+    def test_back_from_searched_item_returns_to_search_results(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_organize_action",
+            "known_data": {
+                "pantry_page": 0,
+                "pantry_organize_id": 42,
+                "pantry_organize_name": "Protein bar",
+                "pantry_search_query": "protein",
+                "pantry_search_page": 1,
+                "_pantry_organizer_search_return": True,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "show_pantry_organizer_search_results",
+            ) as show,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Back"}
+            })
+
+        show.assert_called_once_with(
+            chat_id=123,
+            query="protein",
+            page=1,
+        )
+
     def test_pantry_organizer_item_offers_rename_or_categories(self) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",
