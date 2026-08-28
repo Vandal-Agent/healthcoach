@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from food import database, finder, health_check, library, pantry
+from food import database, finder, health_check, library, pantry, resolver
 
 
 class FoodLibraryHealthCheckTests(unittest.TestCase):
@@ -20,12 +20,13 @@ class FoodLibraryHealthCheckTests(unittest.TestCase):
         def initialize_test_database(database_path=None):
             return original_initialize(self.database_path)
 
-        modules = (database, finder, library, pantry)
+        modules = (database, finder, library, pantry, resolver)
         self.patchers = [
             patch.object(database, "DATABASE_PATH", self.database_path),
             patch.object(finder, "DATABASE_PATH", self.database_path),
             patch.object(library, "DATABASE_PATH", self.database_path),
             patch.object(pantry, "DATABASE_PATH", self.database_path),
+            patch.object(resolver, "DATABASE_PATH", self.database_path),
         ]
         self.patchers.extend(
             patch.object(
@@ -54,6 +55,7 @@ class FoodLibraryHealthCheckTests(unittest.TestCase):
         fiber_g: float | None = 2,
         sugar_g: float | None = 1,
         sodium_mg: float | None = 100,
+        source_url: str | None = None,
     ) -> int:
         created = library.add_food_with_nutrition(
             canonical_name=name,
@@ -70,6 +72,7 @@ class FoodLibraryHealthCheckTests(unittest.TestCase):
             fiber_g=fiber_g,
             sugar_g=sugar_g,
             sodium_mg=sodium_mg,
+            source_url=source_url,
         )
         return int(created["food"]["food_id"])
 
@@ -189,6 +192,34 @@ class FoodLibraryHealthCheckTests(unittest.TestCase):
             [food["food_id"] for food in report["source_rechecks"]],
             [provider_id],
         )
+
+    def test_direct_official_url_trusts_a_descriptive_source_title(self) -> None:
+        official_id = self.create_food(
+            name="Big Mac",
+            source="McDonald's USA official nutrition page",
+            source_url="https://www.mcdonalds.com/us/en-us/product/big-mac.html",
+        )
+        redirected_id = self.create_food(
+            name="Whopper Sandwich",
+            source="Burger King nutrition page",
+            source_url=(
+                "https://vertexaisearch.cloud.google.com/"
+                "grounding-api-redirect/example"
+            ),
+        )
+
+        report = health_check.build_food_library_health_check()
+
+        self.assertNotIn(
+            official_id,
+            [food["food_id"] for food in report["source_review"]],
+        )
+        self.assertIn(
+            redirected_id,
+            [food["food_id"] for food in report["source_review"]],
+        )
+        official = finder.get_food_location(official_id)
+        self.assertTrue(resolver.is_trusted_saved_food(official))
 
     def test_archived_food_is_not_reported(self) -> None:
         archived_id = self.create_food(

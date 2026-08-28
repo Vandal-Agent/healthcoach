@@ -26,6 +26,7 @@ def _all_food_locations() -> list[dict[str, Any]]:
                 foods.serving_description,
                 foods.verification_status,
                 foods.verification_source,
+                foods.source_url,
                 foods.last_verified_at,
                 foods.uses_since_verification,
                 foods.next_verification_due,

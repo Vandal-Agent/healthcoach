@@ -754,6 +754,9 @@ reviews current Food Library and Pantry records and reports:
 
 User-entered and user-confirmed package-label nutrition are trusted sources;
 they are not presented as questionable merely because the user supplied them.
+Provider nutrition is also trusted when its saved URL points directly to an
+approved official domain, even if its saved source title is descriptive. A
+grounding or other redirect URL is not treated as the destination domain.
 Calculated Saved Recipe records are also excluded from source warnings because
 their estimated provenance is intentional and is managed through Saved
 Recipes. Zero nutrient values remain valid and are never mistaken for missing

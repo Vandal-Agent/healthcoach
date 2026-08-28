@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from food.database import (
     DATABASE_PATH,
@@ -41,6 +42,12 @@ def is_trusted_saved_food(
         "user_entered",
     }:
         return True
+
+    source_url = str(food.get("source_url") or "").strip()
+    if source_url:
+        hostname = str(urlparse(source_url).hostname or "").strip()
+        if hostname and is_trusted_nutrition_source(hostname):
+            return True
 
     return is_trusted_nutrition_source(
         verification_source
