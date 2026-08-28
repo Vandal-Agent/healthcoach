@@ -65,9 +65,17 @@ def find_by_search_key(
     with get_connection(DATABASE_PATH) as connection:
         row = connection.execute(
             """
-            SELECT *
-            FROM foods
-            WHERE lower(search_key) = lower(?)
+            SELECT resolved_foods.*
+            FROM foods AS matched_foods
+            LEFT JOIN food_consolidations
+              ON food_consolidations.duplicate_food_id =
+                 matched_foods.food_id
+            JOIN foods AS resolved_foods
+              ON resolved_foods.food_id = COALESCE(
+                    food_consolidations.primary_food_id,
+                    matched_foods.food_id
+              )
+            WHERE lower(matched_foods.search_key) = lower(?)
             LIMIT 1
             """,
             (search_key.strip(),),
@@ -98,6 +106,12 @@ def find_by_alias(
             JOIN foods
               ON foods.food_id = food_aliases.food_id
             WHERE food_aliases.normalized_alias = ?
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM food_consolidations
+                    WHERE food_consolidations.duplicate_food_id =
+                          foods.food_id
+              )
               AND (
                     ? IS NULL
                     OR lower(foods.brand) = lower(?)
@@ -255,6 +269,12 @@ def find_unique_restaurant_food_match(
                     ? IS NULL
                     OR lower(foods.restaurant) = lower(?)
                   )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM food_consolidations
+                    WHERE food_consolidations.duplicate_food_id =
+                          foods.food_id
+              )
             ORDER BY foods.food_id
             """,
             (

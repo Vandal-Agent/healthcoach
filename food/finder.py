@@ -72,16 +72,44 @@ def _all_food_locations() -> list[dict[str, Any]]:
                     SELECT COUNT(*)
                     FROM food_entries
                     WHERE food_entries.food_id = foods.food_id
+                       OR food_entries.food_id IN (
+                            SELECT food_consolidations.duplicate_food_id
+                            FROM food_consolidations
+                            WHERE food_consolidations.primary_food_id =
+                                  foods.food_id
+                       )
                 ) AS log_count,
                 (
                     SELECT MAX(food_entries.entry_date)
                     FROM food_entries
                     WHERE food_entries.food_id = foods.food_id
-                ) AS last_logged_date
+                       OR food_entries.food_id IN (
+                            SELECT food_consolidations.duplicate_food_id
+                            FROM food_consolidations
+                            WHERE food_consolidations.primary_food_id =
+                                  foods.food_id
+                       )
+                ) AS last_logged_date,
+                (
+                    SELECT COUNT(*)
+                    FROM saved_recipe_ingredients
+                    WHERE saved_recipe_ingredients.food_id = foods.food_id
+                       OR saved_recipe_ingredients.food_id IN (
+                            SELECT food_consolidations.duplicate_food_id
+                            FROM food_consolidations
+                            WHERE food_consolidations.primary_food_id =
+                                  foods.food_id
+                       )
+                ) AS recipe_ingredient_count
             FROM foods
             LEFT JOIN nutrition_versions
               ON nutrition_versions.nutrition_version_id =
                  foods.active_nutrition_version_id
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM food_consolidations
+                WHERE food_consolidations.duplicate_food_id = foods.food_id
+            )
             ORDER BY lower(foods.canonical_name), foods.food_id
             """
         ).fetchall()

@@ -76,6 +76,28 @@ def scale_value(
     return round(float(value) * quantity, 3)
 
 
+def active_food_id(food_id: int) -> int:
+    """Resolve a retired duplicate to its future-facing primary Food."""
+    initialize_database()
+    with get_connection(DATABASE_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(
+                food_consolidations.primary_food_id,
+                foods.food_id
+            ) AS food_id
+            FROM foods
+            LEFT JOIN food_consolidations
+              ON food_consolidations.duplicate_food_id = foods.food_id
+            WHERE foods.food_id = ?
+            """,
+            (int(food_id),),
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"Food not found: {food_id}")
+    return int(row["food_id"])
+
+
 def find_recent_duplicate_entry(
     *,
     entry_date: date | str,
@@ -165,6 +187,7 @@ def add_food_entry(
     if numeric_quantity <= 0:
         raise ValueError("quantity must be greater than zero.")
 
+    food_id = active_food_id(food_id)
     food = get_food(food_id)
 
     if food is None:
@@ -494,6 +517,8 @@ def save_food_favorite_from_entry(
         if entry is None:
             raise ValueError("Food entry not found.")
 
+        future_food_id = active_food_id(int(entry["food_id"]))
+
         connection.execute(
             """
             INSERT INTO food_favorites (
@@ -508,7 +533,7 @@ def save_food_favorite_from_entry(
             DO UPDATE SET updated_at = excluded.updated_at
             """,
             (
-                int(entry["food_id"]),
+                future_food_id,
                 float(entry["quantity"]),
                 entry["meal_category"],
                 timestamp,
@@ -530,7 +555,7 @@ def save_food_favorite_from_entry(
               AND food_favorites.meal_category = ?
             """,
             (
-                int(entry["food_id"]),
+                future_food_id,
                 float(entry["quantity"]),
                 entry["meal_category"],
             ),

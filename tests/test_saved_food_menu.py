@@ -57,6 +57,21 @@ PANTRY_ITEM = {
     "food_category": "unsorted",
 }
 
+SECOND_FINDER_FOOD = {
+    **FINDER_FOOD,
+    "food_id": 80,
+    "canonical_name": "Homemade Protein Bars",
+    "brand": None,
+    "serving_description": "1 small bar",
+    "verification_source": "user_entered",
+    "pantry_count": 1,
+    "favorite_count": 0,
+    "barcode_count": 0,
+    "log_count": 8,
+    "recipe_ingredient_count": 1,
+    "is_entered_food": True,
+}
+
 
 class SavedFoodMenuTests(unittest.TestCase):
     def test_food_menu_opens_food_library(self) -> None:
@@ -95,10 +110,205 @@ class SavedFoodMenuTests(unittest.TestCase):
         self.assertIn("1. Find a food", message)
         self.assertIn("4. Edit entered food", message)
         self.assertIn("5. Remove entered food", message)
+        self.assertIn("6. Review possible duplicates", message)
         self.assertIn(
             ["Find a food", "Browse entered foods"],
             keyboard["keyboard"],
         )
+        self.assertIn(
+            ["Review possible duplicates"],
+            keyboard["keyboard"],
+        )
+
+    def test_duplicate_cleanup_lists_possible_pairs(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "saved_foods",
+            "known_data": {},
+        }
+        pairs = [{"first": FINDER_FOOD, "second": SECOND_FINDER_FOOD}]
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "list_possible_food_duplicates",
+                return_value=pairs,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Review possible duplicates",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "food_duplicate_list",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "food_duplicate_pair_ids"
+            ],
+            [[79, 80]],
+        )
+        self.assertIn(
+            "Protein bar — Homemade ↔ Homemade Protein Bars",
+            send.call_args.args[0],
+        )
+
+    def test_duplicate_selection_shows_full_comparison(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_duplicate_list",
+            "known_data": {"food_duplicate_pair_ids": [[79, 80]]},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_food_location",
+                side_effect=[FINDER_FOOD, SECOND_FINDER_FOOD],
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "1"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "food_duplicate_compare",
+        )
+        message = send.call_args.args[0]
+        self.assertIn("Food Library Cleanup — Compare", message)
+        self.assertIn("Use first", message)
+        self.assertIn("Keep both", message)
+
+    def test_keep_both_persists_review_without_consolidation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_duplicate_compare",
+            "known_data": {
+                "food_duplicate_first_id": 79,
+                "food_duplicate_second_id": 80,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_food_location",
+                side_effect=[FINDER_FOOD, SECOND_FINDER_FOOD],
+            ),
+            patch.object(app, "mark_foods_keep_separate") as keep,
+            patch.object(app, "show_food_duplicate_list") as refresh,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Keep both"}
+            })
+
+        keep.assert_called_once_with(79, 80)
+        refresh.assert_called_once_with(chat_id=123)
+        self.assertIn("Kept both", send.call_args.args[0])
+
+    def test_use_second_requires_explicit_confirmation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_duplicate_compare",
+            "known_data": {
+                "food_duplicate_first_id": 79,
+                "food_duplicate_second_id": 80,
+            },
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "get_food_location",
+                side_effect=[FINDER_FOOD, SECOND_FINDER_FOOD],
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Use second"}
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
+            "food_duplicate_confirmation",
+        )
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "food_duplicate_primary_id"
+            ],
+            80,
+        )
+        self.assertIn(
+            "Consolidate these Food Library records?",
+            send.call_args.args[0],
+        )
+
+    def test_confirmed_duplicate_cleanup_calls_safe_consolidation(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "food_duplicate_confirmation",
+            "known_data": {
+                "food_duplicate_first_id": 79,
+                "food_duplicate_second_id": 80,
+                "food_duplicate_primary_id": 79,
+                "food_duplicate_retired_id": 80,
+            },
+        }
+        result = {
+            "primary_name": "Protein bar",
+            "duplicate_name": "Homemade Protein Bars",
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(
+                app,
+                "consolidate_food_records",
+                return_value=result,
+            ) as consolidate,
+            patch.object(app, "show_food_duplicate_list") as refresh,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {"chat": {"id": 123}, "text": "Yes"}
+            })
+
+        consolidate.assert_called_once_with(
+            primary_food_id=79,
+            duplicate_food_id=80,
+        )
+        refresh.assert_called_once_with(chat_id=123)
+        self.assertIn("records consolidated", send.call_args.args[0])
 
     def test_find_food_opens_search_prompt(self) -> None:
         conversation = {
@@ -211,6 +421,7 @@ class SavedFoodMenuTests(unittest.TestCase):
         self.assertIn("Entered Foods list: No", message)
         self.assertIn("My Pantry: No", message)
         self.assertIn("Saved Recipes: No", message)
+        self.assertIn("Used in Saved Recipes: No", message)
         self.assertIn("Barcode mapping: No", message)
         self.assertIn("Food history: 1 entry", message)
 

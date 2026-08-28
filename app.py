@@ -46,6 +46,11 @@ from food.finder import (
     get_food_location,
     search_food_locations,
 )
+from food.cleanup import (
+    consolidate_food_records,
+    list_possible_food_duplicates,
+    mark_foods_keep_separate,
+)
 from food.ledger import (
     add_food_entry,
     copy_food_entries_to_date,
@@ -442,6 +447,7 @@ def menu_reply_markup(message):
             "Add this personal search name?",
             "Save this Food Library name change?",
             "Archive this entered food?",
+            "Consolidate these Food Library records?",
             "Save this Pantry organization?",
             "Remove this item from My Pantry?",
             "Add these items to My Pantry?",
@@ -480,6 +486,20 @@ def menu_reply_markup(message):
             ["Find a food", "Browse entered foods"],
             ["Add entered food", "Edit entered food"],
             ["Remove entered food"],
+            ["Review possible duplicates"],
+            ["Back", "Cancel"],
+        ]
+    elif "Food Library Cleanup — Possible Duplicates\n\n" in message:
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index:index + 3]
+            for index in range(0, len(choices), 3)
+        ]
+        rows.extend([["Back", "Cancel"]])
+    elif "Food Library Cleanup — Compare\n\n" in message:
+        rows = [
+            ["Use first", "Use second"],
+            ["Keep both"],
             ["Back", "Cancel"],
         ]
     elif "Food Finder — Results\n\n" in message:
@@ -3966,7 +3986,8 @@ def healthcoach_saved_foods_menu_text() -> str:
         "3. Add entered food\n"
         "4. Edit entered food\n"
         "5. Remove entered food\n"
-        "6. Back\n\n"
+        "6. Review possible duplicates\n"
+        "7. Back\n\n"
         "Food Library search includes USDA, package-label, barcode, "
         "recipe, and manually entered nutrition records. Entered foods "
         "are the records you created and can edit directly."
@@ -6381,6 +6402,8 @@ def food_finder_location_labels(food: dict) -> list[str]:
         labels.append("Pantry")
     if bool(food.get("is_saved_recipe")):
         labels.append("Recipe")
+    if int(food.get("recipe_ingredient_count") or 0):
+        labels.append("Recipe ingredient")
     if int(food.get("favorite_count") or 0):
         labels.append("Favorite")
     if int(food.get("barcode_count") or 0):
@@ -6472,6 +6495,13 @@ def format_food_finder_details(food: dict) -> str:
         f"- My Pantry: {pantry_text}",
         "- Saved Recipes: "
         + ("Yes" if food.get("is_saved_recipe") else "No"),
+        "- Used in Saved Recipes: "
+        + (
+            f"Yes — {int(food.get('recipe_ingredient_count') or 0)} "
+            "ingredient link(s)"
+            if int(food.get("recipe_ingredient_count") or 0)
+            else "No"
+        ),
         "- Favorites: "
         + ("Yes" if int(food.get("favorite_count") or 0) else "No"),
         "- Barcode mapping: "
@@ -6666,6 +6696,132 @@ def show_food_finder_results(
             foods,
             query=str(query).strip(),
         ),
+        chat_id=chat_id,
+    )
+    return True
+
+
+def _food_duplicate_identity(food: dict) -> str:
+    """Return one concise identity for duplicate-review messages."""
+    name = str(food.get("canonical_name") or "Food")
+    brand = str(food.get("brand") or "").strip()
+    return f"{name} — {brand}" if brand else name
+
+
+def _food_duplicate_record_lines(
+    food: dict,
+    *,
+    label: str,
+) -> list[str]:
+    """Describe the future nutrition and preserved uses of one record."""
+    def nutrient(field: str, suffix: str, *, decimals: int = 1) -> str:
+        value = food.get(field)
+        if value is None:
+            return "not available"
+        return (
+            f"{format_display_number(float(value), decimals=decimals)}"
+            f" {suffix}"
+        ).strip()
+
+    return [
+        f"{label}: {_food_duplicate_identity(food)}",
+        f"- Serving: {food.get('serving_description') or 'not available'}",
+        "- Nutrition: "
+        f"{nutrient('calories', 'cal', decimals=0)}; "
+        f"protein {nutrient('protein_g', 'g')}; "
+        f"carbs {nutrient('carbohydrates_g', 'g')}; "
+        f"fat {nutrient('fat_g', 'g')}",
+        "- Fiber/sugar/sodium: "
+        f"{nutrient('fiber_g', 'g')} / "
+        f"{nutrient('sugar_g', 'g')} / "
+        f"{nutrient('sodium_mg', 'mg', decimals=0)}",
+        f"- Source: {food.get('verification_source') or 'unknown'}",
+        "- Current uses: "
+        f"{int(food.get('pantry_count') or 0)} Pantry, "
+        f"{int(food.get('favorite_count') or 0)} Favorites, "
+        f"{int(food.get('barcode_count') or 0)} barcodes, "
+        f"{int(food.get('log_count') or 0)} past logs, "
+        f"{int(food.get('recipe_ingredient_count') or 0)} recipe ingredients",
+    ]
+
+
+def format_food_duplicate_choices(pairs: list[dict]) -> str:
+    """Show possible duplicates without declaring that they are identical."""
+    lines = [
+        "Food Library Cleanup — Possible Duplicates",
+        "",
+        "These are name-based possibilities, not automatic matches.",
+        "",
+    ]
+    for index, pair in enumerate(pairs, start=1):
+        lines.append(
+            f"{index}. {_food_duplicate_identity(pair['first'])} ↔ "
+            f"{_food_duplicate_identity(pair['second'])}"
+        )
+    lines.extend([
+        "",
+        "Choose a number to compare both records. Nothing changes until "
+        "you confirm.",
+        "Reply Back or Cancel.",
+    ])
+    return "\n".join(lines)
+
+
+def format_food_duplicate_comparison(
+    first: dict,
+    second: dict,
+) -> str:
+    """Show both records and safe review options."""
+    lines = ["Food Library Cleanup — Compare", ""]
+    lines.extend(_food_duplicate_record_lines(first, label="First"))
+    lines.append("")
+    lines.extend(_food_duplicate_record_lines(second, label="Second"))
+    lines.extend([
+        "",
+        "If these are the same reusable food, choose which record should "
+        "supply the future name, serving, and nutrition.",
+        "",
+        "1. Use first",
+        "2. Use second",
+        "3. Keep both — they are different foods",
+        "4. Back",
+        "",
+        "Past food logs, Nutrition Versions, and saved recipe calculations "
+        "will always remain unchanged.",
+    ])
+    return "\n".join(lines)
+
+
+def show_food_duplicate_list(*, chat_id: int | str) -> bool:
+    """Refresh the possible duplicate queue after each decision."""
+    pairs = list_possible_food_duplicates()
+    if not pairs:
+        update_conversation(
+            chat_id=chat_id,
+            current_step="saved_foods",
+            known_data={},
+            missing_fields=[],
+        )
+        send_telegram_msg(
+            "Food Library Cleanup\n\n"
+            "No unreviewed possible duplicates were found. Nothing was "
+            "changed.\n\n"
+            + healthcoach_saved_foods_menu_text(),
+            chat_id=chat_id,
+        )
+        return False
+    pair_ids = [
+        [int(pair["first"]["food_id"]), int(pair["second"]["food_id"])]
+        for pair in pairs
+    ]
+    update_conversation(
+        chat_id=chat_id,
+        current_step="food_duplicate_list",
+        known_data={"food_duplicate_pair_ids": pair_ids},
+        missing_fields=[],
+    )
+    send_telegram_msg(
+        format_food_duplicate_choices(pairs),
         chat_id=chat_id,
     )
     return True
@@ -16775,7 +16931,17 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"6", "back"}:
+            if lowered in {
+                "6",
+                "review possible duplicates",
+                "review duplicates",
+                "duplicate cleanup",
+                "cleanup",
+            }:
+                show_food_duplicate_list(chat_id=chat_id)
+                return
+
+            if lowered in {"7", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="food",
@@ -16792,6 +16958,191 @@ def process_telegram_update(update):
                 healthcoach_saved_foods_menu_text(),
                 chat_id=chat_id,
             )
+            return
+
+        if current_step == "food_duplicate_list":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_foods",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_saved_foods_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            pair_ids = list(known_data.get("food_duplicate_pair_ids") or [])
+            try:
+                selection = int(lowered)
+            except ValueError:
+                selection = 0
+            if selection < 1 or selection > len(pair_ids):
+                send_telegram_msg(
+                    "Choose one of the numbered possible duplicates, Back, "
+                    "or Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+            selected_pair = list(pair_ids[selection - 1])
+            if len(selected_pair) != 2:
+                show_food_duplicate_list(chat_id=chat_id)
+                return
+            first = get_food_location(int(selected_pair[0]))
+            second = get_food_location(int(selected_pair[1]))
+            if first is None or second is None:
+                send_telegram_msg(
+                    "One record changed since this list was opened. The "
+                    "possible-duplicate list has been refreshed.",
+                    chat_id=chat_id,
+                )
+                show_food_duplicate_list(chat_id=chat_id)
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food_duplicate_compare",
+                known_data={
+                    "food_duplicate_first_id": int(first["food_id"]),
+                    "food_duplicate_second_id": int(second["food_id"]),
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                format_food_duplicate_comparison(first, second),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_duplicate_compare":
+            if lowered in {"4", "back"}:
+                show_food_duplicate_list(chat_id=chat_id)
+                return
+            first_id = int(known_data.get("food_duplicate_first_id") or 0)
+            second_id = int(known_data.get("food_duplicate_second_id") or 0)
+            first = get_food_location(first_id)
+            second = get_food_location(second_id)
+            if first is None or second is None:
+                send_telegram_msg(
+                    "One record is no longer available. The cleanup list "
+                    "has been refreshed.",
+                    chat_id=chat_id,
+                )
+                show_food_duplicate_list(chat_id=chat_id)
+                return
+            if lowered in {"3", "keep both", "different", "separate"}:
+                try:
+                    mark_foods_keep_separate(first_id, second_id)
+                except Exception:
+                    logging.exception("Could not save duplicate review")
+                    send_telegram_msg(
+                        "I could not save that review. Nothing was changed.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(
+                    "Kept both Food Library records. They will not be "
+                    "suggested as duplicates again.",
+                    chat_id=chat_id,
+                )
+                show_food_duplicate_list(chat_id=chat_id)
+                return
+            if lowered in {"1", "use first", "first"}:
+                primary, duplicate = first, second
+            elif lowered in {"2", "use second", "second"}:
+                primary, duplicate = second, first
+            else:
+                send_telegram_msg(
+                    "Choose Use first, Use second, Keep both, Back, or "
+                    "Cancel.",
+                    chat_id=chat_id,
+                )
+                return
+            update_conversation(
+                chat_id=chat_id,
+                current_step="food_duplicate_confirmation",
+                known_data={
+                    "food_duplicate_primary_id": int(primary["food_id"]),
+                    "food_duplicate_retired_id": int(duplicate["food_id"]),
+                },
+                missing_fields=[],
+            )
+            send_telegram_msg(
+                "Consolidate these Food Library records?\n\n"
+                "Keep for future use:\n"
+                f"- {_food_duplicate_identity(primary)}\n"
+                f"- Serving: {primary.get('serving_description')}\n"
+                f"- Source: {primary.get('verification_source')}\n\n"
+                "Retire from future choices:\n"
+                f"- {_food_duplicate_identity(duplicate)}\n\n"
+                "Pantry links, Favorites, barcodes, portion phrases, and "
+                "search names will point to the kept record. Past logs, all "
+                "Nutrition Versions, and existing saved recipe calculations "
+                "will remain attached to their original records.\n\n"
+                "Nothing has changed yet.\n\n"
+                "1. Yes\n"
+                "2. No",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "food_duplicate_confirmation":
+            primary_id = int(
+                known_data.get("food_duplicate_primary_id") or 0
+            )
+            duplicate_id = int(
+                known_data.get("food_duplicate_retired_id") or 0
+            )
+            if lowered in {"2", "no", "back"}:
+                first = get_food_location(
+                    int(known_data.get("food_duplicate_first_id") or 0)
+                )
+                second = get_food_location(
+                    int(known_data.get("food_duplicate_second_id") or 0)
+                )
+                if first is None or second is None:
+                    show_food_duplicate_list(chat_id=chat_id)
+                    return
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="food_duplicate_compare",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "Nothing was consolidated.\n\n"
+                    + format_food_duplicate_comparison(first, second),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered not in {"1", "yes", "confirm", "consolidate"}:
+                send_telegram_msg(
+                    "Please choose Yes or No.",
+                    chat_id=chat_id,
+                )
+                return
+            try:
+                result = consolidate_food_records(
+                    primary_food_id=primary_id,
+                    duplicate_food_id=duplicate_id,
+                )
+            except Exception as exc:
+                logging.exception("Food Library consolidation failed")
+                send_telegram_msg(
+                    "I could not consolidate those records safely. Nothing "
+                    f"was changed.\n\nReason: {exc}",
+                    chat_id=chat_id,
+                )
+                return
+            send_telegram_msg(
+                "Food Library records consolidated.\n\n"
+                f"Future record: {result['primary_name']}\n"
+                f"Retired duplicate: {result['duplicate_name']}\n\n"
+                "Past logs, nutrition history, and saved recipe "
+                "calculations were preserved.",
+                chat_id=chat_id,
+            )
+            show_food_duplicate_list(chat_id=chat_id)
             return
 
         if current_step == "food_finder_query":

@@ -173,6 +173,7 @@ class FoodFinderTests(unittest.TestCase):
         self.assertEqual(result["barcode_count"], 0)
         self.assertEqual(result["log_count"], 1)
         self.assertEqual(result["last_logged_date"], "2026-08-26")
+        self.assertEqual(result["recipe_ingredient_count"], 0)
         self.assertTrue(result["is_entered_food"])
 
     def test_rejects_blank_or_one_character_search(self) -> None:

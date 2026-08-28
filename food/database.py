@@ -11,7 +11,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DATABASE_PATH: Final[Path] = PROJECT_ROOT / "data" / "healthcoach_food.db"
 
 INITIAL_SCHEMA_VERSION: Final[int] = 1
-SCHEMA_VERSION: Final[int] = 13
+SCHEMA_VERSION: Final[int] = 14
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -597,6 +597,7 @@ def create_initial_database(
     create_schema(connection)
     create_weight_goals_schema(connection)
     create_recipe_builder_schema(connection)
+    create_food_cleanup_schema(connection)
 
     record_schema_version(
         connection,
@@ -676,8 +677,14 @@ def create_initial_database(
 
     record_schema_version(
         connection,
-        version=SCHEMA_VERSION,
+        version=13,
         description="Organize Pantry by storage area and food type",
+    )
+
+    record_schema_version(
+        connection,
+        version=SCHEMA_VERSION,
+        description="Add review-first Food Library consolidation",
     )
 
 
@@ -974,6 +981,49 @@ def create_recipe_builder_schema(
 
         CREATE INDEX IF NOT EXISTS idx_saved_recipe_ingredients_food
             ON saved_recipe_ingredients (food_id);
+        """
+    )
+
+
+def create_food_cleanup_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create durable Food Library consolidation and review records."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS food_consolidations (
+            duplicate_food_id INTEGER PRIMARY KEY,
+            primary_food_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+
+            CHECK (duplicate_food_id != primary_food_id),
+
+            FOREIGN KEY (duplicate_food_id)
+                REFERENCES foods (food_id),
+            FOREIGN KEY (primary_food_id)
+                REFERENCES foods (food_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_food_consolidations_primary
+            ON food_consolidations (primary_food_id);
+
+        CREATE TABLE IF NOT EXISTS food_duplicate_reviews (
+            first_food_id INTEGER NOT NULL,
+            second_food_id INTEGER NOT NULL,
+            decision TEXT NOT NULL
+                CHECK (decision = 'keep_separate'),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            CHECK (first_food_id < second_food_id),
+
+            PRIMARY KEY (first_food_id, second_food_id),
+
+            FOREIGN KEY (first_food_id)
+                REFERENCES foods (food_id),
+            FOREIGN KEY (second_food_id)
+                REFERENCES foods (food_id)
+        );
         """
     )
 
@@ -1439,6 +1489,19 @@ def migrate_version_12_to_13(
     )
 
 
+def migrate_version_13_to_14(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add review-first Food Library duplicate consolidation."""
+    create_food_cleanup_schema(connection)
+
+    record_schema_version(
+        connection,
+        version=14,
+        description="Add review-first Food Library consolidation",
+    )
+
+
 def apply_migrations(
     connection: sqlite3.Connection,
 ) -> None:
@@ -1497,6 +1560,10 @@ def apply_migrations(
         migrate_version_12_to_13(connection)
         version = 13
 
+    if version < 14:
+        migrate_version_13_to_14(connection)
+        version = 14
+
     if version > SCHEMA_VERSION:
         raise RuntimeError(
             "The Food database schema is newer than this code supports. "
@@ -1511,6 +1578,7 @@ def apply_migrations(
     create_pantry_schema(connection)
     create_saved_recipes_schema(connection)
     create_recipe_builder_schema(connection)
+    create_food_cleanup_schema(connection)
     create_shopping_list_schema(connection)
     create_weight_goals_schema(connection)
 
@@ -1551,6 +1619,8 @@ def validate_database(
         "pantry_items",
         "saved_recipes",
         "saved_recipe_ingredients",
+        "food_consolidations",
+        "food_duplicate_reviews",
         "shopping_list_items",
         "weight_goals",
         "weight_goal_calculations",

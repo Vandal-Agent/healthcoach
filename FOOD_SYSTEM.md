@@ -727,6 +727,20 @@ After a result is opened, Manage Food provides one contextual place to:
 - archive an unused Entered Food while refusing to erase source-backed or
   historical records, saved barcode mappings, or past food logs.
 
+Food Library Cleanup provides a separate review-first duplicate queue. It
+uses conservative name and brand normalization only to identify possible
+pairs; it never declares two foods identical or consolidates them
+automatically. For each pair the user can compare the name, brand, serving,
+active calories, nutrition source, and current uses, then choose either record
+as the future primary record or permanently mark the pair as different foods.
+
+Confirmed consolidation redirects future Pantry links, Favorites, barcode
+mappings, portion phrases, and search aliases to the selected primary Food.
+The retired record and all of its Nutrition Versions remain in the database.
+Past Food Ledger entries and saved recipe ingredient/version references are
+not rewritten. Saved Recipe Food records are excluded from Food cleanup and
+must continue to be managed through Saved Recipes.
+
 Pantry placement remains separate from nutrition identity. Changing Pantry
 storage or removing Pantry presence does not delete the Food, nutrition
 versions, Favorites, recipes, or historical logs.

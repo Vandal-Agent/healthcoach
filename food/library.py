@@ -59,19 +59,27 @@ def find_food(
     with get_connection(DATABASE_PATH) as connection:
         row = connection.execute(
             """
-            SELECT *
-            FROM foods
-            WHERE lower(canonical_name) = lower(?)
-              AND lower(serving_description) = lower(?)
+            SELECT resolved_foods.*
+            FROM foods AS matched_foods
+            LEFT JOIN food_consolidations
+              ON food_consolidations.duplicate_food_id =
+                 matched_foods.food_id
+            JOIN foods AS resolved_foods
+              ON resolved_foods.food_id = COALESCE(
+                    food_consolidations.primary_food_id,
+                    matched_foods.food_id
+              )
+            WHERE lower(matched_foods.canonical_name) = lower(?)
+              AND lower(matched_foods.serving_description) = lower(?)
               AND (
-                    brand = ?
-                    OR (brand IS NULL AND ? IS NULL)
+                    matched_foods.brand = ?
+                    OR (matched_foods.brand IS NULL AND ? IS NULL)
               )
               AND (
-                    restaurant = ?
-                    OR (restaurant IS NULL AND ? IS NULL)
+                    matched_foods.restaurant = ?
+                    OR (matched_foods.restaurant IS NULL AND ? IS NULL)
               )
-            ORDER BY food_id
+            ORDER BY matched_foods.food_id
             LIMIT 1
             """,
             (
@@ -489,6 +497,12 @@ def list_user_saved_foods() -> list[dict[str, Any]]:
                 'user_package_label',
                 'user_entered'
             )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM food_consolidations
+                    WHERE food_consolidations.duplicate_food_id =
+                          foods.food_id
+              )
             ORDER BY lower(foods.canonical_name), foods.food_id
             """
         ).fetchall()
@@ -519,6 +533,12 @@ def list_nutrition_ready_foods() -> list[dict[str, Any]]:
                  foods.active_nutrition_version_id
             WHERE foods.verification_status = 'verified'
               AND nutrition_versions.calories IS NOT NULL
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM food_consolidations
+                    WHERE food_consolidations.duplicate_food_id =
+                          foods.food_id
+              )
             ORDER BY lower(foods.canonical_name), foods.food_id
             """
         ).fetchall()

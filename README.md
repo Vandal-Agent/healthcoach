@@ -52,6 +52,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   Pantry placement and classification, versioned serving and nutrition
   correction (including honestly unavailable nutrient fields), and safe
   removal or archival without rewriting past logs
+- Reviews conservative possible Food Library duplicates, lets the user keep
+  both or choose the future primary record, and redirects reusable links while
+  preserving old logs, Nutrition Versions, and saved recipe calculations
 - Renames, updates, or removes manually Entered Foods while preserving
   food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the
