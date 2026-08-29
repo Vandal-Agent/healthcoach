@@ -1023,6 +1023,9 @@ estimates. Averages describe duration or level, not sleep quality, exercise
 intensity, physiological strain, stress, illness, or fitness gains. Give one
 realistic focus tied directly to the cited evidence and mention the most
 important data limitation. Do not mention prompts, JSON, rules, or fact IDs.
+Never use the terms disease, normal, abnormal, risk score, systemic strain,
+nervous system, often indicates, steady sleep, consistent sleep, sleep
+quality, or exercise intensity, even when trying to disclaim a conclusion.
 This is general wellness interpretation, not medical care.
 """
     owns_client = client is None
@@ -1072,18 +1075,191 @@ def validate_weekly_health_narrative(
 def fallback_weekly_health_narrative(
     evidence: dict[str, Any],
 ) -> WeeklyHealthNarrative:
-    fallback = fallback_daily_health_narrative(evidence)
+    facts = list(evidence.get("facts") or [])
+    selected = facts[: min(3, len(facts))]
+    if not selected:
+        raise ValueError("No recorded weekly health facts are available.")
+    selected_metrics = {
+        metric
+        for fact in selected
+        for metric in fact.get("metrics") or []
+    }
+
+    def interpretation(fact: dict[str, Any]) -> str:
+        metrics = set(fact.get("metrics") or [])
+        relationship = str(fact.get("relationship") or "")
+        if "steps" in metrics:
+            if relationship == "recent average lower":
+                return (
+                    "The completed week recorded less average daily movement "
+                    "than the comparison week. Another completed week can "
+                    "show whether this was temporary or a continuing pattern."
+                )
+            if relationship == "recent average higher":
+                return (
+                    "The completed week recorded more average daily movement "
+                    "than the comparison week. Repeating the comparison can "
+                    "show whether that change continues."
+                )
+            return (
+                "Average daily movement was similar across the two completed "
+                "weeks, which provides a useful routine baseline."
+            )
+        if "total_burn" in metrics:
+            if relationship == "recent average lower":
+                if "steps" in selected_metrics:
+                    return (
+                        "Recorded total burn was lower in the completed week. "
+                        "Steps moved the same way, so the records describe a "
+                        "lower-movement week without establishing one cause."
+                    )
+                return (
+                    "Recorded total burn was lower in the completed week. "
+                    "Movement records can provide useful context without "
+                    "establishing what caused the change."
+                )
+            if relationship == "recent average higher":
+                return (
+                    "Recorded total burn was higher in the completed week. "
+                    "Comparing it with movement helps describe the week, but "
+                    "the records do not establish what caused the change."
+                )
+            return (
+                "Recorded total burn was similar across the two weeks, so a "
+                "longer pattern may be more useful than this comparison alone."
+            )
+        if "weight" in metrics:
+            return (
+                "Weekly averages reduce the effect of ordinary daily "
+                "fluctuations. Another completed week is needed to judge "
+                "whether this direction persists."
+            )
+        if "sleep_hours" in metrics:
+            return (
+                "This compares recorded sleep duration across completed "
+                "weeks. Watching the next week alongside daytime energy can "
+                "make the pattern more useful."
+            )
+        if "exercise_minutes" in metrics:
+            return (
+                "Recorded intentional movement changed across the two weeks. "
+                "The total does not describe the type or difficulty of that "
+                "activity."
+            )
+        if metrics.intersection({"resting_heart_rate", "hrv"}):
+            return (
+                "This personal recovery comparison is most useful across "
+                "repeated weeks and alongside how you feel."
+            )
+        if metrics.intersection({"cardio_fitness", "walking_heart_rate"}):
+            return (
+                "This estimate is best treated as a longer-term personal "
+                "trend rather than a judgment about one week."
+            )
+        if "blood_pressure_systolic" in metrics:
+            return (
+                "Repeated readings taken under similar conditions provide "
+                "more context than an isolated weekly average."
+            )
+        return (
+            "This coverage limitation matters because missing days can make "
+            "a weekly comparison less representative."
+        )
+
+    observations = [
+        GroundedHealthObservation(
+            fact_ids=[str(fact["id"])],
+            interpretation=interpretation(fact),
+        )
+        for fact in selected
+    ]
+    if {"steps", "total_burn"}.issubset(selected_metrics):
+        summary = (
+            "The clearest completed-week difference is in recorded movement "
+            "and total burn"
+            + (
+                ", with the weight average adding context."
+                if "weight" in selected_metrics
+                else "."
+            )
+        )
+        connection = (
+            "Steps and total burn moved together across the two weeks. That "
+            "combination may help explain how the overall routine changed, "
+            "while the records still cannot establish cause."
+        )
+    elif selected_metrics.intersection(
+        {"sleep_hours", "resting_heart_rate", "hrv"}
+    ):
+        summary = (
+            "The completed-week comparison is most informative for recovery "
+            "and activity patterns."
+        )
+        connection = (
+            "Sleep duration and personal recovery measurements can be viewed "
+            "together across repeated weeks to support decisions about daily "
+            "routine and energy."
+        )
+    else:
+        summary = (
+            "The available completed-week records show a personal pattern "
+            "worth comparing again after another week."
+        )
+        connection = (
+            "Repeated completed-week comparisons can make changes in activity, "
+            "recovery, and weight easier to distinguish from short-term noise."
+        )
+
+    relationships = {
+        str(fact.get("relationship") or "") for fact in selected
+    }
+    if (
+        selected_metrics.intersection({"steps", "exercise_minutes"})
+        and (
+            "recent average lower" in relationships
+            or "recent total lower" in relationships
+        )
+    ):
+        practical_focus = (
+            "Consider what changed your movement during the completed week. "
+            "If the reduction was not intentional, choose one repeatable "
+            "opportunity to add movement in the coming week."
+        )
+    elif (
+        "sleep_hours" in selected_metrics
+        and "recent average lower" in relationships
+    ):
+        practical_focus = (
+            "Choose one realistic way to protect your sleep opportunity in "
+            "the coming week, then compare the next completed-week average."
+        )
+    else:
+        practical_focus = (
+            "Keep the most relevant routine manageable for another week, then "
+            "compare the same completed measures again."
+        )
+
+    coverage = evidence.get("coverage_completed_week") or {}
+    limited = any(
+        int(value) < MIN_WEEKLY_READINGS
+        for value in coverage.values()
+    )
     return WeeklyHealthNarrative(
-        summary=fallback.summary,
-        observations=fallback.observations,
-        health_connection=fallback.health_connection,
-        practical_focus=(
-            "Use the strongest completed-week pattern below to choose one "
-            "manageable focus for the coming week."
-        ),
+        summary=summary,
+        observations=observations,
+        health_connection=connection,
+        practical_focus=practical_focus,
         data_limit=(
-            "This fallback uses only calculated completed-week records and "
-            "does not treat missing days as zero."
+            (
+                "Some completed-week measures have limited coverage, so the "
+                "comparison may not represent the full week. Missing days "
+                "were not treated as zero."
+            )
+            if limited
+            else (
+                "This comparison uses recorded completed days. It cannot "
+                "describe unrecorded context behind the changes."
+            )
         ),
     )
 

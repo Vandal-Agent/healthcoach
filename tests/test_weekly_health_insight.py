@@ -28,9 +28,9 @@ def weekly_records(reference_date: date) -> list[dict]:
             "date": (reference_date - timedelta(days=days_ago)).isoformat(),
             "steps": 8000 if recent else 7000,
             "total_burn": 2500 if recent else 2300,
-            "sleep_hours": 6.5 if recent else 7.0,
-            "resting_heart_rate": 55 if recent else 60,
-            "hrv": 25 if recent else 30,
+            "sleep_hours": 7.0,
+            "resting_heart_rate": 60,
+            "hrv": 30,
             "exercise_minutes": 30 if recent else 15,
             "weight": 230 if recent else 231,
             "cardio_fitness": 30.0 + ((14 - days_ago) / 10),
@@ -58,7 +58,7 @@ class WeeklyHealthInsightTests(unittest.TestCase):
         statements = " ".join(
             fact["statement"] for fact in evidence["facts"]
         )
-        self.assertIn("Average sleep was 6.5 h", statements)
+        self.assertIn("Average sleep was 7 h", statements)
         self.assertIn("preceding week", statements)
         self.assertIn("Apple Exercise Minutes totaled 210", statements)
         self.assertNotIn("99,999", statements)
@@ -111,6 +111,8 @@ class WeeklyHealthInsightTests(unittest.TestCase):
         self.assertIn("What your completed-week data shows", message)
         self.assertIn("One focus for the coming week", message)
         self.assertIn("does not diagnose", message)
+        self.assertIn("recorded less average daily movement", message)
+        self.assertIn("Steps and total burn moved together", message)
         self.assertLessEqual(len(message), 4096)
 
     def test_generated_wording_must_cite_computed_weekly_facts(self):
@@ -177,6 +179,7 @@ class WeeklyHealthInsightTests(unittest.TestCase):
 
         self.assertIn("Weekly Health Insight", message)
         self.assertIn("calculated evidence directly", message)
+        self.assertIn("recorded less average daily movement", message)
 
     def test_health_menu_routes_to_weekly_insight(self):
         conversation = {
