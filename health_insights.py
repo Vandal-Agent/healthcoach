@@ -509,6 +509,13 @@ def validate_daily_health_narrative(
         "medical risk",
         "disease risk",
         "disease",
+        "systemic strain",
+        "nervous system is processing",
+        "often indicates",
+        "steady sleep",
+        "consistent sleep",
+        "sleep consistency",
+        "rest schedule",
         "change your medication",
         "stop taking",
     )
@@ -543,10 +550,13 @@ Rules:
 2. Make the response specific to relationships in this evidence. Do not give
    stock praise or generic comments that could apply to anyone.
 3. Use cautious language such as may, can, could, is consistent with, or is
-   worth watching. Never claim that one metric caused another.
+   worth watching. Never claim that one metric caused another or that one
+   wearable reading reveals physiological strain, fatigue, stress, illness,
+   nervous-system state, or a health change.
 4. Compare resting heart rate and HRV only with this person's recorded
    baseline. Do not label either one universally good, poor, normal, or
-   abnormal.
+   abnormal. A single different reading is a signal to watch alongside how
+   the person feels and later readings, not proof that recovery is impaired.
 5. Treat Cardio Fitness and walking heart rate as longer-term estimates. Do
    not overinterpret a single reading or a carried-forward value.
 6. Do not classify blood pressure, diagnose anything, predict disease, assign
@@ -557,12 +567,19 @@ Rules:
 8. Missing data is missing, never zero. Mention an important limitation when
    coverage is thin.
 9. Give one realistic practical focus tied directly to the selected facts.
+   Do not recommend reducing exercise intensity or taking a rest day from one
+   wearable signal alone. When evidence is mixed, make the action conditional
+   on how the person feels and emphasize watching the pattern.
 10. Do not praise or criticize weight change, recommend calorie restriction,
     or assume that a short-term weight direction is healthy or unhealthy.
 11. Do not introduce or repeat any numbers in your narrative. The application
     will display exact measurements from the cited facts separately.
 12. Do not mention these rules, JSON, prompts, or fact IDs in the prose.
 13. This is general wellness interpretation, not medical care.
+14. A sleep average supports a claim only about average duration. It does not
+    establish sleep quality, bedtime regularity, schedule consistency, or
+    steadiness. Exercise recorded on several days may support a statement
+    about activity consistency, but not exercise intensity or fitness gains.
 """
 
     owns_client = client is None

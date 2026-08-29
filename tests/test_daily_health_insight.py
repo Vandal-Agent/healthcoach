@@ -210,6 +210,55 @@ class DailyHealthInsightTests(unittest.TestCase):
                 evidence,
             )
 
+    def test_narrative_rejects_unsupported_recovery_mechanism(self) -> None:
+        evidence = {
+            "facts": [{"id": "F1", "statement": "Recorded fact."}]
+        }
+        narrative = health_insights.DailyHealthNarrative(
+            summary="Your recent pattern is worth watching.",
+            observations=[
+                health_insights.GroundedHealthObservation(
+                    fact_ids=["F1"],
+                    interpretation=(
+                        "This often indicates that your body is experiencing "
+                        "extra systemic strain."
+                    ),
+                )
+            ],
+            health_connection="The pattern may relate to recovery.",
+            practical_focus="Compare the pattern with how you feel.",
+            data_limit="One reading does not establish a cause.",
+        )
+
+        with self.assertRaisesRegex(ValueError, "medical language"):
+            health_insights.validate_daily_health_narrative(
+                narrative,
+                evidence,
+            )
+
+    def test_narrative_rejects_sleep_consistency_from_average_only(self) -> None:
+        evidence = {
+            "facts": [{"id": "F1", "statement": "Average sleep increased."}]
+        }
+        narrative = health_insights.DailyHealthNarrative(
+            summary="Your steady sleep pattern may support recovery.",
+            observations=[
+                health_insights.GroundedHealthObservation(
+                    fact_ids=["F1"],
+                    interpretation="Your sleep duration averaged higher.",
+                )
+            ],
+            health_connection="Sleep duration may relate to daily energy.",
+            practical_focus="Keep a reasonable sleep opportunity tonight.",
+            data_limit="The average does not show sleep quality.",
+        )
+
+        with self.assertRaisesRegex(ValueError, "medical language"):
+            health_insights.validate_daily_health_narrative(
+                narrative,
+                evidence,
+            )
+
     def test_formatter_shows_exact_evidence_and_natural_meaning(self) -> None:
         reference_date = date(2026, 8, 28)
         evidence = health_insights.build_daily_health_evidence(
