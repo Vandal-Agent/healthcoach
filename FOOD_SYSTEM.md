@@ -437,8 +437,10 @@ Supported workflow:
 - Disclose how many Pantry ingredients in each idea had linked saved nutrition
   available. Portions, additional ingredients, and combined recipe totals
   remain clearly labeled as estimates.
-- Use at least one Pantry item and require no more than two additional
-  ingredients per idea, aside from salt, pepper, cooking spray, and water.
+- Before choosing lunch or dinner, ask whether ideas must use Pantry foods
+  only or may include up to two additional ingredients. Preserve that choice
+  when generating more ideas. Salt, pepper, cooking spray, and water remain
+  allowed basics, and Pantry-only mode never silently proposes another food.
 - Show estimated nutrition, ingredient amounts, and preparation steps.
 - Allow a generated idea to be saved to the separate Saved Recipes
   library without logging it as eaten.

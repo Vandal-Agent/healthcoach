@@ -314,7 +314,9 @@ class PantryMenuTests(unittest.TestCase):
 
         show.assert_called_once_with(chat_id=123)
 
-    def test_pantry_meal_idea_action_asks_for_meal_type(self) -> None:
+    def test_pantry_meal_idea_action_asks_about_extra_ingredients(
+        self,
+    ) -> None:
         conversation = {
             "conversation_type": "healthcoach_menu",
             "current_step": "pantry",
@@ -343,7 +345,43 @@ class PantryMenuTests(unittest.TestCase):
 
         self.assertEqual(
             update.call_args.kwargs["current_step"],
+            "pantry_meal_additional_choice",
+        )
+        self.assertIn(
+            "Can these meal ideas include foods",
+            send.call_args.args[0],
+        )
+
+    def test_pantry_only_choice_then_asks_for_meal_type(self) -> None:
+        conversation = {
+            "conversation_type": "healthcoach_menu",
+            "current_step": "pantry_meal_additional_choice",
+            "known_data": {},
+        }
+        with (
+            patch.object(
+                app,
+                "get_active_conversation",
+                return_value=conversation,
+            ),
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            app.process_telegram_update({
+                "message": {
+                    "chat": {"id": 123},
+                    "text": "Pantry only",
+                }
+            })
+
+        self.assertEqual(
+            update.call_args.kwargs["current_step"],
             "pantry_meal_type",
+        )
+        self.assertFalse(
+            update.call_args.kwargs["known_data"][
+                "pantry_meal_allow_additional"
+            ]
         )
         self.assertIn(
             "What meal do you want Pantry ideas for?",
@@ -354,7 +392,9 @@ class PantryMenuTests(unittest.TestCase):
         conversation = {
             "conversation_type": "healthcoach_menu",
             "current_step": "pantry_meal_type",
-            "known_data": {},
+            "known_data": {
+                "pantry_meal_allow_additional": False,
+            },
         }
         with (
             patch.object(
@@ -378,6 +418,7 @@ class PantryMenuTests(unittest.TestCase):
         show.assert_called_once_with(
             chat_id=123,
             meal_type="lunch",
+            allow_additional_ingredients=False,
         )
 
     def test_pantry_ideas_use_saved_goal_snapshot_and_missing_log_note(

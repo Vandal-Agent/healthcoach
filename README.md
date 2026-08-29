@@ -52,6 +52,8 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   nutrition, preparation, and confirmation
 - Compares Pantry Meal Ideas with the latest saved calorie-goal range using
   exact logged-total math and discloses linked-nutrition coverage
+- Offers Pantry-only meal ideas for no-shopping days or allows up to two
+  additional ingredients when the user chooses
 - Imports pasted recipe text or recipe photos into the same review-first,
   version-linked Recipe Builder while blocking unresolved major ingredients
   and documenting any user-approved trace exclusions; unresolved ingredients

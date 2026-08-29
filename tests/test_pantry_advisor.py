@@ -127,11 +127,22 @@ class PantryAdvisorTests(unittest.TestCase):
             idea("Idea C"),
         ]
 
-        with self.assertRaisesRegex(ValueError, "more than two"):
+        with self.assertRaisesRegex(ValueError, "more additional"):
             validate_pantry_meal_ideas(
                 ideas,
                 pantry_items=pantry_items(),
                 meal_type="dinner",
+            )
+
+    def test_rejects_any_extra_when_user_selected_pantry_only(self) -> None:
+        ideas = valid_ideas()
+
+        with self.assertRaisesRegex(ValueError, "user allowed"):
+            validate_pantry_meal_ideas(
+                ideas,
+                pantry_items=pantry_items(),
+                meal_type="dinner",
+                max_additional_ingredients=0,
             )
 
     def test_rejects_claimed_pantry_item_not_available(self) -> None:
@@ -260,6 +271,35 @@ class PantryAdvisorTests(unittest.TestCase):
         )
 
         self.assertIn("1 of 2 Pantry ingredients", result)
+
+    def test_generator_tells_model_when_user_selected_pantry_only(
+        self,
+    ) -> None:
+        parsed = {
+            "ideas": [
+                idea("Idea A", additional=0),
+                idea("Idea B", additional=0),
+                idea("Idea C", additional=0),
+            ],
+            "heart_healthy_pick": 1,
+            "heart_healthy_reason": "Uses lean protein.",
+        }
+        client = FakeClient(parsed)
+
+        with patch(
+            "food.pantry_advisor.get_client",
+            return_value=client,
+        ):
+            result = generate_pantry_meal_ideas(
+                pantry_items=pantry_items(),
+                meal_type="dinner",
+                max_additional_ingredients=0,
+            )
+
+        self.assertEqual(len(result), 3)
+        prompt = client.models.kwargs["contents"]
+        self.assertIn("no more than 0 unique", prompt)
+        self.assertIn("every food ingredient must come", prompt)
 
     def test_rejects_missing_heart_healthy_pick(self) -> None:
         ideas = [idea("Idea A"), idea("Idea B"), idea("Idea C")]

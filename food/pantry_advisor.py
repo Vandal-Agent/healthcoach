@@ -262,6 +262,7 @@ def validate_pantry_meal_ideas(
     *,
     pantry_items: list[dict[str, Any]],
     meal_type: str,
+    max_additional_ingredients: int = MAX_ADDITIONAL_INGREDIENTS,
 ) -> list[dict[str, Any]]:
     normalized_meal = str(meal_type or "").strip().lower()
     if normalized_meal not in MEAL_CALORIE_LIMITS:
@@ -327,9 +328,10 @@ def validate_pantry_meal_ideas(
             raise ValueError(
                 "Every meal idea must use at least one Pantry item."
             )
-        if len(additional) > MAX_ADDITIONAL_INGREDIENTS:
+        if len(additional) > max_additional_ingredients:
             raise ValueError(
-                "A meal idea required more than two additional ingredients."
+                "A meal idea required more additional ingredients than "
+                "the user allowed."
             )
 
         for ingredient in used_pantry:
@@ -350,10 +352,13 @@ def generate_pantry_meal_ideas(
     meal_type: str,
     daily_totals: dict[str, Any] | None = None,
     goal_context: dict[str, Any] | None = None,
+    max_additional_ingredients: int = MAX_ADDITIONAL_INGREDIENTS,
 ) -> list[dict[str, Any]]:
     normalized_meal = str(meal_type or "").strip().lower()
     if normalized_meal not in MEAL_CALORIE_LIMITS:
         raise ValueError("meal_type must be lunch or dinner.")
+    if max_additional_ingredients not in {0, MAX_ADDITIONAL_INGREDIENTS}:
+        raise ValueError("Unsupported additional-ingredient limit.")
 
     pantry_data = pantry_item_prompt_data(pantry_items)
     if not pantry_data:
@@ -380,8 +385,10 @@ Rules:
 2. Each idea must use at least one available Pantry item.
 3. For Pantry ingredients, copy the Pantry item name exactly and set
    source to "pantry".
-4. An idea may require no more than two unique ingredients that are not
-   in the Pantry; label each one source "additional".
+4. An idea may require no more than {max_additional_ingredients} unique
+   ingredients that are not in the Pantry; label each one source
+   "additional". When this limit is zero, every food ingredient must come
+   from the Pantry.
 5. Salt, pepper, cooking spray, and water may be assumed and do not count
    as additional ingredients. Any other oil, sauce, or seasoning must be
    listed.
@@ -452,6 +459,7 @@ Rules:
         ideas,
         pantry_items=pantry_items,
         meal_type=normalized_meal,
+        max_additional_ingredients=max_additional_ingredients,
     )
     for idea in validated:
         idea["goal_fit"] = pantry_goal_fit_text(

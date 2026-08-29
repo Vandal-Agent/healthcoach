@@ -94,6 +94,7 @@ from food.pantry import (
     update_pantry_item_organization,
 )
 from food.pantry_advisor import (
+    MAX_ADDITIONAL_INGREDIENTS,
     MEAL_CALORIE_LIMITS,
     build_pantry_goal_context,
     generate_pantry_meal_ideas,
@@ -1037,6 +1038,14 @@ def menu_reply_markup(message):
         ]
     elif "What meal do you want Pantry ideas for?" in message:
         rows = [["Lunch", "Dinner"], ["Back", "Cancel"]]
+        one_time = True
+    elif message.startswith(
+        "Can these meal ideas include foods that are not currently"
+    ):
+        rows = [
+            ["Pantry only", "Up to 2 extra ingredients"],
+            ["Back", "Cancel"],
+        ]
         one_time = True
     elif "How many servings of this Pantry meal did you eat?" in message:
         rows = [["0.5", "1", "1.5", "2"], ["Back", "Cancel"]]
@@ -5220,7 +5229,19 @@ def pantry_meal_type_prompt() -> str:
         "Dinner ideas stay at or below 600 calories.\n\n"
         "HealthCoach will consider what you have logged today, your "
         "saved calorie goal when available, and linked Pantry nutrition. "
-        "Each idea uses no more than two additional ingredients."
+        "It will follow the Pantry-only or extra-ingredient choice you "
+        "just made."
+    )
+
+
+def pantry_meal_additional_ingredients_prompt() -> str:
+    return (
+        "Can these meal ideas include foods that are not currently "
+        "in My Pantry?\n\n"
+        "1. Pantry only — no shopping\n"
+        "2. Up to 2 extra ingredients\n\n"
+        "Water, salt, pepper, and cooking spray may be assumed. Pantry "
+        "tracks whether an item is present, not how much remains."
     )
 
 
@@ -5448,6 +5469,7 @@ def show_pantry_meal_ideas(
     *,
     chat_id,
     meal_type: str,
+    allow_additional_ingredients: bool = True,
 ) -> bool:
     pantry_items = list_pantry_items()
     if not pantry_items:
@@ -5486,6 +5508,11 @@ def show_pantry_meal_ideas(
             meal_type=normalized_meal,
             daily_totals=daily_totals,
             goal_context=goal_context,
+            max_additional_ingredients=(
+                MAX_ADDITIONAL_INGREDIENTS
+                if allow_additional_ingredients
+                else 0
+            ),
         )
     except Exception:
         logging.exception("Pantry meal idea generation failed")
@@ -5506,6 +5533,9 @@ def show_pantry_meal_ideas(
             "pantry_meal_selected_index": None,
             "pantry_meal_servings": None,
             "pantry_meal_goal_context": goal_context,
+            "pantry_meal_allow_additional": bool(
+                allow_additional_ingredients
+            ),
         },
         missing_fields=[],
     )
@@ -10923,17 +10953,18 @@ def process_telegram_update(update):
 
                 update_conversation(
                     chat_id=chat_id,
-                    current_step="pantry_meal_type",
+                    current_step="pantry_meal_additional_choice",
                     known_data={
+                        "pantry_meal_allow_additional": None,
                         "pantry_meal_type": None,
                         "pantry_meal_ideas": [],
                         "pantry_meal_selected_index": None,
                         "pantry_meal_servings": None,
                     },
-                    missing_fields=["meal_type"],
+                    missing_fields=["allow_additional_ingredients"],
                 )
                 send_telegram_msg(
-                    pantry_meal_type_prompt(),
+                    pantry_meal_additional_ingredients_prompt(),
                     chat_id=chat_id,
                 )
                 return
@@ -11479,7 +11510,7 @@ def process_telegram_update(update):
             )
             return
 
-        if current_step == "pantry_meal_type":
+        if current_step == "pantry_meal_additional_choice":
             if lowered == "back":
                 update_conversation(
                     chat_id=chat_id,
@@ -11489,6 +11520,67 @@ def process_telegram_update(update):
                 )
                 send_telegram_msg(
                     healthcoach_pantry_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+
+            if lowered in {
+                "1",
+                "no",
+                "pantry only",
+                "pantry only no shopping",
+                "no shopping",
+            }:
+                allow_additional = False
+            elif lowered in {
+                "2",
+                "yes",
+                "up to 2 extra ingredients",
+                "up to two extra ingredients",
+                "extra ingredients",
+            }:
+                allow_additional = True
+            else:
+                send_telegram_msg(
+                    pantry_meal_additional_ingredients_prompt(),
+                    chat_id=chat_id,
+                )
+                return
+
+            update_conversation(
+                chat_id=chat_id,
+                current_step="pantry_meal_type",
+                known_data={
+                    "pantry_meal_allow_additional": allow_additional,
+                    "pantry_meal_type": None,
+                },
+                missing_fields=["meal_type"],
+            )
+            send_telegram_msg(
+                pantry_meal_type_prompt(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "pantry_meal_type":
+            allow_additional = bool(
+                known_data.get("pantry_meal_allow_additional", True)
+            )
+            if known_data.get("pantry_meal_allow_additional") is False:
+                allow_additional = False
+
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="pantry_meal_additional_choice",
+                    known_data={
+                        "pantry_meal_allow_additional": None,
+                        "pantry_meal_type": None,
+                    },
+                    missing_fields=["allow_additional_ingredients"],
+                )
+                send_telegram_msg(
+                    pantry_meal_additional_ingredients_prompt(),
                     chat_id=chat_id,
                 )
                 return
@@ -11510,11 +11602,15 @@ def process_telegram_update(update):
             if not show_pantry_meal_ideas(
                 chat_id=chat_id,
                 meal_type=meal_type,
+                allow_additional_ingredients=allow_additional,
             ):
                 update_conversation(
                     chat_id=chat_id,
                     current_step="pantry_meal_type",
-                    known_data={"pantry_meal_type": meal_type},
+                    known_data={
+                        "pantry_meal_type": meal_type,
+                        "pantry_meal_allow_additional": allow_additional,
+                    },
                     missing_fields=["meal_type"],
                 )
             return
@@ -11526,6 +11622,11 @@ def process_telegram_update(update):
             meal_type = str(
                 known_data.get("pantry_meal_type") or "dinner"
             ).lower()
+            allow_additional = bool(
+                known_data.get("pantry_meal_allow_additional", True)
+            )
+            if known_data.get("pantry_meal_allow_additional") is False:
+                allow_additional = False
 
             if lowered == "back":
                 update_conversation(
@@ -11544,6 +11645,7 @@ def process_telegram_update(update):
                 show_pantry_meal_ideas(
                     chat_id=chat_id,
                     meal_type=meal_type,
+                    allow_additional_ingredients=allow_additional,
                 )
                 return
 
@@ -11557,6 +11659,9 @@ def process_telegram_update(update):
                     format_pantry_meal_ideas(
                         ideas,
                         meal_type=meal_type,
+                        goal_context=known_data.get(
+                            "pantry_meal_goal_context"
+                        ),
                     ),
                     chat_id=chat_id,
                 )
@@ -11588,6 +11693,11 @@ def process_telegram_update(update):
             meal_type = str(
                 known_data.get("pantry_meal_type") or "dinner"
             ).lower()
+            allow_additional = bool(
+                known_data.get("pantry_meal_allow_additional", True)
+            )
+            if known_data.get("pantry_meal_allow_additional") is False:
+                allow_additional = False
             try:
                 selected_index = int(
                     known_data.get("pantry_meal_selected_index")
@@ -11618,6 +11728,9 @@ def process_telegram_update(update):
                     format_pantry_meal_ideas(
                         ideas,
                         meal_type=meal_type,
+                        goal_context=known_data.get(
+                            "pantry_meal_goal_context"
+                        ),
                     ),
                     chat_id=chat_id,
                 )
@@ -11627,6 +11740,7 @@ def process_telegram_update(update):
                 show_pantry_meal_ideas(
                     chat_id=chat_id,
                     meal_type=meal_type,
+                    allow_additional_ingredients=allow_additional,
                 )
                 return
 
