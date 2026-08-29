@@ -27,6 +27,9 @@ Responsibilities:
 
 Flask webhook endpoint /webhook
 
+optionally enforces the `X-HealthCoach-Key` header before reading or logging
+the request body; production enables this with `HEALTH_WEBHOOK_TOKEN`
+
 receives iPhone Shortcut health data
 
 updates Google Sheet
@@ -256,6 +259,13 @@ HEALTH_CHAT_ID
 HEALTH_GOOGLE_JSON_PATH
 HEALTH_GEMINI_API_KEY
 HEALTH_AI_MODEL
+HEALTH_WEBHOOK_TOKEN
+
+`HEALTH_WEBHOOK_TOKEN` is stored only in `/home/vandal/.env`. During the
+one-time migration, both iPhone Shortcuts receive the matching
+`X-HealthCoach-Key` header before the environment variable is enabled and the
+service is restarted. After it is enabled, missing or incorrect tokens receive
+HTTP 401 and no health data is logged or written.
 GitHub Backup
 
 Repository:

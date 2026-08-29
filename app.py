@@ -1,4 +1,5 @@
 import os
+import hmac
 import json
 import time
 import threading
@@ -186,6 +187,8 @@ PACIFIC_TZ = pytz.timezone("US/Pacific")
 CHAT_ID = os.getenv("HEALTH_CHAT_ID")
 TELEGRAM_TOKEN = os.getenv("HEALTH_TELEGRAM_TOKEN")
 JSON_PATH = os.getenv("HEALTH_GOOGLE_JSON_PATH")
+WEBHOOK_TOKEN = os.getenv("HEALTH_WEBHOOK_TOKEN", "").strip()
+WEBHOOK_TOKEN_HEADER = "X-HealthCoach-Key"
 
 STATE_FILE = "/home/vandal/bots/healthcoach/logs/state.json"
 LOG_FILE = "/home/vandal/bots/healthcoach/logs/healthcoach.log"
@@ -25717,6 +25720,18 @@ def telegram_poll_loop():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    if WEBHOOK_TOKEN:
+        supplied_token = request.headers.get(
+            WEBHOOK_TOKEN_HEADER,
+            "",
+        ).strip()
+        if not supplied_token or not hmac.compare_digest(
+            supplied_token,
+            WEBHOOK_TOKEN,
+        ):
+            logging.warning("Rejected unauthorized webhook request")
+            return {"status": "unauthorized"}, 401
+
     data = request.json or {}
     logging.info("Webhook received: %s", data)
 
@@ -25988,5 +26003,11 @@ if __name__ == "__main__":
     t2 = threading.Thread(target=scheduler_loop, daemon=True)
     t2.start()
 
+    if WEBHOOK_TOKEN:
+        logging.info("Health webhook authentication is enabled")
+    else:
+        logging.warning(
+            "Health webhook authentication is not configured"
+        )
     logging.info("HealthCoach server starting")
     app.run(host="0.0.0.0", port=5000)

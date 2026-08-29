@@ -4,7 +4,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 
 ## Current Capabilities
 
-- Receives health data from an iPhone Shortcut
+- Receives health data from the iPhone Shortcuts through an authenticated
+  webhook once `HEALTH_WEBHOOK_TOKEN` is configured; unauthorized requests
+  are rejected before health data is logged or written
 - Updates the Google Sheet named `Health Tracker`
 - Tracks steps, Apple Exercise Minutes, resting heart rate, walking
   heart-rate average, Cardio Fitness, paired blood-pressure readings,
@@ -111,6 +113,11 @@ Live environment variables are stored centrally in:
 /home/vandal/.env
 
 Do not commit the real .env file or any secrets to GitHub.
+
+`HEALTH_WEBHOOK_TOKEN` enables authentication for `/webhook`. Both iPhone
+Shortcuts must send the same value in the `X-HealthCoach-Key` request header
+before this variable is enabled in production. Leaving it unset is supported
+only for the staged migration from the older unauthenticated Shortcuts.
 
 ## Documentation
 
