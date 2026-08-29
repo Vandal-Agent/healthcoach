@@ -11,6 +11,15 @@ with patch("logging.basicConfig"):
 app.CHAT_ID = None
 
 
+class FixedDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        value = datetime(2026, 8, 28, 9, 0)
+        if tz is not None:
+            return tz.localize(value)
+        return value
+
+
 def personal_records(reference_date: date) -> list[dict]:
     records = []
     for days_ago in range(14, 0, -1):
@@ -338,6 +347,7 @@ class DailyHealthInsightTests(unittest.TestCase):
             ) as get_insight,
             patch.object(app, "update_conversation") as update,
             patch.object(app, "send_telegram_msg") as send,
+            patch.object(app, "datetime", FixedDateTime),
         ):
             app.process_telegram_update({
                 "message": {
