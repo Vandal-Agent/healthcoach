@@ -1601,7 +1601,13 @@ def get_recent_average_weight(reference_date, days_back=10, limit=7):
     return average_or_default(weights, None)
 
 
-def update_or_insert_today(sheet, row, now):
+def update_or_insert_today(
+    sheet,
+    row,
+    now,
+    *,
+    clear_existing_columns=(),
+):
     today_str = now.strftime("%m/%d/%Y")
     row_index, existing_row, _ = get_today_row_index_and_row(sheet, today_str)
 
@@ -1627,6 +1633,9 @@ def update_or_insert_today(sheet, row, now):
         ):
             if incoming[value_index] not in ("", None):
                 merged[measured_at_index] = incoming[measured_at_index]
+        for index in clear_existing_columns:
+            if 0 < index < len(merged):
+                merged[index] = ""
         sheet.update(
             range_name=(
                 f"A{row_index}:{TRACKER_LAST_COLUMN}{row_index}"
@@ -25863,6 +25872,41 @@ def webhook():
             blood_pressure_measured_at_raw,
         )
 
+    clear_existing_columns = set()
+    if existing_row:
+        padded_existing_row = list(existing_row) + [""] * (
+            len(HEADERS) - len(existing_row)
+        )
+        for (
+            _metric_name,
+            raw_value,
+            raw_time,
+            parsed_value,
+            value_index,
+            measured_at_index,
+        ) in (
+            (*timestamped_metrics[0], 5, 16),
+            (*timestamped_metrics[1], 7, 17),
+            (*timestamped_metrics[2], 11, 18),
+            (*timestamped_metrics[3], 12, 19),
+        ):
+            if (
+                raw_value not in ("", None)
+                and raw_time not in ("", None)
+                and parsed_value is None
+                and padded_existing_row[measured_at_index]
+                in ("", None)
+            ):
+                clear_existing_columns.update(
+                    (value_index, measured_at_index)
+                )
+        if (
+            blood_pressure_supplied
+            and blood_pressure is None
+            and padded_existing_row[15] in ("", None)
+        ):
+            clear_existing_columns.update((13, 14, 15))
+
     row = [
         timestamp,
         steps if steps is not None else "",
@@ -25924,7 +25968,12 @@ def webhook():
         ),
     ]
 
-    update_or_insert_today(sheet, row, now)
+    update_or_insert_today(
+        sheet,
+        row,
+        now,
+        clear_existing_columns=clear_existing_columns,
+    )
 
     return {"status": "ok"}, 200
 

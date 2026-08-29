@@ -118,6 +118,37 @@ class AppleHealthFreshnessTests(unittest.TestCase):
         self.assertEqual(saved_row[12], "")
         self.assertEqual(saved_row[16:20], ["", "", "", ""])
 
+    def test_webhook_removes_rejected_legacy_same_day_value(self) -> None:
+        existing = tracker_row()
+        existing[12] = "83"
+        existing[19] = ""
+        sheet = MagicMock()
+        with (
+            patch.object(app, "get_current_sheet", return_value=sheet),
+            patch.object(
+                app,
+                "get_today_row_index_and_row",
+                return_value=(2, existing, [app.HEADERS, existing]),
+            ),
+            patch.object(app, "update_or_insert_today") as update,
+            patch.object(app, "datetime", FixedDateTime),
+        ):
+            response = app.app.test_client().post(
+                "/webhook",
+                json={
+                    "walking_heart_rate_average": 83,
+                    "walking_heart_rate_measured_at": (
+                        "2026-08-27T09:00:00-07:00"
+                    ),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            update.call_args.kwargs["clear_existing_columns"],
+            {12, 19},
+        )
+
     def test_legacy_payload_without_source_times_still_works(self) -> None:
         response, saved_row = self.post_webhook({
             "rhr": 54,
@@ -182,6 +213,49 @@ class AppleHealthFreshnessTests(unittest.TestCase):
             sheet.update.call_args.kwargs["range_name"],
             "A2:T2",
         )
+
+    def test_rejected_stale_reading_clears_legacy_same_day_value(
+        self,
+    ) -> None:
+        existing = tracker_row()
+        existing[12] = "83"
+        existing[19] = ""
+        incoming = tracker_row()
+        incoming[12] = ""
+        incoming[19] = ""
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [app.HEADERS, existing]
+
+        app.update_or_insert_today(
+            sheet,
+            incoming,
+            datetime(2026, 8, 28, 13, 0),
+            clear_existing_columns={12, 19},
+        )
+
+        merged = sheet.update.call_args.kwargs["values"][0]
+        self.assertEqual(merged[12], "")
+        self.assertEqual(merged[19], "")
+
+    def test_rejected_stale_reading_preserves_verified_same_day_value(
+        self,
+    ) -> None:
+        existing = tracker_row()
+        incoming = tracker_row()
+        incoming[12] = ""
+        incoming[19] = ""
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [app.HEADERS, existing]
+
+        app.update_or_insert_today(
+            sheet,
+            incoming,
+            datetime(2026, 8, 28, 13, 0),
+        )
+
+        merged = sheet.update.call_args.kwargs["values"][0]
+        self.assertEqual(merged[12], "74")
+        self.assertEqual(merged[19], "08/28/2026 09:00 AM")
 
     def test_daily_insight_records_use_only_fresh_timestamped_values(
         self,
