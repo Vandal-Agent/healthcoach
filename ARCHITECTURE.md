@@ -44,6 +44,13 @@ Gemini is called. The model receives only that evidence and returns structured
 prose tied to evidence IDs; exact measurements remain deterministic. Invalid
 or unavailable generated prose falls back to a deterministic explanation.
 
+The separate on-demand Weekly Health Insight uses the same guarded narrative
+layer but compares the last seven completed days with the preceding seven.
+It excludes the current partial day, requires recorded-day coverage before
+making weekly average comparisons, and keeps Cardio Fitness and walking heart
+rate in a longer-term context. The existing fixed Weekly report remains
+unchanged.
+
 Message windows:
 
 8:30  morning recap

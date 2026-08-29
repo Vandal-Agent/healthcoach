@@ -25,6 +25,10 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   completed-day activity, smoothed weight, longer-term wearable trends, and
   data completeness; Gemini explains only cited computed facts and cannot add
   measurements, diagnose, classify risk, or treat an unfinished day as final
+- Builds a separate on-demand Weekly Health Insight from the last seven
+  completed days versus the preceding seven; today is excluded, missing days
+  stay missing, longer-term wearable estimates remain cautious, and generated
+  wording must cite deterministic evidence
 - Labels no more than one evidence-supported Heart-Healthy Pick in Pantry,
   cited online Restaurant, and visible menu-photo recommendations
 - Builds a reviewable, deduplicated Pantry list from one or more shelf photos;

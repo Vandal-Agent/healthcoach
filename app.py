@@ -172,9 +172,13 @@ from memory.cases import (
 )
 from health_insights import (
     build_daily_health_evidence,
+    build_weekly_health_evidence,
     fallback_daily_health_narrative,
+    fallback_weekly_health_narrative,
     format_daily_health_insight,
+    format_weekly_health_insight,
     generate_daily_health_narrative,
+    generate_weekly_health_narrative,
 )
 
 app = Flask(__name__)
@@ -1045,12 +1049,17 @@ def menu_reply_markup(message):
         rows = [
             ["Current status", "Record sleep"],
             ["Record weight", "Health history"],
-            ["Daily health insight"],
+            ["Daily health insight", "Weekly health insight"],
             ["Back", "Cancel"],
         ]
     elif message.startswith("Daily Health Insight"):
         rows = [
             ["Refresh insight"],
+            ["Back", "Cancel"],
+        ]
+    elif message.startswith("Weekly Health Insight"):
+        rows = [
+            ["Refresh weekly insight"],
             ["Back", "Cancel"],
         ]
     elif message.startswith("Health History"):
@@ -7566,7 +7575,8 @@ def healthcoach_health_menu_text() -> str:
         "3. Record weight\n"
         "4. Health history\n"
         "5. Daily health insight\n"
-        "6. Back"
+        "6. Weekly health insight\n"
+        "7. Back"
     )
 
 
@@ -8186,6 +8196,40 @@ def get_daily_health_insight_message(
         narrative = fallback_daily_health_narrative(evidence)
 
     return format_daily_health_insight(
+        evidence,
+        narrative,
+        personalized=personalized,
+    )
+
+
+def get_weekly_health_insight_message(
+    *,
+    reference_date: date,
+) -> str:
+    """Return one grounded comparison of completed health weeks."""
+    rows = get_recent_rows(
+        reference_date,
+        days_back=34,
+    )
+    evidence = build_weekly_health_evidence(
+        records=build_daily_health_records(rows),
+        reference_date=reference_date,
+    )
+    if not evidence.get("facts"):
+        raise ValueError(
+            "There is not enough completed health data for a weekly "
+            "insight yet."
+        )
+    personalized = True
+    try:
+        narrative = generate_weekly_health_narrative(evidence)
+    except Exception:
+        personalized = False
+        logging.exception(
+            "Personalized Weekly Health Insight generation failed"
+        )
+        narrative = fallback_weekly_health_narrative(evidence)
+    return format_weekly_health_insight(
         evidence,
         narrative,
         personalized=personalized,
@@ -21261,7 +21305,39 @@ def process_telegram_update(update):
                 send_telegram_msg(message, chat_id=chat_id)
                 return
 
-            if lowered in {"6", "back"}:
+            if lowered in {
+                "6",
+                "weekly health insight",
+                "weekly insight",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health_weekly_insight",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "I'm comparing your last completed week with the "
+                    "week before it. This may take a moment.",
+                    chat_id=chat_id,
+                )
+                try:
+                    message = get_weekly_health_insight_message(
+                        reference_date=today,
+                    )
+                except Exception:
+                    logging.exception("Weekly Health Insight failed")
+                    send_telegram_msg(
+                        "I couldn't build a reliable Weekly Health Insight "
+                        "right now.\n\nNo health data was changed. Reply "
+                        "Refresh weekly insight, Back, or Cancel.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(message, chat_id=chat_id)
+                return
+
+            if lowered in {"7", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -21322,6 +21398,53 @@ def process_telegram_update(update):
                 return
             send_telegram_msg(
                 "Reply Refresh insight, Back, or Cancel.",
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "health_weekly_insight":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_health_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {
+                "refresh",
+                "refresh weekly insight",
+                "weekly health insight",
+                "weekly insight",
+            }:
+                send_telegram_msg(
+                    "I'm refreshing the completed-week comparison. This "
+                    "may take a moment.",
+                    chat_id=chat_id,
+                )
+                try:
+                    message = get_weekly_health_insight_message(
+                        reference_date=today,
+                    )
+                except Exception:
+                    logging.exception(
+                        "Weekly Health Insight refresh failed"
+                    )
+                    send_telegram_msg(
+                        "I couldn't refresh a reliable Weekly Health "
+                        "Insight right now.\n\nNo health data was changed. "
+                        "Reply Refresh weekly insight, Back, or Cancel.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(message, chat_id=chat_id)
+                return
+            send_telegram_msg(
+                "Reply Refresh weekly insight, Back, or Cancel.",
                 chat_id=chat_id,
             )
             return

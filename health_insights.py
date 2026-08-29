@@ -32,6 +32,10 @@ class DailyHealthNarrative(BaseModel):
     data_limit: str = Field(min_length=1, max_length=320)
 
 
+class WeeklyHealthNarrative(DailyHealthNarrative):
+    """Grounded narrative fields for one completed-week comparison."""
+
+
 METRIC_DETAILS = {
     "sleep_hours": ("Sleep", "h", 0.5),
     "resting_heart_rate": ("Resting heart rate", "bpm", 3.0),
@@ -747,4 +751,405 @@ def format_daily_health_insight(
     message = "\n".join(lines)
     if len(message) > 4096:
         raise ValueError("Daily Health Insight exceeded Telegram's limit.")
+    return message
+
+
+def build_weekly_health_evidence(
+    *,
+    records: list[dict[str, Any]],
+    reference_date: date,
+) -> dict[str, Any]:
+    """Compare the last seven completed days with the seven before them."""
+    records_by_date: dict[date, dict[str, Any]] = {}
+    for record in records:
+        record_date = _record_date(record)
+        if record_date is None or record_date >= reference_date:
+            continue
+        records_by_date[record_date] = {
+            **record,
+            "date": record_date.isoformat(),
+        }
+
+    recent_start = reference_date - timedelta(days=7)
+    recent_end = reference_date - timedelta(days=1)
+    previous_start = reference_date - timedelta(days=14)
+    previous_end = reference_date - timedelta(days=8)
+    recent = _period_records(records_by_date, recent_start, recent_end)
+    previous = _period_records(
+        records_by_date,
+        previous_start,
+        previous_end,
+    )
+    prior_28 = _period_records(
+        records_by_date,
+        reference_date - timedelta(days=28),
+        recent_end,
+    )
+    facts: list[dict[str, Any]] = []
+
+    def add_fact(
+        category: str,
+        statement: str,
+        *,
+        metrics: list[str],
+        priority: int,
+        relationship: str,
+    ) -> None:
+        facts.append({
+            "id": f"F{len(facts) + 1}",
+            "category": category,
+            "statement": statement,
+            "metrics": metrics,
+            "priority": int(priority),
+            "relationship": relationship,
+        })
+
+    comparisons = (
+        ("sleep_hours", "Average sleep", "h", "recovery", 0.4),
+        (
+            "resting_heart_rate",
+            "Average resting heart rate",
+            "bpm",
+            "recovery",
+            3.0,
+        ),
+        ("hrv", "Average HRV", "ms", "recovery", 5.0),
+        ("steps", "Average steps", "steps", "activity", 750.0),
+        (
+            "total_burn",
+            "Average total burn",
+            "calories",
+            "activity",
+            150.0,
+        ),
+        ("weight", "Average weight", "lb", "weight", 0.5),
+    )
+    for metric, label, unit, category, notable_difference in comparisons:
+        recent_values = _valid_values(recent, metric)
+        previous_values = _valid_values(previous, metric)
+        if (
+            len(recent_values) < MIN_WEEKLY_READINGS
+            or len(previous_values) < MIN_WEEKLY_READINGS
+        ):
+            continue
+        recent_average = mean(recent_values)
+        previous_average = mean(previous_values)
+        difference = recent_average - previous_average
+        relationship = (
+            "recent average higher"
+            if difference >= notable_difference
+            else "recent average lower"
+            if difference <= -notable_difference
+            else "recent average similar"
+        )
+        if metric == "steps":
+            recent_text = f"{int(round(recent_average)):,}"
+            previous_text = f"{int(round(previous_average)):,}"
+            difference_text = f"{difference:+,.0f}"
+        else:
+            recent_text = _number(recent_average)
+            previous_text = _number(previous_average)
+            difference_text = f"{difference:+.1f}"
+        add_fact(
+            category,
+            f"{label} was {recent_text} {unit} across "
+            f"{len(recent_values)} recorded days, compared with "
+            f"{previous_text} {unit} across {len(previous_values)} "
+            f"recorded days in the preceding week, a difference of "
+            f"{difference_text} {unit}.",
+            metrics=[metric],
+            priority=(2 if relationship != "recent average similar" else 4),
+            relationship=relationship,
+        )
+
+    recent_exercise = _valid_values(recent, "exercise_minutes")
+    previous_exercise = _valid_values(previous, "exercise_minutes")
+    if recent_exercise:
+        statement = (
+            "Apple Exercise Minutes totaled "
+            f"{_number(sum(recent_exercise))} across "
+            f"{len(recent_exercise)} recorded days in the completed week"
+        )
+        relationship = "completed-week activity"
+        priority = 3
+        if previous_exercise:
+            difference = sum(recent_exercise) - sum(previous_exercise)
+            statement += (
+                ", compared with "
+                f"{_number(sum(previous_exercise))} across "
+                f"{len(previous_exercise)} recorded days in the preceding "
+                f"week, a difference of {difference:+.1f} minutes"
+            )
+            relationship = (
+                "recent total higher"
+                if difference >= 30
+                else "recent total lower"
+                if difference <= -30
+                else "recent total similar"
+            )
+            priority = 2 if abs(difference) >= 30 else 4
+        add_fact(
+            "activity",
+            statement + ".",
+            metrics=["exercise_minutes"],
+            priority=priority,
+            relationship=relationship,
+        )
+
+    for metric, label, unit in (
+        ("cardio_fitness", "Cardio Fitness", "mL/kg/min"),
+        ("walking_heart_rate", "walking heart rate", "bpm"),
+    ):
+        values = _valid_values(prior_28, metric)
+        if len(values) < 3:
+            continue
+        change = values[-1] - values[0]
+        add_fact(
+            "heart",
+            f"Latest recorded {label} was {_number(values[-1])} {unit}; "
+            f"the first of {len(values)} recorded days in the prior "
+            f"twenty-eight-day window was {_number(values[0])} {unit}, "
+            f"a recorded change of {change:+.1f} {unit}.",
+            metrics=[metric],
+            priority=(3 if abs(change) >= 0.5 else 5),
+            relationship="longer-term recorded change",
+        )
+
+    blood_pressure_records = [
+        record
+        for record in recent
+        if (
+            record.get("blood_pressure_systolic") is not None
+            and record.get("blood_pressure_diastolic") is not None
+        )
+    ]
+    if blood_pressure_records:
+        systolic = _valid_values(
+            blood_pressure_records,
+            "blood_pressure_systolic",
+        )
+        diastolic = _valid_values(
+            blood_pressure_records,
+            "blood_pressure_diastolic",
+        )
+        add_fact(
+            "blood_pressure",
+            "Recorded blood pressure averaged "
+            f"{_number(mean(systolic))}/{_number(mean(diastolic))} mmHg "
+            f"from {len(blood_pressure_records)} reading"
+            f"{'s' if len(blood_pressure_records) != 1 else ''} during "
+            "the completed week.",
+            metrics=[
+                "blood_pressure_systolic",
+                "blood_pressure_diastolic",
+            ],
+            priority=4,
+            relationship="completed-week recorded context",
+        )
+
+    coverage_metrics = (
+        ("sleep_hours", "sleep"),
+        ("steps", "steps"),
+        ("exercise_minutes", "Exercise Minutes"),
+        ("resting_heart_rate", "resting heart rate"),
+        ("hrv", "HRV"),
+        ("weight", "weight"),
+    )
+    coverage = {
+        metric: len(_valid_values(recent, metric))
+        for metric, _label in coverage_metrics
+    }
+    thin = [
+        f"{label} {coverage[metric]}/7"
+        for metric, label in coverage_metrics
+        if coverage[metric] < MIN_WEEKLY_READINGS
+    ]
+    if thin and (recent or previous):
+        add_fact(
+            "data_quality",
+            "Limited completed-week coverage: " + ", ".join(thin) + ".",
+            metrics=[
+                metric
+                for metric, _label in coverage_metrics
+                if coverage[metric] < MIN_WEEKLY_READINGS
+            ],
+            priority=1,
+            relationship="limited weekly coverage",
+        )
+
+    return {
+        "reference_date": reference_date.isoformat(),
+        "period_start": recent_start.isoformat(),
+        "period_end": recent_end.isoformat(),
+        "comparison_start": previous_start.isoformat(),
+        "comparison_end": previous_end.isoformat(),
+        "facts": sorted(
+            facts,
+            key=lambda fact: (fact["priority"], fact["id"]),
+        ),
+        "coverage_completed_week": coverage,
+        "safety": {
+            "minimum_weekly_readings": MIN_WEEKLY_READINGS,
+            "missing_values_are_not_zero": True,
+            "today_is_excluded": True,
+            "single_readings_are_not_diagnoses": True,
+        },
+    }
+
+
+def generate_weekly_health_narrative(
+    evidence: dict[str, Any],
+    *,
+    client=None,
+) -> WeeklyHealthNarrative:
+    """Turn computed completed-week evidence into constrained language."""
+    if not evidence.get("facts"):
+        raise ValueError("No recorded weekly health facts are available.")
+    prompt = f"""
+You are writing one personalized Weekly Health Insight for HealthCoach.
+
+Computed evidence:
+{json.dumps(evidence, indent=2, sort_keys=True)}
+
+Use only this computed evidence. Select two to four useful facts and cite their
+exact fact IDs. Explain relationships specific to this person's completed-week
+patterns without claiming causation. Use cautious language. Do not introduce
+or repeat numbers in the narrative because the application displays them.
+Missing data is missing, never zero. Do not diagnose, classify blood pressure,
+assign cardiovascular or disease risk, label a metric normal or abnormal,
+recommend medication changes, praise or criticize weight change, or recommend
+calorie restriction. Treat Cardio Fitness and walking heart rate as longer-term
+estimates. Averages describe duration or level, not sleep quality, exercise
+intensity, physiological strain, stress, illness, or fitness gains. Give one
+realistic focus tied directly to the cited evidence and mention the most
+important data limitation. Do not mention prompts, JSON, rules, or fact IDs.
+This is general wellness interpretation, not medical care.
+"""
+    owns_client = client is None
+    active_client = client or get_client()
+    try:
+        response = active_client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.35,
+                response_mime_type="application/json",
+                response_schema=WeeklyHealthNarrative,
+            ),
+        )
+    finally:
+        if owns_client:
+            active_client.close()
+    if response.parsed is not None:
+        narrative = (
+            response.parsed
+            if isinstance(response.parsed, WeeklyHealthNarrative)
+            else WeeklyHealthNarrative.model_validate(response.parsed)
+        )
+    elif response.text:
+        narrative = WeeklyHealthNarrative.model_validate_json(response.text)
+    else:
+        raise RuntimeError("Gemini returned no Weekly Health Insight.")
+    return validate_weekly_health_narrative(narrative, evidence)
+
+
+def validate_weekly_health_narrative(
+    narrative: WeeklyHealthNarrative,
+    evidence: dict[str, Any],
+) -> WeeklyHealthNarrative:
+    """Apply shared safety rules and keep the Telegram result concise."""
+    validate_daily_health_narrative(narrative, evidence)
+    cited_fact_ids = {
+        fact_id
+        for observation in narrative.observations
+        for fact_id in observation.fact_ids
+    }
+    if len(cited_fact_ids) > 4:
+        raise ValueError("Weekly insight cited more than four evidence facts.")
+    return narrative
+
+
+def fallback_weekly_health_narrative(
+    evidence: dict[str, Any],
+) -> WeeklyHealthNarrative:
+    fallback = fallback_daily_health_narrative(evidence)
+    return WeeklyHealthNarrative(
+        summary=fallback.summary,
+        observations=fallback.observations,
+        health_connection=fallback.health_connection,
+        practical_focus=(
+            "Use the strongest completed-week pattern below to choose one "
+            "manageable focus for the coming week."
+        ),
+        data_limit=(
+            "This fallback uses only calculated completed-week records and "
+            "does not treat missing days as zero."
+        ),
+    )
+
+
+def format_weekly_health_insight(
+    evidence: dict[str, Any],
+    narrative: WeeklyHealthNarrative,
+    *,
+    personalized: bool,
+) -> str:
+    facts_by_id = {
+        str(fact["id"]): fact
+        for fact in evidence.get("facts") or []
+    }
+    start = date.fromisoformat(str(evidence["period_start"]))
+    end = date.fromisoformat(str(evidence["period_end"]))
+    period_text = (
+        f"{start.strftime('%b ')}{start.day}–"
+        f"{end.strftime('%b ')}{end.day}, {end.year}"
+    )
+    lines = [
+        "Weekly Health Insight",
+        period_text,
+        "",
+        narrative.summary,
+        "",
+        "What your completed-week data shows",
+    ]
+    shown_fact_ids: set[str] = set()
+    for observation in narrative.observations:
+        statements = []
+        for fact_id in observation.fact_ids:
+            if fact_id in shown_fact_ids or fact_id not in facts_by_id:
+                continue
+            shown_fact_ids.add(fact_id)
+            statements.append(str(facts_by_id[fact_id]["statement"]))
+        if statements:
+            lines.append("- " + " ".join(statements))
+            lines.append("  Meaning: " + observation.interpretation)
+    lines.extend([
+        "",
+        "How this may matter",
+        narrative.health_connection,
+        "",
+        "One focus for the coming week",
+        narrative.practical_focus,
+        "",
+        "Keep in mind",
+        narrative.data_limit,
+        "",
+        (
+            "This insight compares recorded personal patterns. It does not "
+            "diagnose, classify cardiovascular risk, or replace medical care."
+        ),
+        *(
+            []
+            if personalized
+            else [
+                "Personalized wording was temporarily unavailable, so this "
+                "version uses the calculated evidence directly."
+            ]
+        ),
+        "",
+        "Reply Refresh weekly insight, Back, or Cancel.",
+    ])
+    message = "\n".join(lines)
+    if len(message) > 4096:
+        raise ValueError("Weekly Health Insight exceeded Telegram's limit.")
     return message

@@ -954,6 +954,29 @@ was temporarily unavailable. Generating or refreshing an insight never writes
 to Apple Health, the Health Tracker, goals, Pantry, Food Library, or Food
 Ledger. The result is general wellness interpretation and not medical care.
 
+## Weekly Health Insight
+
+Health also includes an on-demand Weekly Health Insight. It is separate from
+the existing fixed Weekly report and does not replace its food and goal
+summary. The insight compares the last seven completed days with the preceding
+seven and excludes the current day so partial activity is never presented as
+a completed result.
+
+Weekly averages require at least four recorded days in both comparison
+periods. The deterministic evidence may compare sleep duration, resting heart
+rate, HRV, steps, total burn, Exercise Minutes, and smoothed weight. Cardio
+Fitness and walking heart rate remain longer-term recorded estimates, and
+blood pressure is shown only as unclassified recorded context. Thin coverage
+is stated explicitly; blanks never become zeros.
+
+Gemini receives only that computed evidence and must cite its evidence IDs.
+It cannot introduce numbers, diagnose, classify cardiovascular risk or blood
+pressure, infer illness, stress, physiological strain, sleep quality, exercise
+intensity, or fitness gains, or recommend calorie restriction or medication
+changes. If generated wording is unavailable or violates validation, a
+deterministic fallback is shown. Viewing or refreshing the report never writes
+health or food data.
+
 ## Heart Health Report
 
 Reports includes a Heart Health Report for the last 7, 14, or 30 days. It
