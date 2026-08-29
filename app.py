@@ -249,6 +249,7 @@ def reset_state_for_new_day(state, today_str):
             "sleep_reminder_sent": False,
             "goal_check_sent": False,
             "weekly_sent": False,
+            "library_health_check_reminder_sent": False,
             "telegram_update_offset": state.get("telegram_update_offset"),
         }
     return state
@@ -2776,6 +2777,31 @@ def send_weekly_report(chat_id=None, *, remove_keyboard=False):
     )
 
 
+def weekly_library_health_check_reminder_due(now, state):
+    """Return whether the Sunday 9:30 AM maintenance reminder is due."""
+    sunday = now.weekday() == 6
+    at_or_after_930 = now.hour > 9 or (
+        now.hour == 9 and now.minute >= 30
+    )
+    return (
+        sunday
+        and at_or_after_930
+        and not state.get("library_health_check_reminder_sent", False)
+    )
+
+
+def send_library_health_check_reminder():
+    """Send the weekly read-only Food Library maintenance reminder."""
+    return send_telegram_msg(
+        "Sunday Food Library check-in\n\n"
+        "It is time to run your weekly Food Library Health Check. It "
+        "reviews Pantry nutrition and organization, nutrition gaps, and "
+        "source issues without changing anything automatically.\n\n"
+        "Open: /menu → Food → Food Library → Library health check\n\n"
+        "You can run it now or later today."
+    )
+
+
 def scheduler_loop():
     logging.info("Scheduler started")
 
@@ -2817,6 +2843,12 @@ def scheduler_loop():
             if now.weekday() == 6 and now.hour == 9 and now.minute == 0 and not state.get("weekly_sent", False):
                 if send_weekly_report():
                     state["weekly_sent"] = True
+                    save_state(state)
+                time.sleep(60)
+
+            if weekly_library_health_check_reminder_due(now, state):
+                if send_library_health_check_reminder():
+                    state["library_health_check_reminder_sent"] = True
                     save_state(state)
                 time.sleep(60)
 

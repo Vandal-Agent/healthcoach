@@ -62,6 +62,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   recheck, and intentionally preserved Nutrition Version history; each finding
   routes to an existing confirmed management workflow and nothing is changed
   automatically
+- Sends a once-weekly Sunday 9:30 AM Pacific reminder to run the read-only Food
+  Library Health Check; the reminder never runs maintenance or changes data
+  automatically
 - Renames, updates, or removes manually Entered Foods while preserving
   food-log history
 - Reviews yesterday's Food Ledger and safely copies one meal or the

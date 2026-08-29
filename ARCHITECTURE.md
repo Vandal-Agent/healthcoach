@@ -42,6 +42,7 @@ Message windows:
 8:30  morning recap
 1:30  midday check
 6:30  evening reminder
+Sunday 9:30 AM Pacific  Food Library Health Check reminder
 
 Morning flow:
 

@@ -774,6 +774,11 @@ route to the existing Pantry nutrition or organizer workflows, and Food
 findings route to the existing Food Finder/Manage Food workflow, where normal
 confirmation rules still apply.
 
+HealthCoach sends a weekly reminder each Sunday at 9:30 AM Pacific to run this
+report. The reminder is sent at most once that day, remains due if the service
+starts later on Sunday, and only provides the menu path. It never runs the
+report, changes a Food, or changes a Pantry item automatically.
+
 Pantry placement remains separate from nutrition identity. Changing Pantry
 storage or removing Pantry presence does not delete the Food, nutrition
 versions, Favorites, recipes, or historical logs.
