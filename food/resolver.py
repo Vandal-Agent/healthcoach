@@ -142,6 +142,51 @@ def find_by_alias(
     return dict(row) if row else None
 
 
+def find_by_exact_pantry_name(
+    food_name: str,
+) -> dict[str, Any] | None:
+    """Resolve one exact Pantry display name to its trusted linked Food."""
+    requested_key = normalize_key_part(food_name)
+    if not requested_key:
+        return None
+
+    initialize_database()
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                pantry_items.display_name AS pantry_display_name,
+                resolved_foods.*
+            FROM pantry_items
+            JOIN foods AS linked_foods
+              ON linked_foods.food_id = pantry_items.food_id
+            LEFT JOIN food_consolidations
+              ON food_consolidations.duplicate_food_id =
+                 linked_foods.food_id
+            JOIN foods AS resolved_foods
+              ON resolved_foods.food_id = COALESCE(
+                    food_consolidations.primary_food_id,
+                    linked_foods.food_id
+              )
+            ORDER BY pantry_items.pantry_item_id
+            """
+        ).fetchall()
+
+    matches: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        candidate = dict(row)
+        pantry_name = candidate.pop("pantry_display_name", None)
+        if normalize_key_part(pantry_name or "") != requested_key:
+            continue
+        if not is_trusted_saved_food(candidate):
+            continue
+        matches[int(candidate["food_id"])] = candidate
+
+    if len(matches) != 1:
+        return None
+    return next(iter(matches.values()))
+
+
 def normalized_food_tokens(value: str | None) -> set[str]:
     """
     Return meaningful deterministic food-name tokens.
@@ -481,8 +526,9 @@ def resolve_food(
     Resolution order:
     1. Stable search key
     2. Saved alias
-    3. Unique controlled restaurant/brand fallback
-    4. Return missing
+    3. Exact Pantry display name with one trusted linked Food
+    4. Unique controlled restaurant/brand fallback
+    5. Return missing
     """
     name = food_name.strip()
     serving = serving_description.strip() or "standard"
@@ -515,6 +561,14 @@ def resolve_food(
 
         if food is not None and not is_trusted_saved_food(food):
             food = None
+
+    if (
+        food is None
+        and cleaned_brand is None
+        and cleaned_restaurant is None
+    ):
+        food = find_by_exact_pantry_name(name)
+        matched_by = "pantry_name"
 
     if food is None:
         food = find_unique_restaurant_food_match(

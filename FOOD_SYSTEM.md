@@ -840,6 +840,14 @@ single word such as `salad` cannot select a longer personalized food name.
 Close matches are labeled on the verified-nutrition review and are never
 logged until the user explicitly chooses Log It.
 
+An exact My Pantry display name may also resolve to that item's trusted linked
+Food even when the saved provider name is longer or its serving differs. The
+verified-nutrition review labels this as a Pantry nutrition match before the
+user chooses Log It. Generic wording such as `chicken` never expands to
+`Chicken breast`, because multiple Pantry products may share that word.
+Choosing Different description preserves the already selected meal and date;
+only the food wording is replaced.
+
 ## Morning Food Coaching
 
 The morning Food Coaching message is a recap of the previous day.

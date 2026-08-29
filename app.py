@@ -2250,17 +2250,37 @@ def prompt_for_corrected_food(
     known_data,
     message="Send the corrected food description as a new message.",
 ):
-    """Keep a yesterday target when the user edits the description."""
+    """Keep the selected meal and date while correcting food wording."""
+    context = dict(known_data or {})
     target = parse_food_entry_date(
-        (known_data or {}).get("_entry_date")
+        context.get("_entry_date")
     )
+    meal_category = str(context.get("meal_category") or "").strip().lower()
     yesterday = (
         datetime.now(PACIFIC_TZ).date()
         - timedelta(days=1)
     )
 
     cancel_conversation(chat_id)
-    if target == yesterday:
+    if meal_category:
+        entry_date = target or datetime.now(PACIFIC_TZ).date()
+        start_conversation(
+            chat_id=chat_id,
+            conversation_type="food_meal",
+            current_step="awaiting_food",
+            known_data={
+                "meal_category": meal_category,
+                "restaurant": context.get("restaurant"),
+                "_entry_date": entry_date.isoformat(),
+            },
+            missing_fields=[],
+            original_message="",
+        )
+        message += (
+            f"\n\n{meal_category.title()} is still selected for "
+            f"{format_food_entry_date(entry_date)}."
+        )
+    elif target == yesterday:
         start_conversation(
             chat_id=chat_id,
             conversation_type="yesterday_food_logging",
@@ -3692,14 +3712,19 @@ def format_pending_nutrition_confirmation(
 
         lines.append(line)
 
-        if component.get("matched_by") == "controlled_fallback":
+        matched_by = component.get("matched_by")
+        if matched_by in {"controlled_fallback", "pantry_name"}:
             requested_name = str(
                 component.get("requested_food_name") or ""
             ).strip()
             if requested_name:
+                match_label = (
+                    "Pantry nutrition match"
+                    if matched_by == "pantry_name"
+                    else "Close Saved Food match"
+                )
                 lines.append(
-                    "Close Saved Food match: "
-                    f"{requested_name} → {display_name}"
+                    f"{match_label}: {requested_name} → {display_name}"
                 )
                 lines.append(
                     "Review this match before choosing Log It."
