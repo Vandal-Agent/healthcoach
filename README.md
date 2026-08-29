@@ -9,6 +9,10 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Tracks steps, Apple Exercise Minutes, resting heart rate, walking
   heart-rate average, Cardio Fitness, paired blood-pressure readings,
   protein, sleep, weight, HRV, and calorie data
+- Accepts actual Apple source times for resting heart rate, HRV, Cardio
+  Fitness, and walking heart rate; rejects a timestamped value when its source
+  day does not match the Tracker day while keeping old Shortcut payloads and
+  legacy rows compatible
 - Shows 7-, 14-, and 30-day weight, sleep, exercise, resting
   heart-rate, HRV, walking heart-rate, Cardio Fitness, and blood-pressure
   history in

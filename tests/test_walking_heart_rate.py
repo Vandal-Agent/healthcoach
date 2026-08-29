@@ -82,7 +82,7 @@ class WalkingHeartRateTests(unittest.TestCase):
         changed = app.ensure_health_tracker_schema(sheet)
 
         self.assertTrue(changed)
-        sheet.add_cols.assert_called_once_with(4)
+        sheet.add_cols.assert_called_once_with(8)
         self.assertEqual(
             sheet.update_cell.call_args_list,
             [
@@ -90,6 +90,10 @@ class WalkingHeartRateTests(unittest.TestCase):
                 call(1, 14, "Blood Pressure Systolic"),
                 call(1, 15, "Blood Pressure Diastolic"),
                 call(1, 16, "Blood Pressure Measured At"),
+                call(1, 17, "RHR Measured At"),
+                call(1, 18, "HRV Measured At"),
+                call(1, 19, "Cardio Fitness Measured At"),
+                call(1, 20, "Walking Heart Rate Measured At"),
             ],
         )
 
@@ -113,7 +117,7 @@ class WalkingHeartRateTests(unittest.TestCase):
 
         self.assertEqual(
             sheet.update.call_args.kwargs["range_name"],
-            "A2:P2",
+            "A2:T2",
         )
         merged = sheet.update.call_args.kwargs["values"][0]
         self.assertEqual(merged[12], "92.4")

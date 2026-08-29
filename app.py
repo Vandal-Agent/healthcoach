@@ -214,9 +214,13 @@ HEADERS = [
     "Blood Pressure Systolic",
     "Blood Pressure Diastolic",
     "Blood Pressure Measured At",
+    "RHR Measured At",
+    "HRV Measured At",
+    "Cardio Fitness Measured At",
+    "Walking Heart Rate Measured At",
 ]
 
-TRACKER_LAST_COLUMN = "P"
+TRACKER_LAST_COLUMN = "T"
 MAX_WALKING_HEART_RATE_BPM = 300.0
 MAX_BLOOD_PRESSURE_MMHG = 300.0
 
@@ -1202,6 +1206,14 @@ def parse_walking_heart_rate(value):
     return parsed
 
 
+def parse_positive_float(value):
+    """Return a positive numeric measurement or None."""
+    parsed = safe_float(value, None)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
 def parse_health_measurement_timestamp(value):
     """Return an Apple Health measurement time in Pacific time."""
     if isinstance(value, datetime):
@@ -1245,6 +1257,40 @@ def parse_health_measurement_timestamp(value):
     if parsed.tzinfo is None:
         return PACIFIC_TZ.localize(parsed)
     return parsed.astimezone(PACIFIC_TZ)
+
+
+def parse_timestamped_health_metric(
+    value,
+    measured_at_value,
+    *,
+    expected_date=None,
+    value_parser=None,
+):
+    """Return one metric and its optional verified Apple source time.
+
+    A missing timestamp keeps legacy Shortcut payloads and Tracker rows
+    readable. Once a timestamp is supplied, it must parse and match the
+    Tracker day so an older Apple sample cannot become a new daily reading.
+    """
+    parser = value_parser or (lambda raw: safe_float(raw, None))
+    parsed_value = parser(value)
+    if parsed_value is None:
+        return None, None
+
+    if measured_at_value in ("", None):
+        return parsed_value, None
+
+    measured_at = parse_health_measurement_timestamp(
+        measured_at_value
+    )
+    if measured_at is None:
+        return None, None
+    if (
+        expected_date is not None
+        and measured_at.date() != expected_date
+    ):
+        return None, None
+    return parsed_value, measured_at
 
 
 def parse_blood_pressure(
@@ -1372,11 +1418,33 @@ def row_to_metrics(row):
     if weight_val == 0:
         weight_val = None
 
-    hrv_value = safe_float(padded[7], None)
-    if hrv_value is not None and hrv_value <= 0:
-        hrv_value = None
-
     row_date = parse_row_date(padded)
+    rhr_value, rhr_measured_at = parse_timestamped_health_metric(
+        padded[5],
+        padded[16],
+        expected_date=row_date,
+    )
+    hrv_value, hrv_measured_at = parse_timestamped_health_metric(
+        padded[7],
+        padded[17],
+        expected_date=row_date,
+        value_parser=parse_positive_float,
+    )
+    cardio_fitness, cardio_fitness_measured_at = (
+        parse_timestamped_health_metric(
+            padded[11],
+            padded[18],
+            expected_date=row_date,
+        )
+    )
+    walking_heart_rate, walking_heart_rate_measured_at = (
+        parse_timestamped_health_metric(
+            padded[12],
+            padded[19],
+            expected_date=row_date,
+            value_parser=parse_walking_heart_rate,
+        )
+    )
     blood_pressure = parse_blood_pressure(
         padded[13],
         padded[14],
@@ -1391,15 +1459,19 @@ def row_to_metrics(row):
         "active_cals": safe_float(padded[3], 0),
         "sleep_hours": parse_sleep(padded[4]),
         "sleep_raw": padded[4],
-        "rhr": safe_float(padded[5], None),
+        "rhr": rhr_value,
+        "rhr_measured_at": rhr_measured_at,
         "weight": weight_val,
         "hrv": hrv_value,
+        "hrv_measured_at": hrv_measured_at,
         "dietary_cals": safe_float(padded[8], 0),
         "protein": safe_float(padded[9], 0),
         "exercise_minutes": safe_float(padded[10], None),
-        "cardio_fitness": safe_float(padded[11], None),
-        "walking_heart_rate_average": parse_walking_heart_rate(
-            padded[12]
+        "cardio_fitness": cardio_fitness,
+        "cardio_fitness_measured_at": cardio_fitness_measured_at,
+        "walking_heart_rate_average": walking_heart_rate,
+        "walking_heart_rate_measured_at": (
+            walking_heart_rate_measured_at
         ),
         "blood_pressure_systolic": (
             blood_pressure["systolic"]
@@ -1545,6 +1617,16 @@ def update_or_insert_today(sheet, row, now):
             else existing[index]
             for index in range(1, len(HEADERS))
         )
+        # A legacy value without a source time must not inherit a timestamp
+        # from a different measurement already stored in today's row.
+        for value_index, measured_at_index in (
+            (5, 16),
+            (7, 17),
+            (11, 18),
+            (12, 19),
+        ):
+            if incoming[value_index] not in ("", None):
+                merged[measured_at_index] = incoming[measured_at_index]
         sheet.update(
             range_name=(
                 f"A{row_index}:{TRACKER_LAST_COLUMN}{row_index}"
@@ -1663,11 +1745,25 @@ def build_progress_message(label, metrics):
         resting_heart_rate_text = (
             f"{format_display_number(resting_heart_rate)} bpm"
         )
+        if metrics.get("rhr_measured_at") is not None:
+            resting_heart_rate_text += (
+                " at "
+                + metrics["rhr_measured_at"]
+                .strftime("%I:%M %p")
+                .lstrip("0")
+            )
 
     hrv = metrics.get("hrv")
     hrv_text = "not recorded"
     if hrv is not None:
         hrv_text = f"{format_display_number(hrv)} ms"
+        if metrics.get("hrv_measured_at") is not None:
+            hrv_text += (
+                " at "
+                + metrics["hrv_measured_at"]
+                .strftime("%I:%M %p")
+                .lstrip("0")
+            )
 
     cardio_fitness = metrics.get("cardio_fitness")
     cardio_fitness_text = "not recorded"
@@ -1675,6 +1771,13 @@ def build_progress_message(label, metrics):
         cardio_fitness_text = (
             f"{format_display_number(cardio_fitness)} mL/kg/min"
         )
+        if metrics.get("cardio_fitness_measured_at") is not None:
+            cardio_fitness_text += (
+                " at "
+                + metrics["cardio_fitness_measured_at"]
+                .strftime("%I:%M %p")
+                .lstrip("0")
+            )
 
     walking_heart_rate = metrics.get(
         "walking_heart_rate_average"
@@ -1684,6 +1787,16 @@ def build_progress_message(label, metrics):
         walking_heart_rate_text = (
             f"{format_display_number(walking_heart_rate)} bpm"
         )
+        if (
+            metrics.get("walking_heart_rate_measured_at")
+            is not None
+        ):
+            walking_heart_rate_text += (
+                " at "
+                + metrics["walking_heart_rate_measured_at"]
+                .strftime("%I:%M %p")
+                .lstrip("0")
+            )
 
     blood_pressure_text = "not recorded"
     blood_pressure_systolic = metrics.get(
@@ -25608,7 +25721,13 @@ def webhook():
     active = safe_float(data.get("active_calories"), None)
     sleep_raw = data.get("sleep_hours")
     sleep = normalize_sleep_for_sheet(sleep_raw) if sleep_raw not in ("", None) else ""
-    rhr = safe_float(data.get("rhr"), None)
+    rhr_raw = data.get("rhr")
+    rhr_measured_at_raw = data.get("rhr_measured_at")
+    rhr, rhr_measured_at = parse_timestamped_health_metric(
+        rhr_raw,
+        rhr_measured_at_raw,
+        expected_date=now.date(),
+    )
     weight = safe_float(data.get("weight"), None)
     # Preserve today's existing official weight.
     _, existing_row, _ = get_today_row_index_and_row(
@@ -25622,33 +25741,95 @@ def webhook():
     ):
         weight = None
 
-    hrv = safe_float(data.get("hrv"), None)
-    if hrv is not None and hrv <= 0:
-        hrv = None
+    hrv_raw = data.get("hrv")
+    hrv_measured_at_raw = data.get("hrv_measured_at")
+    hrv, hrv_measured_at = parse_timestamped_health_metric(
+        hrv_raw,
+        hrv_measured_at_raw,
+        expected_date=now.date(),
+        value_parser=parse_positive_float,
+    )
     dietary = safe_float(data.get("dietary_calories"), None)
     protein = safe_float(data.get("protein"), None)
     exercise_minutes = safe_float(
         data.get("exercise_minutes"),
         None,
     )
-    cardio_fitness = safe_float(
-        data.get("cardio_fitness"),
-        None,
+    cardio_fitness_raw = data.get("cardio_fitness")
+    cardio_fitness_measured_at_raw = data.get(
+        "cardio_fitness_measured_at"
+    )
+    (
+        cardio_fitness,
+        cardio_fitness_measured_at,
+    ) = parse_timestamped_health_metric(
+        cardio_fitness_raw,
+        cardio_fitness_measured_at_raw,
+        expected_date=now.date(),
     )
     walking_heart_rate_raw = data.get(
         "walking_heart_rate_average"
     )
-    walking_heart_rate = parse_walking_heart_rate(
+    parsed_walking_heart_rate_value = parse_walking_heart_rate(
         walking_heart_rate_raw
+    )
+    walking_heart_rate_measured_at_raw = data.get(
+        "walking_heart_rate_measured_at"
+    )
+    (
+        walking_heart_rate,
+        walking_heart_rate_measured_at,
+    ) = parse_timestamped_health_metric(
+        walking_heart_rate_raw,
+        walking_heart_rate_measured_at_raw,
+        expected_date=now.date(),
+        value_parser=parse_walking_heart_rate,
     )
     if (
         walking_heart_rate_raw not in ("", None)
-        and walking_heart_rate is None
+        and parsed_walking_heart_rate_value is None
     ):
         logging.warning(
             "Ignored invalid walking heart-rate value: %r",
             walking_heart_rate_raw,
         )
+
+    timestamped_metrics = (
+        (
+            "resting heart rate",
+            rhr_raw,
+            rhr_measured_at_raw,
+            rhr,
+        ),
+        ("HRV", hrv_raw, hrv_measured_at_raw, hrv),
+        (
+            "Cardio Fitness",
+            cardio_fitness_raw,
+            cardio_fitness_measured_at_raw,
+            cardio_fitness,
+        ),
+        (
+            "walking heart rate",
+            walking_heart_rate_raw,
+            walking_heart_rate_measured_at_raw,
+            walking_heart_rate,
+        ),
+    )
+    for metric_name, raw_value, raw_time, parsed_value in (
+        timestamped_metrics
+    ):
+        if (
+            raw_time not in ("", None)
+            and raw_value not in ("", None)
+            and parsed_value is None
+        ):
+            logging.warning(
+                "Ignored invalid or stale %s reading: value=%r "
+                "measured_at=%r",
+                metric_name,
+                raw_value,
+                raw_time,
+            )
 
     blood_pressure_systolic_raw = data.get(
         "blood_pressure_systolic"
@@ -25715,6 +25896,30 @@ def webhook():
                 "%m/%d/%Y %I:%M %p"
             )
             if blood_pressure is not None
+            else ""
+        ),
+        (
+            rhr_measured_at.strftime("%m/%d/%Y %I:%M %p")
+            if rhr_measured_at is not None
+            else ""
+        ),
+        (
+            hrv_measured_at.strftime("%m/%d/%Y %I:%M %p")
+            if hrv_measured_at is not None
+            else ""
+        ),
+        (
+            cardio_fitness_measured_at.strftime(
+                "%m/%d/%Y %I:%M %p"
+            )
+            if cardio_fitness_measured_at is not None
+            else ""
+        ),
+        (
+            walking_heart_rate_measured_at.strftime(
+                "%m/%d/%Y %I:%M %p"
+            )
+            if walking_heart_rate_measured_at is not None
             else ""
         ),
     ]

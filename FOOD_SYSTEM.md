@@ -901,6 +901,23 @@ Health Tracker day, preventing an older reading from being copied forward.
 Blood pressure is informational only and is never diagnosed, rated, or used
 for calorie calculations.
 
+The Shortcut may additionally send `rhr_measured_at`, `hrv_measured_at`,
+`cardio_fitness_measured_at`, and `walking_heart_rate_measured_at`. These
+actual Apple sample times are stored in columns Q through T. When one of these
+optional times is supplied, HealthCoach accepts the paired measurement only
+when the timestamp parses as one value and its Pacific date matches the
+Health Tracker day. An older latest-available Apple sample is therefore not
+copied forward as a new daily measurement. A later stale sync does not erase
+an already accepted same-day value.
+
+The four time fields are optional for backward compatibility: existing rows
+and old Shortcut payloads without them remain readable. Once present, the
+value and time act as a pair. A legacy value arriving without a time cannot
+inherit an unrelated earlier timestamp. Current Status shows the source time
+when it is available. Health History, Heart Health, and Daily Health Insight
+continue to use legacy values, but timestamped values with a stale or invalid
+source day are treated as not recorded.
+
 ## Daily Health Insight
 
 Health includes an on-demand Daily Health Insight. Version 1 runs only when

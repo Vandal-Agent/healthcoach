@@ -132,14 +132,18 @@ steps
 active_calories
 total_calories
 rhr (optional Apple Health resting heart rate in bpm)
+rhr_measured_at (optional actual source time for rhr)
 weight
 hrv
+hrv_measured_at (optional actual source time for hrv)
 dietary_calories
 protein
 sleep_hours (sometimes)
 exercise_minutes (optional Apple Exercise Time total for today)
 cardio_fitness (optional Apple Health Cardio Fitness in mL/kg/min)
+cardio_fitness_measured_at (optional actual source time)
 walking_heart_rate_average (optional Apple Health Walking Heart Rate Average)
+walking_heart_rate_measured_at (optional actual source time)
 blood_pressure_systolic (optional paired Apple Health reading)
 blood_pressure_diastolic (optional paired Apple Health reading)
 blood_pressure_measured_at (required source time for a paired reading)
@@ -181,6 +185,10 @@ Walking Heart Rate Average
 Blood Pressure Systolic
 Blood Pressure Diastolic
 Blood Pressure Measured At
+RHR Measured At
+HRV Measured At
+Cardio Fitness Measured At
+Walking Heart Rate Measured At
 
 The RHR column remains column F. Current status and Health History display
 recorded resting heart rate without medical interpretation.
@@ -194,6 +202,13 @@ per minute without medical interpretation.
 Blood-pressure systolic, diastolic, and source measurement time are appended
 as columns N through P. HealthCoach accepts and displays them only as one
 complete same-day pair, and does not diagnose or rate the reading.
+
+Apple source times for resting heart rate, HRV, Cardio Fitness, and walking
+heart rate are appended as columns Q through T. When a source time is sent,
+its Pacific calendar date must match the Tracker row or the value and time are
+ignored together. This prevents an older latest-available Apple sample from
+being counted as a new daily observation. Payloads and legacy rows without
+these optional source times remain readable during the Shortcut transition.
 
 Telegram Messaging
 

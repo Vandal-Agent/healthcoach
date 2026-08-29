@@ -180,7 +180,7 @@ class BloodPressureTests(unittest.TestCase):
 
         self.assertEqual(
             sheet.update.call_args.kwargs["range_name"],
-            "A2:P2",
+            "A2:T2",
         )
         merged = sheet.update.call_args.kwargs["values"][0]
         self.assertEqual(
