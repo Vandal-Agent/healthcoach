@@ -2534,6 +2534,10 @@ def format_food_interpretation(interpretation, *, entry_date=None):
 def build_help_message():
     return (
         "I can currently help with:\n"
+        "- /menu — open the main menu\n"
+        "- /food — open the Food menu\n"
+        "- /health — open the Health menu\n"
+        "- /reports — open the Reports menu\n"
         "- /status\n"
         '- Record sleep, like: "Record my sleep as 6:22"\n'
         '- Check sleep, like: "Did I record my sleep today?"\n'
@@ -3890,6 +3894,7 @@ def healthcoach_main_menu_text() -> str:
         "2. Health\n"
         "3. Reports\n"
         "4. Help\n\n"
+        "Direct shortcuts: /food, /health, /reports\n\n"
         "Reply cancel to close the menu."
     )
 
@@ -10101,6 +10106,28 @@ def process_telegram_update(update):
         )
         send_telegram_msg(
             healthcoach_main_menu_text(),
+            chat_id=chat_id,
+        )
+        return
+
+    direct_menu_commands = {
+        "/food": ("food", healthcoach_food_menu_text),
+        "/health": ("health", healthcoach_health_menu_text),
+        "/reports": ("reports", healthcoach_reports_menu_text),
+    }
+    direct_menu = direct_menu_commands.get(lowered_text)
+    if direct_menu is not None:
+        menu_step, menu_text = direct_menu
+        start_conversation(
+            chat_id=chat_id,
+            conversation_type="healthcoach_menu",
+            current_step=menu_step,
+            known_data={},
+            missing_fields=[],
+            original_message=text,
+        )
+        send_telegram_msg(
+            menu_text(),
             chat_id=chat_id,
         )
         return

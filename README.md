@@ -91,6 +91,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Manages a safety-capped weight goal with manual calorie-target updates,
   burn-based projections, and remaining-calorie feedback after food logging
 - Uses the Food Ledger rather than Lose It for current nutrition totals
+- Keeps `/menu` as the main navigation command and provides `/food`,
+  `/health`, and `/reports` shortcuts that safely replace an unfinished
+  conversation with the requested menu
 - Sends daily and weekly coaching through Telegram
 - Skips and reports an individual failed Telegram update so one malformed
   interaction cannot freeze all later messages
