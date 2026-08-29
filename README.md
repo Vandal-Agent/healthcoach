@@ -17,6 +17,10 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Adds a non-diagnostic Heart Health Report with recorded averages,
   first-to-last trends, data completeness, and supporting exercise,
   sleep, and weight context
+- Builds an on-demand Daily Health Insight from calculated personal baselines,
+  completed-day activity, smoothed weight, longer-term wearable trends, and
+  data completeness; Gemini explains only cited computed facts and cannot add
+  measurements, diagnose, classify risk, or treat an unfinished day as final
 - Labels no more than one evidence-supported Heart-Healthy Pick in Pantry,
   cited online Restaurant, and visible menu-photo recommendations
 - Builds a reviewable, deduplicated Pantry list from one or more shelf photos;

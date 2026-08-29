@@ -37,6 +37,13 @@ Telegram polling thread
 
 sends coaching messages
 
+The Health menu's on-demand Daily Health Insight reads up to thirty days of
+Health Tracker rows. `health_insights.py` calculates personal-baseline,
+completed-day, rolling-average, trend, and data-completeness evidence before
+Gemini is called. The model receives only that evidence and returns structured
+prose tied to evidence IDs; exact measurements remain deterministic. Invalid
+or unavailable generated prose falls back to a deterministic explanation.
+
 Message windows:
 
 8:30  morning recap

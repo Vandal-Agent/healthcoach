@@ -170,6 +170,12 @@ from memory.cases import (
     create_case,
     evaluate_missing_data_cases,
 )
+from health_insights import (
+    build_daily_health_evidence,
+    fallback_daily_health_narrative,
+    format_daily_health_insight,
+    generate_daily_health_narrative,
+)
 
 app = Flask(__name__)
 
@@ -1035,6 +1041,12 @@ def menu_reply_markup(message):
         rows = [
             ["Current status", "Record sleep"],
             ["Record weight", "Health history"],
+            ["Daily health insight"],
+            ["Back", "Cancel"],
+        ]
+    elif message.startswith("Daily Health Insight"):
+        rows = [
+            ["Refresh insight"],
             ["Back", "Cancel"],
         ]
     elif message.startswith("Health History"):
@@ -7431,7 +7443,8 @@ def healthcoach_health_menu_text() -> str:
         "2. Record sleep\n"
         "3. Record weight\n"
         "4. Health history\n"
-        "5. Back"
+        "5. Daily health insight\n"
+        "6. Back"
     )
 
 
@@ -7977,6 +7990,84 @@ def get_formatted_health_history(
         rows=rows,
     )
     return format_health_history(history)
+
+
+def build_daily_health_records(rows: list) -> list[dict]:
+    """Convert Tracker rows without changing blank values into zeros."""
+    records = []
+    for row in rows:
+        row_date = parse_row_date(row)
+        metrics = row_to_metrics(row)
+        if row_date is None or metrics is None:
+            continue
+        padded = list(row) + [""] * (len(HEADERS) - len(row))
+
+        def recorded(index: int, value):
+            return value if padded[index] not in ("", None) else None
+
+        records.append({
+            "date": row_date.isoformat(),
+            "steps": recorded(1, metrics.get("steps")),
+            "total_burn": recorded(2, metrics.get("total_cals")),
+            "active_calories": recorded(
+                3,
+                metrics.get("active_cals"),
+            ),
+            "sleep_hours": metrics.get("sleep_hours"),
+            "resting_heart_rate": metrics.get("rhr"),
+            "weight": metrics.get("weight"),
+            "hrv": metrics.get("hrv"),
+            "exercise_minutes": metrics.get("exercise_minutes"),
+            "cardio_fitness": metrics.get("cardio_fitness"),
+            "walking_heart_rate": metrics.get(
+                "walking_heart_rate_average"
+            ),
+            "blood_pressure_systolic": metrics.get(
+                "blood_pressure_systolic"
+            ),
+            "blood_pressure_diastolic": metrics.get(
+                "blood_pressure_diastolic"
+            ),
+        })
+    return records
+
+
+def get_daily_health_insight_message(
+    *,
+    reference_date: date,
+    now: datetime | None = None,
+) -> str:
+    """Read personal history and return one grounded daily insight."""
+    current_time = now or datetime.now(PACIFIC_TZ)
+    rows = get_recent_rows(
+        reference_date,
+        days_back=29,
+    )
+    evidence = build_daily_health_evidence(
+        records=build_daily_health_records(rows),
+        reference_date=reference_date,
+        now_hour=current_time.hour,
+    )
+    if not evidence.get("facts"):
+        raise ValueError(
+            "There is not enough recorded health data for an insight yet."
+        )
+
+    personalized = True
+    try:
+        narrative = generate_daily_health_narrative(evidence)
+    except Exception:
+        personalized = False
+        logging.exception(
+            "Personalized Daily Health Insight generation failed"
+        )
+        narrative = fallback_daily_health_narrative(evidence)
+
+    return format_daily_health_insight(
+        evidence,
+        narrative,
+        personalized=personalized,
+    )
 
 
 def healthcoach_heart_health_menu_text() -> str:
@@ -21014,7 +21105,41 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"5", "back"}:
+            if lowered in {
+                "5",
+                "daily health insight",
+                "daily insight",
+                "health insight",
+            }:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health_daily_insight",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    "I'm comparing your recorded health data with your "
+                    "personal recent patterns. This may take a moment.",
+                    chat_id=chat_id,
+                )
+                try:
+                    message = get_daily_health_insight_message(
+                        reference_date=today,
+                    )
+                except Exception:
+                    logging.exception("Daily Health Insight failed")
+                    send_telegram_msg(
+                        "I couldn't build a reliable Daily Health Insight "
+                        "right now.\n\n"
+                        "No health data was changed. Reply Refresh insight, "
+                        "Back, or Cancel.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(message, chat_id=chat_id)
+                return
+
+            if lowered in {"6", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
@@ -21029,6 +21154,52 @@ def process_telegram_update(update):
 
             send_telegram_msg(
                 healthcoach_health_menu_text(),
+                chat_id=chat_id,
+            )
+            return
+
+        if current_step == "health_daily_insight":
+            if lowered == "back":
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="health",
+                    known_data={},
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    healthcoach_health_menu_text(),
+                    chat_id=chat_id,
+                )
+                return
+            if lowered in {
+                "refresh",
+                "refresh insight",
+                "daily health insight",
+                "daily insight",
+            }:
+                send_telegram_msg(
+                    "I'm refreshing the comparison with your latest "
+                    "recorded health data. This may take a moment.",
+                    chat_id=chat_id,
+                )
+                try:
+                    message = get_daily_health_insight_message(
+                        reference_date=today,
+                    )
+                except Exception:
+                    logging.exception("Daily Health Insight refresh failed")
+                    send_telegram_msg(
+                        "I couldn't refresh a reliable Daily Health Insight "
+                        "right now.\n\n"
+                        "No health data was changed. Reply Refresh insight, "
+                        "Back, or Cancel.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(message, chat_id=chat_id)
+                return
+            send_telegram_msg(
+                "Reply Refresh insight, Back, or Cancel.",
                 chat_id=chat_id,
             )
             return

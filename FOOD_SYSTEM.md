@@ -901,6 +901,42 @@ Health Tracker day, preventing an older reading from being copied forward.
 Blood pressure is informational only and is never diagnosed, rated, or used
 for calorie calculations.
 
+## Daily Health Insight
+
+Health includes an on-demand Daily Health Insight. Version 1 runs only when
+the user selects it or explicitly refreshes it; receiving an iPhone Shortcut
+sync does not automatically send another message.
+
+HealthCoach first computes an evidence packet from the current Health Tracker
+and only then requests personalized wording from Gemini. The computed layer:
+
+- compares today's sleep, resting heart rate, and HRV with up to fourteen
+  prior days and requires at least five prior readings before describing a
+  personal-baseline relationship;
+- uses yesterday for completed-day steps, Apple Exercise Minutes, and total
+  burn, and marks today's activity as partial before evening;
+- compares seven-day average weight with the preceding seven-day average only
+  when each period has at least four readings;
+- treats Cardio Fitness and walking heart rate as longer-term recorded trends;
+- reports blood pressure only as recorded and averaged values without a
+  category; and
+- keeps blank Tracker cells missing instead of converting them to zero.
+
+Each numerical statement receives an evidence ID. Gemini must cite the IDs it
+uses through structured output, may not introduce any number into its prose,
+and may explain only cautious wellness connections such as recovery, energy,
+appetite, activity consistency, and cardiovascular or metabolic support. It
+must not claim causation, diagnose, classify HRV or resting heart rate against
+other people, classify blood pressure, predict disease, assign a risk score,
+or advise medication changes. Exact numbers displayed in Telegram always come
+from the deterministic evidence packet rather than generated text.
+
+If Gemini is unavailable or violates those grounding rules, HealthCoach shows
+a deterministic evidence-based fallback and labels that personalized wording
+was temporarily unavailable. Generating or refreshing an insight never writes
+to Apple Health, the Health Tracker, goals, Pantry, Food Library, or Food
+Ledger. The result is general wellness interpretation and not medical care.
+
 ## Heart Health Report
 
 Reports includes a Heart Health Report for the last 7, 14, or 30 days. It
