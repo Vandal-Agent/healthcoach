@@ -1210,25 +1210,45 @@ def fallback_weekly_health_narrative(
             "recovery, and weight easier to distinguish from short-term noise."
         )
 
-    relationships = {
-        str(fact.get("relationship") or "") for fact in selected
-    }
-    if (
-        selected_metrics.intersection({"steps", "exercise_minutes"})
-        and (
-            "recent average lower" in relationships
-            or "recent total lower" in relationships
+    activity_lower = any(
+        (
+            "steps" in set(fact.get("metrics") or [])
+            and fact.get("relationship") == "recent average lower"
         )
-    ):
+        or (
+            "exercise_minutes" in set(fact.get("metrics") or [])
+            and fact.get("relationship") == "recent total lower"
+        )
+        for fact in selected
+    )
+    activity_higher = any(
+        (
+            "steps" in set(fact.get("metrics") or [])
+            and fact.get("relationship") == "recent average higher"
+        )
+        or (
+            "exercise_minutes" in set(fact.get("metrics") or [])
+            and fact.get("relationship") == "recent total higher"
+        )
+        for fact in selected
+    )
+    sleep_lower = any(
+        "sleep_hours" in set(fact.get("metrics") or [])
+        and fact.get("relationship") == "recent average lower"
+        for fact in selected
+    )
+    if activity_lower:
         practical_focus = (
             "Consider what changed your movement during the completed week. "
             "If the reduction was not intentional, choose one repeatable "
             "opportunity to add movement in the coming week."
         )
-    elif (
-        "sleep_hours" in selected_metrics
-        and "recent average lower" in relationships
-    ):
+    elif activity_higher:
+        practical_focus = (
+            "Identify which routine change supported the added movement. "
+            "Keep it only if it remains manageable in the coming week."
+        )
+    elif sleep_lower:
         practical_focus = (
             "Choose one realistic way to protect your sleep opportunity in "
             "the coming week, then compare the next completed-week average."

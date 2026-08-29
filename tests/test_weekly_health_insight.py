@@ -111,9 +111,36 @@ class WeeklyHealthInsightTests(unittest.TestCase):
         self.assertIn("What your completed-week data shows", message)
         self.assertIn("One focus for the coming week", message)
         self.assertIn("does not diagnose", message)
-        self.assertIn("recorded less average daily movement", message)
+        self.assertIn("recorded more average daily movement", message)
         self.assertIn("Steps and total burn moved together", message)
+        self.assertIn("supported the added movement", message)
+        self.assertNotIn("If the reduction was not intentional", message)
         self.assertLessEqual(len(message), 4096)
+
+    def test_lower_movement_drives_only_the_lower_movement_focus(self):
+        reference_date = date(2026, 8, 29)
+        records = weekly_records(reference_date)
+        recent_start = reference_date - timedelta(days=7)
+        for record in records:
+            record_date = date.fromisoformat(record["date"])
+            if recent_start <= record_date < reference_date:
+                record["steps"] = 6000
+                record["total_burn"] = 2100
+        evidence = health_insights.build_weekly_health_evidence(
+            records=records,
+            reference_date=reference_date,
+        )
+        narrative = health_insights.fallback_weekly_health_narrative(
+            evidence
+        )
+        message = health_insights.format_weekly_health_insight(
+            evidence,
+            narrative,
+            personalized=False,
+        )
+
+        self.assertIn("recorded less average daily movement", message)
+        self.assertIn("If the reduction was not intentional", message)
 
     def test_generated_wording_must_cite_computed_weekly_facts(self):
         evidence = health_insights.build_weekly_health_evidence(
@@ -179,7 +206,8 @@ class WeeklyHealthInsightTests(unittest.TestCase):
 
         self.assertIn("Weekly Health Insight", message)
         self.assertIn("calculated evidence directly", message)
-        self.assertIn("recorded less average daily movement", message)
+        self.assertIn("recorded more average daily movement", message)
+        self.assertIn("supported the added movement", message)
 
     def test_health_menu_routes_to_weekly_insight(self):
         conversation = {
