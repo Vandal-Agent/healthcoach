@@ -95,6 +95,7 @@ from food.pantry import (
 )
 from food.pantry_advisor import (
     MEAL_CALORIE_LIMITS,
+    build_pantry_goal_context,
     generate_pantry_meal_ideas,
     generate_smart_pantry_swaps,
     scale_pantry_meal_nutrition,
@@ -5217,19 +5218,67 @@ def pantry_meal_type_prompt() -> str:
         "What meal do you want Pantry ideas for?\n\n"
         "Lunch ideas stay at or below 500 calories.\n"
         "Dinner ideas stay at or below 600 calories.\n\n"
-        "HealthCoach will consider what you have logged today and "
-        "use no more than two additional ingredients per idea."
+        "HealthCoach will consider what you have logged today, your "
+        "saved calorie goal when available, and linked Pantry nutrition. "
+        "Each idea uses no more than two additional ingredients."
     )
+
+
+def format_pantry_goal_context(
+    goal_context: dict | None,
+) -> list[str]:
+    if not goal_context:
+        return []
+
+    low = float(goal_context["saved_target_low"])
+    high = float(goal_context["saved_target_high"])
+    logged = float(goal_context["logged_calories"])
+    lines = [
+        "Saved goal context",
+        "- Target: "
+        f"{format_display_number(low, decimals=0)}-"
+        f"{format_display_number(high, decimals=0)} calories/day",
+        "- Logged before this meal: "
+        f"{format_display_number(logged, decimals=0)} calories",
+    ]
+    if logged < low:
+        lines.append(
+            "- Remaining to saved range: "
+            f"{format_display_number(low - logged, decimals=0)}-"
+            f"{format_display_number(high - logged, decimals=0)} calories"
+        )
+    elif logged <= high:
+        lines.append(
+            "- Current logged total is within the saved range."
+        )
+    else:
+        lines.append(
+            "- Current logged total is "
+            f"{format_display_number(logged - high, decimals=0)} calories "
+            "above the saved range."
+        )
+
+    calculation_date = goal_context.get("calculation_date")
+    if calculation_date:
+        lines.append(f"- Goal last updated: {calculation_date}")
+    missing = int(goal_context.get("missing_calorie_items") or 0)
+    if missing:
+        lines.append(
+            f"- {missing} logged item(s) have no calories and are excluded."
+        )
+    return [*lines, ""]
 
 
 def format_pantry_meal_ideas(
     ideas: list[dict],
     *,
     meal_type: str,
+    goal_context: dict | None = None,
 ) -> str:
     lines = [
         f"Pantry Meal Ideas — {meal_type.title()}",
         "",
+        *format_pantry_goal_context(goal_context),
     ]
 
     for index, idea in enumerate(ideas, start=1):
@@ -5268,7 +5317,12 @@ def format_pantry_meal_ideas(
                     if additional_names
                     else "Needs: no additional ingredients"
                 ),
-                f"Why today: {idea.get('daily_fit') or ''}",
+                f"Nutrition fit: {idea.get('daily_fit') or ''}",
+                *(
+                    [f"Goal fit: {idea.get('goal_fit')}"]
+                    if idea.get("goal_fit")
+                    else []
+                ),
                 *(
                     [
                         "Heart-healthy note: "
@@ -5369,7 +5423,14 @@ def format_pantry_meal_idea_details(
     lines.extend(
         [
             "",
-            f"Why it fits today: {idea.get('daily_fit') or ''}",
+            f"Nutrition fit: {idea.get('daily_fit') or ''}",
+            *(
+                [f"Goal fit: {idea.get('goal_fit')}"]
+                if idea.get("goal_fit")
+                else []
+            ),
+            "Nutrition-data basis: "
+            f"{idea.get('nutrition_basis') or 'Nutrition is estimated.'}",
             f"Estimate note: {idea.get('estimate_notes') or ''}",
             "",
             f"This is an estimated {meal_type.title()} recipe. "
@@ -5403,18 +5464,28 @@ def show_pantry_meal_ideas(
 
     send_telegram_msg(
         f"I'm building three {normalized_meal} ideas from your "
-        "Pantry and today's food log. This may take a moment.",
+        "Pantry, today's food log, and saved goal when available. "
+        "This may take a moment.",
         chat_id=chat_id,
         remove_keyboard=True,
     )
 
     try:
+        today = datetime.now(PACIFIC_TZ).date()
+        daily_totals = get_daily_totals(today)
+        entries = list_food_entries(entry_date=today)
+        goal_context = build_pantry_goal_context(
+            daily_totals=daily_totals,
+            saved_goal=get_latest_weight_goal_calculation(),
+            missing_calorie_items=sum(
+                1 for entry in entries if entry.get("calories") is None
+            ),
+        )
         ideas = generate_pantry_meal_ideas(
             pantry_items=pantry_items,
             meal_type=normalized_meal,
-            daily_totals=get_daily_totals(
-                datetime.now(PACIFIC_TZ).date()
-            ),
+            daily_totals=daily_totals,
+            goal_context=goal_context,
         )
     except Exception:
         logging.exception("Pantry meal idea generation failed")
@@ -5434,6 +5505,7 @@ def show_pantry_meal_ideas(
             "pantry_meal_ideas": ideas,
             "pantry_meal_selected_index": None,
             "pantry_meal_servings": None,
+            "pantry_meal_goal_context": goal_context,
         },
         missing_fields=[],
     )
@@ -5441,6 +5513,7 @@ def show_pantry_meal_ideas(
         format_pantry_meal_ideas(
             ideas,
             meal_type=normalized_meal,
+            goal_context=goal_context,
         ),
         chat_id=chat_id,
     )

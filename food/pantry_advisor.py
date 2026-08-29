@@ -15,6 +15,15 @@ MEAL_CALORIE_LIMITS = {
     "dinner": 600.0,
 }
 MAX_ADDITIONAL_INGREDIENTS = 2
+NUTRITION_FIELDS = (
+    "calories",
+    "protein_g",
+    "carbohydrates_g",
+    "fat_g",
+    "fiber_g",
+    "sugar_g",
+    "sodium_mg",
+)
 
 
 class PantryMealIngredient(BaseModel):
@@ -101,15 +110,7 @@ def pantry_item_prompt_data(
 
         nutrition = {
             field: item.get(field)
-            for field in (
-                "calories",
-                "protein_g",
-                "carbohydrates_g",
-                "fat_g",
-                "fiber_g",
-                "sugar_g",
-                "sodium_mg",
-            )
+            for field in NUTRITION_FIELDS
             if item.get(field) is not None
         }
 
@@ -125,6 +126,135 @@ def pantry_item_prompt_data(
         )
 
     return results
+
+
+def build_pantry_goal_context(
+    *,
+    daily_totals: dict[str, Any] | None,
+    saved_goal: dict[str, Any] | None,
+    missing_calorie_items: int = 0,
+) -> dict[str, Any] | None:
+    """Build exact planning math from the saved goal snapshot."""
+    if not saved_goal:
+        return None
+
+    low = float(saved_goal.get("calorie_target_low") or 0)
+    high = float(saved_goal.get("calorie_target_high") or 0)
+    if low <= 0 or high < low:
+        return None
+
+    logged = float((daily_totals or {}).get("calories") or 0)
+    if logged < 0:
+        logged = 0
+
+    if logged < low:
+        status = "below"
+    elif logged <= high:
+        status = "within"
+    else:
+        status = "above"
+
+    return {
+        "saved_target_low": round(low, 3),
+        "saved_target_high": round(high, 3),
+        "logged_calories": round(logged, 3),
+        "remaining_to_low": round(max(0.0, low - logged), 3),
+        "remaining_to_high": round(max(0.0, high - logged), 3),
+        "status": status,
+        "calculation_date": saved_goal.get("calculation_date"),
+        "missing_calorie_items": max(0, int(missing_calorie_items)),
+    }
+
+
+def pantry_goal_fit_text(
+    calories: float,
+    goal_context: dict[str, Any] | None,
+) -> str | None:
+    """Explain one idea against saved goal math without model inference."""
+    if not goal_context:
+        return None
+
+    meal_calories = max(0.0, float(calories or 0))
+    logged = float(goal_context["logged_calories"])
+    low = float(goal_context["saved_target_low"])
+    high = float(goal_context["saved_target_high"])
+    projected = logged + meal_calories
+
+    if logged > high:
+        message = (
+            f"Today's logged total is already about {logged - high:.0f} "
+            "calories above the saved range; this idea would add about "
+            f"{meal_calories:.0f} estimated calories."
+        )
+    elif projected < low:
+        message = (
+            f"About {meal_calories:.0f} calories would bring today's "
+            f"logged total to about {projected:.0f}, leaving about "
+            f"{low - projected:.0f}-{high - projected:.0f} calories "
+            "to reach the saved range."
+        )
+    elif projected <= high:
+        message = (
+            f"About {meal_calories:.0f} calories would bring today's "
+            f"logged total to about {projected:.0f}, within the saved "
+            f"{low:.0f}-{high:.0f} range."
+        )
+    else:
+        message = (
+            f"About {meal_calories:.0f} calories would bring today's "
+            f"logged total to about {projected:.0f}, around "
+            f"{projected - high:.0f} above the saved range's upper end."
+        )
+
+    missing = int(goal_context.get("missing_calorie_items") or 0)
+    if missing:
+        message += (
+            f" This excludes {missing} logged item(s) without calories."
+        )
+    return message
+
+
+def pantry_nutrition_basis_text(
+    idea: dict[str, Any],
+    *,
+    pantry_items: list[dict[str, Any]],
+) -> str:
+    """Disclose how much Pantry nutrition was available to the model."""
+    nutrition_ready = {
+        normalize_pantry_name(
+            item.get("display_name") or item.get("canonical_name")
+        )
+        for item in pantry_items
+        if item.get("nutrition_version_id") is not None
+        and any(item.get(field) is not None for field in NUTRITION_FIELDS)
+    }
+    used_pantry = [
+        ingredient
+        for ingredient in idea.get("ingredients") or []
+        if ingredient.get("source") == "pantry"
+    ]
+    linked = sum(
+        normalize_pantry_name(ingredient.get("name")) in nutrition_ready
+        for ingredient in used_pantry
+    )
+    total = len(used_pantry)
+
+    if linked == total and total:
+        return (
+            f"Linked nutrition was available for all {total} Pantry "
+            "ingredient(s); additional ingredients, portions, and "
+            "combined totals are still estimated."
+        )
+    if linked:
+        return (
+            f"Linked nutrition was available for {linked} of {total} "
+            "Pantry ingredients; remaining ingredients, portions, and "
+            "combined totals are estimated."
+        )
+    return (
+        "No linked Pantry nutrition was available for this idea; its "
+        "nutrition uses standard estimates."
+    )
 
 
 def validate_pantry_meal_ideas(
@@ -219,6 +349,7 @@ def generate_pantry_meal_ideas(
     pantry_items: list[dict[str, Any]],
     meal_type: str,
     daily_totals: dict[str, Any] | None = None,
+    goal_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_meal = str(meal_type or "").strip().lower()
     if normalized_meal not in MEAL_CALORIE_LIMITS:
@@ -240,6 +371,9 @@ Available Pantry items:
 Nutrition already logged today:
 {json.dumps(totals, indent=2, sort_keys=True)}
 
+Saved calorie-goal context (null when none is saved):
+{json.dumps(goal_context, indent=2, sort_keys=True)}
+
 Rules:
 1. Each idea must be one realistic serving at or below
    {calorie_limit:g} calories.
@@ -257,22 +391,28 @@ Rules:
 8. Estimate calories, protein, carbohydrates, fat, fiber, sugar, and
    sodium for the complete serving. Use known saved-product nutrition
    when supplied; otherwise use reasonable standard-food estimates.
-9. Use today's logged nutrition to explain why each idea fits. Favor
-   protein and fiber when those appear weak and avoid worsening an
-   already high calorie, sugar, fat, or sodium intake.
-10. Keep the three ideas meaningfully different.
-11. Select exactly one of the three as heart_healthy_pick. Base that
+9. Use today's logged nutrition to give a specific daily_fit explanation.
+   Name the idea's useful protein, fiber, vegetables, whole grains, or other
+   relevant features and any meaningful sodium, sugar, or fat limitation.
+   Do not call a daily nutrient low or high unless the supplied records alone
+   support that wording.
+10. When saved calorie-goal context is supplied, use it only to favor ideas
+   that can fit reasonably within the remaining day. Do not recalculate the
+   target, invent a per-meal allowance, or perform goal arithmetic in
+   daily_fit; HealthCoach adds the exact goal math after generation.
+11. Keep the three ideas meaningfully different.
+12. Select exactly one of the three as heart_healthy_pick. Base that
    selection on the overall meal pattern: favor vegetables, fruits,
    whole grains, beans and legumes, nuts and seeds, fish, skinless
    poultry or other lean unprocessed protein, and unsaturated plant
    fats. Prefer higher fiber and lower sodium, added sugar, saturated
    fat, and processed or fatty meat. Do not select it merely because it
    has the fewest calories.
-12. Give a short heart_healthy_reason that names the specific strengths
+13. Give a short heart_healthy_reason that names the specific strengths
    and any relevant limitation. This is a food-choice label only; never
    claim that the meal prevents disease or describe the user's personal
    heart risk.
-13. These are estimates. Never describe them as verified nutrition.
+14. These are estimates. Never describe them as verified nutrition.
 """
 
     client = get_client()
@@ -308,11 +448,21 @@ Rules:
         idea["heart_healthy_reason"] = (
             result.heart_healthy_reason if is_selected else None
         )
-    return validate_pantry_meal_ideas(
+    validated = validate_pantry_meal_ideas(
         ideas,
         pantry_items=pantry_items,
         meal_type=normalized_meal,
     )
+    for idea in validated:
+        idea["goal_fit"] = pantry_goal_fit_text(
+            float(idea.get("calories") or 0),
+            goal_context,
+        )
+        idea["nutrition_basis"] = pantry_nutrition_basis_text(
+            idea,
+            pantry_items=pantry_items,
+        )
+    return validated
 
 
 def validate_pantry_swaps(

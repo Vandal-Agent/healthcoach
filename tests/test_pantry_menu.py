@@ -31,6 +31,14 @@ class PantryMenuTests(unittest.TestCase):
             "sugar_g": 6,
             "sodium_mg": 520,
             "daily_fit": "Adds protein and fiber.",
+            "goal_fit": (
+                "About 450 calories would bring today's logged total "
+                "to about 1250."
+            ),
+            "nutrition_basis": (
+                "Linked nutrition was available for 1 of 2 Pantry "
+                "ingredients."
+            ),
             "estimate_notes": "Portions are estimated.",
         }
         ideas = [
@@ -49,11 +57,22 @@ class PantryMenuTests(unittest.TestCase):
         message = app.format_pantry_meal_ideas(
             ideas,
             meal_type="dinner",
+            goal_context={
+                "saved_target_low": 1800,
+                "saved_target_high": 1950,
+                "logged_calories": 800,
+                "calculation_date": "2026-08-28",
+                "missing_calorie_items": 0,
+            },
         )
 
         self.assertIn("2. Idea B — Heart-Healthy Pick", message)
         self.assertNotIn("1. Idea A — Heart-Healthy Pick", message)
         self.assertIn("Heart-healthy note: Lean protein", message)
+        self.assertIn("Saved goal context", message)
+        self.assertIn("Remaining to saved range: 1000-1150", message)
+        self.assertIn("Nutrition fit: Adds protein and fiber", message)
+        self.assertIn("Goal fit: About 450 calories", message)
         self.assertIn("not a medical rating", message)
 
         details = app.format_pantry_meal_idea_details(
@@ -61,6 +80,7 @@ class PantryMenuTests(unittest.TestCase):
             meal_type="dinner",
         )
         self.assertIn("Heart-Healthy Pick", details)
+        self.assertIn("Nutrition-data basis: Linked nutrition", details)
         self.assertIn("not a medical rating", details)
 
     def test_food_menu_contains_separate_pantry_entry(self) -> None:
@@ -358,6 +378,88 @@ class PantryMenuTests(unittest.TestCase):
         show.assert_called_once_with(
             chat_id=123,
             meal_type="lunch",
+        )
+
+    def test_pantry_ideas_use_saved_goal_snapshot_and_missing_log_note(
+        self,
+    ) -> None:
+        generated = [
+            {
+                "name": f"Idea {index}",
+                "ingredients": [
+                    {
+                        "name": "Chicken breast",
+                        "amount": "4 ounces",
+                        "source": "pantry",
+                    }
+                ],
+                "calories": 400,
+                "protein_g": 35,
+                "daily_fit": "Provides a practical protein serving.",
+                "goal_fit": (
+                    "About 400 calories would bring today's logged total "
+                    "to about 1200."
+                ),
+                "heart_healthy_pick": index == 1,
+                "heart_healthy_reason": (
+                    "Uses lean protein."
+                    if index == 1
+                    else None
+                ),
+            }
+            for index in range(1, 4)
+        ]
+        with (
+            patch.object(
+                app,
+                "list_pantry_items",
+                return_value=[{"display_name": "Chicken breast"}],
+            ),
+            patch.object(
+                app,
+                "get_daily_totals",
+                return_value={"calories": 800},
+            ),
+            patch.object(
+                app,
+                "list_food_entries",
+                return_value=[{"calories": 800}, {"calories": None}],
+            ),
+            patch.object(
+                app,
+                "get_latest_weight_goal_calculation",
+                return_value={
+                    "calorie_target_low": 1800,
+                    "calorie_target_high": 1950,
+                    "calculation_date": "2026-08-28",
+                },
+            ),
+            patch.object(
+                app,
+                "generate_pantry_meal_ideas",
+                return_value=generated,
+            ) as generate,
+            patch.object(app, "update_conversation") as update,
+            patch.object(app, "send_telegram_msg") as send,
+        ):
+            result = app.show_pantry_meal_ideas(
+                chat_id=123,
+                meal_type="dinner",
+            )
+
+        self.assertTrue(result)
+        context = generate.call_args.kwargs["goal_context"]
+        self.assertEqual(context["remaining_to_low"], 1000)
+        self.assertEqual(context["missing_calorie_items"], 1)
+        self.assertEqual(
+            update.call_args.kwargs["known_data"][
+                "pantry_meal_goal_context"
+            ],
+            context,
+        )
+        self.assertIn(
+            "1 logged item(s) have no calories",
+            send.call_args.args[0],
         )
 
     def test_confirmed_pantry_meal_logs_estimated_entry(self) -> None:

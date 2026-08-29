@@ -5,7 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from food.pantry_advisor import (
+    build_pantry_goal_context,
     generate_pantry_meal_ideas,
+    pantry_goal_fit_text,
+    pantry_nutrition_basis_text,
     scale_pantry_meal_nutrition,
     validate_pantry_meal_ideas,
 )
@@ -156,10 +159,19 @@ class PantryAdvisorTests(unittest.TestCase):
             "food.pantry_advisor.get_client",
             return_value=client,
         ):
+            goal_context = build_pantry_goal_context(
+                daily_totals={"calories": 700},
+                saved_goal={
+                    "calorie_target_low": 1800,
+                    "calorie_target_high": 1950,
+                    "calculation_date": "2026-08-28",
+                },
+            )
             result = generate_pantry_meal_ideas(
                 pantry_items=pantry_items(),
                 meal_type="lunch",
                 daily_totals={"calories": 700, "protein_g": 35},
+                goal_context=goal_context,
             )
 
         self.assertEqual(len(result), 3)
@@ -167,12 +179,87 @@ class PantryAdvisorTests(unittest.TestCase):
         prompt = client.models.kwargs["contents"]
         self.assertIn('"calories": 700', prompt)
         self.assertIn('"protein_g": 35', prompt)
+        self.assertIn('"saved_target_low": 1800.0', prompt)
         self.assertIn("at or below\n   500 calories", prompt)
         self.assertIn("Select exactly one", prompt)
         self.assertFalse(result[0]["heart_healthy_pick"])
         self.assertTrue(result[1]["heart_healthy_pick"])
         self.assertIn("lean protein", result[1]["heart_healthy_reason"])
         self.assertFalse(result[2]["heart_healthy_pick"])
+        self.assertIn(
+            "bring today's logged total to about 1150",
+            result[0]["goal_fit"],
+        )
+        self.assertIn(
+            "No linked Pantry nutrition",
+            result[0]["nutrition_basis"],
+        )
+
+    def test_builds_goal_context_without_recalculating_target(self) -> None:
+        context = build_pantry_goal_context(
+            daily_totals={"calories": 825},
+            saved_goal={
+                "calorie_target_low": 1800,
+                "calorie_target_high": 1950,
+                "calculation_date": "2026-08-20",
+            },
+            missing_calorie_items=2,
+        )
+
+        self.assertEqual(context["remaining_to_low"], 975)
+        self.assertEqual(context["remaining_to_high"], 1125)
+        self.assertEqual(context["status"], "below")
+        self.assertEqual(context["calculation_date"], "2026-08-20")
+        self.assertEqual(context["missing_calorie_items"], 2)
+
+    def test_goal_fit_uses_exact_saved_range_math(self) -> None:
+        context = build_pantry_goal_context(
+            daily_totals={"calories": 1450},
+            saved_goal={
+                "calorie_target_low": 1800,
+                "calorie_target_high": 1950,
+            },
+        )
+
+        within = pantry_goal_fit_text(400, context)
+        above = pantry_goal_fit_text(600, context)
+
+        self.assertIn("1850, within the saved 1800-1950 range", within)
+        self.assertIn("2050, around 100 above", above)
+
+    def test_goal_context_is_optional(self) -> None:
+        self.assertIsNone(
+            build_pantry_goal_context(
+                daily_totals={"calories": 500},
+                saved_goal=None,
+            )
+        )
+        self.assertIsNone(pantry_goal_fit_text(450, None))
+
+    def test_nutrition_basis_reports_linked_pantry_coverage(self) -> None:
+        meal = idea("Linked meal")
+        meal["ingredients"].append(
+            {
+                "name": "black olives",
+                "amount": "1 serving",
+                "source": "pantry",
+            }
+        )
+        items = [
+            {
+                "display_name": "Chicken breast",
+                "nutrition_version_id": 8,
+                "calories": 120,
+            },
+            {"display_name": "black olives"},
+        ]
+
+        result = pantry_nutrition_basis_text(
+            meal,
+            pantry_items=items,
+        )
+
+        self.assertIn("1 of 2 Pantry ingredients", result)
 
     def test_rejects_missing_heart_healthy_pick(self) -> None:
         ideas = [idea("Idea A"), idea("Idea B"), idea("Idea C")]

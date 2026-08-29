@@ -427,6 +427,16 @@ Supported workflow:
   600 calories.
 - Consider nutrition already logged for the current day when explaining
   how each idea fits.
+- Use the latest explicitly saved Weight Goal calorie range when one exists.
+  Show the saved target, calories logged before the meal, remaining range,
+  and the exact projected daily total for each idea. Never recalculate the
+  Weight Goal during Pantry planning or invent a per-meal calorie allowance.
+- Keep calorie-range arithmetic deterministic in HealthCoach code rather than
+  asking the language model to calculate it. If any logged foods have no
+  calories, disclose that they are excluded from the goal comparison.
+- Disclose how many Pantry ingredients in each idea had linked saved nutrition
+  available. Portions, additional ingredients, and combined recipe totals
+  remain clearly labeled as estimates.
 - Use at least one Pantry item and require no more than two additional
   ingredients per idea, aside from salt, pepper, cooking spray, and water.
 - Show estimated nutrition, ingredient amounts, and preparation steps.
