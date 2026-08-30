@@ -848,6 +848,12 @@ user chooses Log It. Generic wording such as `chicken` never expands to
 Choosing Different description preserves the already selected meal and date;
 only the food wording is replaced.
 
+The confirmed five-serving Chicken Pizza Burritos update uses 15 ounces of
+cooked-weight USDA roasted chicken breast, 0.5 teaspoon olive oil for the
+entire batch, five 140-calorie Mission tortillas, and no mozzarella. Running
+its update script creates a new calculated recipe Nutrition Version for future
+logs while preserving previously logged meals and the prior recipe version.
+
 ## Morning Food Coaching
 
 The morning Food Coaching message is a recap of the previous day.
