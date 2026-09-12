@@ -1041,3 +1041,12 @@ The scheduled morning coaching path does not refresh or read Lose It email
 data. If the Food Ledger has no entries for the previous day, HealthCoach
 reports that no foods were recorded and does not calculate a calorie deficit
 or issue low-protein or low-fiber coaching from zero values.
+## Philly Cheesesteak Burrito import
+
+`scripts/import_philly_cheesesteak_burrito.py` creates the ten-serving
+`Philly Cheesesteak Burrito` Saved Recipe without logging it as eaten. The
+calculation uses the user's uploaded Mission tortilla, Sargento provolone,
+Great Value Greek yogurt, and Great Value light mayonnaise labels, together
+with documented manufacturer values for 96/4 beef, reduced-fat Philadelphia
+cream cheese, and Worcestershire sauce. Unmeasured seasonings and water are
+listed but excluded from nutrition.
