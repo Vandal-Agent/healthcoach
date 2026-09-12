@@ -83,6 +83,15 @@ Stores:
 - Nutrition versions
 - Usage count
 
+Reusable beer defaults may be imported as exact, official reference products
+with a 12-fluid-ounce base serving. Generic style search names such as
+`Mexican lager`, `pale ale`, and `IPA` resolve to those disclosed reference
+products, allowing 16- or 32-ounce amounts to scale arithmetically. The
+confirmation always shows the actual reference product and source; the style
+name never implies that every beer in that category has identical nutrition.
+The importer preserves any pre-existing alias conflict for explicit review,
+does not add beer to My Pantry, and never logs a drink as consumed.
+
 ---
 
 # Nutrition Versions

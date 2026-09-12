@@ -93,10 +93,12 @@ def official_restaurant_domain(
 
 TRUSTED_NUTRITION_DOMAINS = {
     "burgerking.com",
+    "coronausa.com",
     "fdc.nal.usda.gov",
     "mcdonalds.com",
     "openfoodfacts.org",
     "pepsicoproductfacts.com",
+    "sierranevada.com",
     "tacobell.com",
     "usda.gov",
     "wendys.com",
