@@ -12,7 +12,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from food.library import add_food_with_nutrition
+from food.library import (
+    add_food_with_nutrition,
+    add_user_nutrition_version,
+    get_active_nutrition,
+)
+from food.resolver import is_trusted_saved_food
 from food.recipes import (
     create_saved_recipe_from_ingredients,
     list_saved_recipes,
@@ -112,7 +117,7 @@ FOODS = (
         "serving_unit": "g",
         "calories": 20.0, "protein_g": 0.86, "carbohydrates_g": 4.64,
         "fat_g": 0.17, "fiber_g": 1.7, "sugar_g": 2.4, "sodium_mg": 3.0,
-        "verification_source": "USDA FoodData Central",
+        "verification_source": "fdc.nal.usda.gov",
         "source_url": "https://fdc.nal.usda.gov/",
     },
     {
@@ -123,7 +128,7 @@ FOODS = (
         "serving_unit": "g",
         "calories": 40.0, "protein_g": 1.1, "carbohydrates_g": 9.34,
         "fat_g": 0.1, "fiber_g": 1.7, "sugar_g": 4.24, "sodium_mg": 4.0,
-        "verification_source": "USDA FoodData Central",
+        "verification_source": "fdc.nal.usda.gov",
         "source_url": "https://fdc.nal.usda.gov/",
     },
     {
@@ -164,7 +169,32 @@ def create_recipe() -> dict[str, Any]:
             restaurant=None, food_type="food", verification_status="verified",
             source_item_id=None, **spec,
         )
-        food_ids.append(int(result["food"]["food_id"]))
+        food = result["food"]
+        food_id = int(food["food_id"])
+        if not is_trusted_saved_food(food):
+            nutrition = get_active_nutrition(food_id) or {}
+            fields = (
+                "calories", "protein_g", "carbohydrates_g", "fat_g",
+                "fiber_g", "sugar_g", "sodium_mg",
+            )
+            conflicts = [
+                field for field in fields
+                if nutrition.get(field) is None
+                or abs(float(nutrition[field]) - float(spec[field])) > 0.01
+            ]
+            if conflicts:
+                raise RuntimeError(
+                    "Stopped safely: existing nutrition conflicts for "
+                    f"{spec['canonical_name']}: {', '.join(conflicts)}."
+                )
+            add_user_nutrition_version(
+                food_id=food_id,
+                serving_description=spec["serving_description"],
+                verification_status="verified",
+                verification_source=spec["verification_source"],
+                **{field: spec[field] for field in fields},
+            )
+        food_ids.append(food_id)
 
     ingredients = [
         prepare_recipe_ingredient(food_id=food_id, amount_description=amount)
