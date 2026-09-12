@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from food import database, library, pantry, recipes
+from food.resolver import is_trusted_saved_food
 from scripts import import_philly_cheesesteak_burrito as importer
 
 
@@ -47,6 +48,10 @@ class PhillyCheesesteakBurritoImportTests(unittest.TestCase):
             len(recipes.list_saved_recipe_ingredients(int(recipe["saved_recipe_id"]))),
             10,
         )
+        for linked in recipes.list_saved_recipe_ingredients(
+            int(recipe["saved_recipe_id"])
+        ):
+            self.assertTrue(is_trusted_saved_food(library.get_food(linked["food_id"])))
         self.assertAlmostEqual(recipe["calories"], 456.6, places=1)
         self.assertAlmostEqual(recipe["protein_g"], 42.2, places=1)
         self.assertAlmostEqual(recipe["carbohydrates_g"], 29.9, places=1)

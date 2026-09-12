@@ -95,6 +95,8 @@ TRUSTED_NUTRITION_DOMAINS = {
     "burgerking.com",
     "coronausa.com",
     "fdc.nal.usda.gov",
+    "kraftheinz.com",
+    "lauraslean.com",
     "mcdonalds.com",
     "openfoodfacts.org",
     "pepsicoproductfacts.com",
