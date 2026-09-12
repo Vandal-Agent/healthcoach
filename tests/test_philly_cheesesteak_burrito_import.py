@@ -63,6 +63,22 @@ class PhillyCheesesteakBurritoImportTests(unittest.TestCase):
             count = connection.execute("SELECT COUNT(*) FROM food_entries").fetchone()[0]
         self.assertEqual(count, 0)
 
+    def test_import_repairs_legacy_url_dependent_source(self) -> None:
+        spec = dict(importer.FOODS[8])
+        spec["verification_source"] = "USDA FoodData Central"
+        result = library.add_food_with_nutrition(
+            restaurant=None,
+            food_type="food",
+            verification_status="verified",
+            source_item_id=None,
+            **spec,
+        )
+
+        importer.create_recipe()
+
+        repaired = library.get_food(int(result["food"]["food_id"]))
+        self.assertEqual(repaired["verification_source"], "fdc.nal.usda.gov")
+
 
 if __name__ == "__main__":
     unittest.main()

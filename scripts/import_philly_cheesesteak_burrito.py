@@ -17,7 +17,7 @@ from food.library import (
     add_user_nutrition_version,
     get_active_nutrition,
 )
-from food.resolver import is_trusted_saved_food
+from food.nutrition_lookup import is_trusted_nutrition_source
 from food.recipes import (
     create_saved_recipe_from_ingredients,
     list_saved_recipes,
@@ -171,7 +171,12 @@ def create_recipe() -> dict[str, Any]:
         )
         food = result["food"]
         food_id = int(food["food_id"])
-        if not is_trusted_saved_food(food):
+        stored_source = str(food.get("verification_source") or "").strip()
+        portable_source = (
+            stored_source in {"user_package_label", "user_entered"}
+            or is_trusted_nutrition_source(stored_source)
+        )
+        if not portable_source:
             nutrition = get_active_nutrition(food_id) or {}
             fields = (
                 "calories", "protein_g", "carbohydrates_g", "fat_g",
