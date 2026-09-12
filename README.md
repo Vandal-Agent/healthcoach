@@ -91,9 +91,9 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
 - Manages a safety-capped weight goal with manual calorie-target updates,
   burn-based projections, and remaining-calorie feedback after food logging
 - Uses the Food Ledger rather than Lose It for current nutrition totals
-- Provides three reusable, officially sourced 12-fluid-ounce beer references
-  for Mexican lager, pale ale, and IPA searches, with safe scaling for larger
-  pours and no automatic Pantry or Food Ledger changes
+- Provides three reusable, officially sourced beer references normalized to
+  one fluid ounce for Mexican lager, pale ale, and IPA searches; beer logging
+  requires explicit total ounces and makes no automatic Pantry or Ledger change
 - Keeps `/menu` as the main navigation command and provides `/food`,
   `/health`, and `/reports` shortcuts that safely replace an unfinished
   conversation with the requested menu

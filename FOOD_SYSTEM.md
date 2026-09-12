@@ -84,9 +84,11 @@ Stores:
 - Usage count
 
 Reusable beer defaults may be imported as exact, official reference products
-with a 12-fluid-ounce base serving. Generic style search names such as
+normalized to a 1-fluid-ounce base serving. Generic style search names such as
 `Mexican lager`, `pale ale`, and `IPA` resolve to those disclosed reference
-products, allowing 16- or 32-ounce amounts to scale arithmetically. The
+products. Beer logging requires an explicit total-ounce amount and never
+silently assumes one ounce; a size and count such as two 16-ounce beers is
+normalized to 32 total ounces. The
 confirmation always shows the actual reference product and source; the style
 name never implies that every beer in that category has identical nutrition.
 The importer preserves any pre-existing alias conflict for explicit review,

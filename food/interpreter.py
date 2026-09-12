@@ -121,6 +121,49 @@ def normalize_signature_food(value: str | None) -> str:
     return cleaned.strip()
 
 
+def is_beer_style_food(*values: str | None) -> bool:
+    """Recognize beer descriptions that require a total-ounce amount."""
+    normalized = " ".join(
+        normalize_signature_food(value)
+        for value in values
+        if value
+    )
+    return bool(
+        re.search(
+            r"\b(?:beer|lager|logger|pale ale|ipa|india pale ale)\b",
+            normalized,
+        )
+        and "root beer" not in normalized
+    )
+
+
+def beer_total_ounce_description(
+    interpretation: FoodInterpretation,
+) -> str | None:
+    """Return an explicit total-ounce amount from a beer interpretation."""
+    amount_text = str(interpretation.quantity_description or "").strip()
+    amount_match = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*(?:fl\s*oz|fluid\s*ounces?|oz|ounces?)",
+        amount_text,
+        flags=re.IGNORECASE,
+    )
+    if amount_match:
+        return f"{float(amount_match.group(1)):g} ounces"
+
+    size_text = str(interpretation.size or "").strip()
+    size_match = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*(?:fl\s*oz|fluid\s*ounces?|oz|ounces?)",
+        size_text,
+        flags=re.IGNORECASE,
+    )
+    if not size_match:
+        return None
+
+    count = float(interpretation.quantity or 1.0)
+    total_ounces = float(size_match.group(1)) * count
+    return f"{total_ounces:g} ounces"
+
+
 def clean_interpretation_missing_fields(
     interpretation: FoodInterpretation,
 ) -> FoodInterpretation:
@@ -189,6 +232,23 @@ def clean_interpretation_missing_fields(
     normalized_food = normalize_signature_food(
         interpretation.food_name
     )
+
+    is_beer = is_beer_style_food(
+        interpretation.food_name,
+        interpretation.drink,
+    )
+    if is_beer:
+        total_ounces = beer_total_ounce_description(interpretation)
+        interpretation.quantity = None
+        cleaned_missing = [
+            field
+            for field in cleaned_missing
+            if field not in {"size", "quantity", "quantity_description"}
+        ]
+        if total_ounces is None:
+            cleaned_missing.append("quantity_description")
+        else:
+            interpretation.quantity_description = total_ounces
 
     combo_suffixes = (
         " meal",
@@ -357,6 +417,12 @@ def clean_interpretation_missing_fields(
                 "Which exact menu item did you have?"
             ),
         }
+
+        if is_beer and first_field == "quantity_description":
+            questions[first_field] = (
+                "How many total ounces of beer did you have? "
+                "For example: 16 ounces or 32 ounces."
+            )
 
         interpretation.clarification_question = questions.get(
             first_field,

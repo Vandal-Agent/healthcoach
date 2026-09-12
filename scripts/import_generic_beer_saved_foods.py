@@ -40,12 +40,12 @@ BEER_DEFAULTS: tuple[dict[str, Any], ...] = (
     {
         "canonical_name": "Corona Extra Mexican Lager",
         "brand": "Corona",
-        "serving_description": "12 fl oz",
-        "serving_amount": 12.0,
+        "serving_description": "1 fl oz",
+        "serving_amount": 1.0,
         "serving_unit": "fl oz",
-        "calories": 148.0,
-        "protein_g": 1.2,
-        "carbohydrates_g": 13.9,
+        "calories": 148.0 / 12.0,
+        "protein_g": 1.2 / 12.0,
+        "carbohydrates_g": 13.9 / 12.0,
         "fat_g": 0.0,
         "fiber_g": None,
         "sugar_g": None,
@@ -63,12 +63,12 @@ BEER_DEFAULTS: tuple[dict[str, Any], ...] = (
     {
         "canonical_name": "Sierra Nevada Pale Ale",
         "brand": "Sierra Nevada",
-        "serving_description": "12 fl oz",
-        "serving_amount": 12.0,
+        "serving_description": "1 fl oz",
+        "serving_amount": 1.0,
         "serving_unit": "fl oz",
-        "calories": 175.0,
-        "protein_g": 1.9,
-        "carbohydrates_g": 14.3,
+        "calories": 175.0 / 12.0,
+        "protein_g": 1.9 / 12.0,
+        "carbohydrates_g": 14.3 / 12.0,
         "fat_g": None,
         "fiber_g": None,
         "sugar_g": None,
@@ -84,12 +84,12 @@ BEER_DEFAULTS: tuple[dict[str, Any], ...] = (
     {
         "canonical_name": "Sierra Nevada Hop Hunter IPA",
         "brand": "Sierra Nevada",
-        "serving_description": "12 fl oz",
-        "serving_amount": 12.0,
+        "serving_description": "1 fl oz",
+        "serving_amount": 1.0,
         "serving_unit": "fl oz",
-        "calories": 194.0,
-        "protein_g": 2.2,
-        "carbohydrates_g": 14.6,
+        "calories": 194.0 / 12.0,
+        "protein_g": 2.2 / 12.0,
+        "carbohydrates_g": 14.6 / 12.0,
         "fat_g": None,
         "fiber_g": None,
         "sugar_g": None,
@@ -217,8 +217,8 @@ def import_beer_defaults() -> dict[str, Any]:
     }
 
 
-def _rounded_calories(calories: float, ounces: float) -> int:
-    return round(float(calories) * float(ounces) / 12.0)
+def _rounded_calories(calories_per_ounce: float, ounces: float) -> int:
+    return round(float(calories_per_ounce) * float(ounces))
 
 
 def main() -> None:
@@ -232,7 +232,8 @@ def main() -> None:
     for item in BEER_DEFAULTS:
         print(
             f"- {item['canonical_name']}: "
-            f"12 oz {int(item['calories'])} cal; "
+            f"1 oz {float(item['calories']):.2f} cal; "
+            f"12 oz {_rounded_calories(item['calories'], 12)} cal; "
             f"16 oz {_rounded_calories(item['calories'], 16)} cal; "
             f"32 oz {_rounded_calories(item['calories'], 32)} cal"
         )

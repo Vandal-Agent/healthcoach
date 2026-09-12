@@ -28,6 +28,10 @@ except ImportError:
     sys.modules["requests"] = module_types.ModuleType("requests")
 
 from food import database, library, resolver
+from food.interpreter import (
+    FoodInterpretation,
+    clean_interpretation_missing_fields,
+)
 from food.nutrition_lookup import is_trusted_nutrition_source
 from scripts import import_generic_beer_saved_foods as importer
 
@@ -117,7 +121,7 @@ class GenericBeerSavedFoodsTests(unittest.TestCase):
 
         self.assertEqual(len(foods), 3)
         self.assertTrue(all(row["food_type"] == "drink" for row in foods))
-        self.assertTrue(all(row["serving_amount"] == 12 for row in foods))
+        self.assertTrue(all(row["serving_amount"] == 1 for row in foods))
         self.assertTrue(all(row["serving_unit"] == "fl oz" for row in foods))
         self.assertEqual(entries, 0)
         self.assertEqual(pantry, 0)
@@ -148,11 +152,46 @@ class GenericBeerSavedFoodsTests(unittest.TestCase):
                     serving_unit=result["food"]["serving_unit"],
                     size="32 ounces",
                 )
-                self.assertAlmostEqual(multiplier, 32 / 12)
+                self.assertAlmostEqual(multiplier, 32)
                 self.assertAlmostEqual(
                     float(result["nutrition"]["calories"]) * multiplier,
                     calories * 32 / 12,
                 )
+
+    def test_beer_without_ounces_requires_total_ounce_clarification(self) -> None:
+        interpretation = FoodInterpretation(
+            is_food_logging_request=True,
+            food_name="IPA beer",
+            drink="IPA beer",
+            meal_category="dinner",
+            missing_fields=["size", "quantity"],
+            assumptions=[],
+            confidence=1.0,
+        )
+
+        cleaned = clean_interpretation_missing_fields(interpretation)
+
+        self.assertEqual(cleaned.missing_fields, ["quantity_description"])
+        self.assertIn("total ounces", cleaned.clarification_question)
+
+    def test_beer_size_and_count_become_total_ounces(self) -> None:
+        interpretation = FoodInterpretation(
+            is_food_logging_request=True,
+            food_name="pale ale beer",
+            size="16 ounces",
+            quantity=2.0,
+            meal_category="dinner",
+            drink="pale ale beer",
+            missing_fields=[],
+            assumptions=[],
+            confidence=1.0,
+        )
+
+        cleaned = clean_interpretation_missing_fields(interpretation)
+
+        self.assertEqual(cleaned.missing_fields, [])
+        self.assertEqual(cleaned.quantity_description, "32 ounces")
+        self.assertIsNone(cleaned.quantity)
 
     def test_conflicting_alias_is_preserved_not_duplicated(self) -> None:
         existing = library.add_food_with_nutrition(

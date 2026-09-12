@@ -31,6 +31,7 @@ from food.interpreter import (
     FoodInterpretation,
     clean_interpretation_missing_fields,
     interpret_food_message,
+    is_beer_style_food,
     normalize_signature_food,
 )
 from food.library import (
@@ -24246,24 +24247,44 @@ def process_telegram_update(update):
         if "quantity_description" in previous_missing:
             cleaned_amount = text.strip().lower()
 
-            valid_amount = (
-                re.fullmatch(
-                    r"\d+(?:\.\d+)?\s*"
-                    r"(?:serving|servings|g|gram|grams|grm|"
-                    r"oz|ounce|ounces)",
-                    cleaned_amount,
-                )
-                is not None
-                or "handful" in cleaned_amount
+            beer_amount_required = is_beer_style_food(
+                known_data.get("food_name"),
+                known_data.get("drink"),
             )
+            if beer_amount_required:
+                valid_amount = (
+                    re.fullmatch(
+                        r"\d+(?:\.\d+)?\s*"
+                        r"(?:fl\s*oz|fluid\s*ounces?|oz|ounces?)",
+                        cleaned_amount,
+                    )
+                    is not None
+                )
+            else:
+                valid_amount = (
+                    re.fullmatch(
+                        r"\d+(?:\.\d+)?\s*"
+                        r"(?:serving|servings|g|gram|grams|grm|"
+                        r"oz|ounce|ounces)",
+                        cleaned_amount,
+                    )
+                    is not None
+                    or "handful" in cleaned_amount
+                )
 
             if not valid_amount:
-                send_telegram_msg(
-                    "How much did you have? Reply with an amount such as "
-                    "1 serving, 1 cup, 4 oz, or 100 g. Reply Cancel to "
-                    "stop without logging.",
-                    chat_id=chat_id,
+                prompt = (
+                    "How many total ounces of beer did you have? "
+                    "For example: 16 ounces or 32 ounces. Reply Cancel "
+                    "to stop without logging."
+                    if beer_amount_required
+                    else (
+                        "How much did you have? Reply with an amount such as "
+                        "1 serving, 1 cup, 4 oz, or 100 g. Reply Cancel to "
+                        "stop without logging."
+                    )
                 )
+                send_telegram_msg(prompt, chat_id=chat_id)
                 return
 
             if valid_amount:
