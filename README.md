@@ -18,6 +18,11 @@ Personal health coaching bot running on a DigitalOcean Ubuntu server.
   history in
   Telegram, including daily entries, missing days, averages, and
   changes
+- Shows separate 7- and 30-day averages for the previous completed days,
+  excluding today, across weight, steps, exercise, sleep, calories eaten,
+  total and active calories burned, and protein; each metric reports its
+  recorded-day coverage, and a separate 30-day weight history keeps one
+  latest valid weigh-in per completed day
 - Adds a non-diagnostic Heart Health Report with recorded averages,
   first-to-last trends, data completeness, and supporting exercise,
   sleep, and weight context

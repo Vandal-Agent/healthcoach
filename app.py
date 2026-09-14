@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import logging
+import math
 import re
 from datetime import date, datetime, timedelta
 
@@ -1099,11 +1100,17 @@ def menu_reply_markup(message):
             ["7 days", "14 days", "30 days"],
             ["Back", "Cancel"],
         ]
+    elif message.startswith(
+        ("7-Day Averages", "30-Day Averages", "Weight History")
+    ):
+        rows = [["Back", "Cancel"]]
     elif "Reports Menu\n\n" in message:
         rows = [
             ["Today", "Weekly report"],
             ["Goals"],
             ["Heart health"],
+            ["7-day averages", "30-day averages"],
+            ["Weight history"],
             ["Back", "Cancel"],
         ]
     elif "Goals Menu\n\n" in message:
@@ -1589,6 +1596,48 @@ def get_recent_rows(reference_date, days_back=10, exclude_dates=None):
         filtered.append(row)
 
     filtered.sort(key=lambda r: parse_row_date(r))
+    return filtered
+
+
+def get_recent_rows_read_only(
+    reference_date,
+    days_back=10,
+    exclude_dates=None,
+):
+    """Read existing Tracker history without creating or migrating sheets."""
+    exclude_dates = exclude_dates or set()
+    client = get_gspread_client()
+    spreadsheet = client.open("Health Tracker")
+    rows = []
+
+    month_names = []
+    for offset in range(days_back + 1):
+        month_name = (
+            reference_date - timedelta(days=offset)
+        ).strftime("%B %Y")
+        if month_name not in month_names:
+            month_names.append(month_name)
+
+    for month_name in month_names:
+        try:
+            worksheet = spreadsheet.worksheet(month_name)
+        except gspread.WorksheetNotFound:
+            continue
+        rows.extend(worksheet.get_all_values()[1:])
+
+    min_date = reference_date - timedelta(days=days_back)
+    filtered = []
+    for row in rows:
+        row_date = parse_row_date(row)
+        if row_date is None:
+            continue
+        if row_date < min_date or row_date > reference_date:
+            continue
+        if row_date in exclude_dates:
+            continue
+        filtered.append(row)
+
+    filtered.sort(key=lambda row: parse_timestamp(row[0]))
     return filtered
 
 
@@ -7764,6 +7813,247 @@ def healthcoach_health_history_menu_text() -> str:
     )
 
 
+COMPLETED_DAY_REPORT_METRICS = (
+    "weight",
+    "steps",
+    "exercise_minutes",
+    "sleep_hours",
+    "dietary_cals",
+    "total_burn",
+    "active_calories",
+    "protein",
+)
+
+
+def valid_completed_day_report_value(metric: str, value) -> bool:
+    if value is None:
+        return False
+    number = float(value)
+    if not math.isfinite(number):
+        return False
+    if metric == "weight":
+        return 50 <= number <= 700
+    if metric == "sleep_hours":
+        return 0 < number <= 24
+    return number >= 0
+
+
+def build_completed_day_report_data(
+    *,
+    reference_date,
+    days: int,
+    rows: list,
+) -> dict:
+    period_days = int(days)
+    if period_days not in {7, 30}:
+        raise ValueError("days must be 7 or 30.")
+
+    end_date = reference_date - timedelta(days=1)
+    start_date = reference_date - timedelta(days=period_days)
+    records_by_date = {}
+    metric_timestamps_by_date = {}
+
+    for row in rows:
+        row_date = parse_row_date(row)
+        if row_date is None or not start_date <= row_date <= end_date:
+            continue
+        records = build_daily_health_records([row])
+        if not records:
+            continue
+        row_timestamp = parse_timestamp(row[0])
+        if row_timestamp is None:
+            continue
+        day_record = records_by_date.setdefault(
+            row_date,
+            {
+                "date": row_date.isoformat(),
+                **{
+                    metric: None
+                    for metric in COMPLETED_DAY_REPORT_METRICS
+                },
+            },
+        )
+        metric_timestamps = metric_timestamps_by_date.setdefault(
+            row_date,
+            {},
+        )
+        for metric in COMPLETED_DAY_REPORT_METRICS:
+            value = records[0].get(metric)
+            if not valid_completed_day_report_value(metric, value):
+                continue
+            previous_timestamp = metric_timestamps.get(metric)
+            if (
+                previous_timestamp is None
+                or row_timestamp >= previous_timestamp
+            ):
+                day_record[metric] = value
+                metric_timestamps[metric] = row_timestamp
+
+    values = {metric: [] for metric in COMPLETED_DAY_REPORT_METRICS}
+    for record in records_by_date.values():
+        for metric in COMPLETED_DAY_REPORT_METRICS:
+            value = record.get(metric)
+            if value is not None:
+                values[metric].append(float(value))
+
+    return {
+        "period_days": period_days,
+        "start_date": start_date,
+        "end_date": end_date,
+        "records_by_date": records_by_date,
+        "averages": {
+            metric: (
+                sum(metric_values) / len(metric_values)
+                if metric_values
+                else None
+            )
+            for metric, metric_values in values.items()
+        },
+        "recorded_days": {
+            metric: len(metric_values)
+            for metric, metric_values in values.items()
+        },
+    }
+
+
+def format_completed_day_report(report: dict) -> str:
+    period_days = int(report.get("period_days") or 0)
+    start_date = report["start_date"]
+    end_date = report["end_date"]
+    if start_date.year == end_date.year:
+        date_range = (
+            f"{start_date.strftime('%b')} {start_date.day}–"
+            f"{end_date.strftime('%b')} {end_date.day}, "
+            f"{end_date.year}"
+        )
+    else:
+        date_range = (
+            f"{start_date.strftime('%b')} {start_date.day}, "
+            f"{start_date.year}–{end_date.strftime('%b')} "
+            f"{end_date.day}, {end_date.year}"
+        )
+
+    averages = report.get("averages") or {}
+    recorded_days = report.get("recorded_days") or {}
+
+    def average_text(metric: str, unit: str = "") -> str:
+        value = averages.get(metric)
+        if value is None:
+            return "No data recorded"
+        if metric == "sleep_hours":
+            total_minutes = round(float(value) * 60)
+            hours, minutes = divmod(total_minutes, 60)
+            value_text = f"{hours} hr"
+            if minutes:
+                value_text += f" {minutes} min"
+        elif metric in {
+            "steps",
+            "dietary_cals",
+            "total_burn",
+            "active_calories",
+        }:
+            value_text = f"{float(value):,.0f}"
+        else:
+            value_text = format_display_number(value)
+        return f"{value_text}{unit} average"
+
+    def metric_line(label: str, metric: str, unit: str = "") -> str:
+        value_text = average_text(metric, unit)
+        count = int(recorded_days.get(metric) or 0)
+        return (
+            f"{label}: {value_text} "
+            f"({count} of {period_days} days recorded)"
+        )
+
+    return "\n".join(
+        [
+            f"{period_days}-Day Averages",
+            f"Completed days: {date_range}",
+            "",
+            metric_line("Weight", "weight", " lb"),
+            metric_line("Steps", "steps"),
+            metric_line("Exercise", "exercise_minutes", " min"),
+            metric_line("Sleep", "sleep_hours"),
+            metric_line("Calories eaten", "dietary_cals"),
+            metric_line("Total calories burned", "total_burn"),
+            metric_line(
+                "Active calories burned",
+                "active_calories",
+            ),
+            metric_line("Protein", "protein", " g"),
+            "",
+            "Today is excluded.",
+            "Reply Back or Cancel.",
+        ]
+    )
+
+
+def format_weight_history(report: dict) -> str:
+    period_days = int(report.get("period_days") or 0)
+    lines = [
+        f"Weight History - Previous {period_days} Completed Days",
+        "",
+    ]
+    recorded_weights = []
+    for day, record in sorted(
+        (report.get("records_by_date") or {}).items()
+    ):
+        weight = record.get("weight")
+        if weight is None:
+            continue
+        recorded_weights.append((day, weight))
+        lines.append(
+            f"{day.strftime('%b')} {day.day}: "
+            f"{format_display_number(weight)} lb"
+        )
+
+    if not recorded_weights:
+        lines.append("No weight data recorded.")
+
+    lines.extend(
+        [
+            "",
+            "Weight recorded: "
+            f"{len(recorded_weights)} of {period_days} days",
+            "Today is excluded.",
+            "Reply Back or Cancel.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def get_formatted_completed_day_report(
+    *,
+    reference_date,
+    days: int,
+) -> str:
+    completed_end_date = reference_date - timedelta(days=1)
+    rows = get_recent_rows_read_only(
+        completed_end_date,
+        days_back=int(days) - 1,
+    )
+    report = build_completed_day_report_data(
+        reference_date=reference_date,
+        days=days,
+        rows=rows,
+    )
+    return format_completed_day_report(report)
+
+
+def get_formatted_weight_history(*, reference_date) -> str:
+    completed_end_date = reference_date - timedelta(days=1)
+    rows = get_recent_rows_read_only(
+        completed_end_date,
+        days_back=29,
+    )
+    report = build_completed_day_report_data(
+        reference_date=reference_date,
+        days=30,
+        rows=rows,
+    )
+    return format_weight_history(report)
+
+
 def build_health_history_data(
     *,
     reference_date,
@@ -8304,21 +8594,17 @@ def build_daily_health_records(rows: list) -> list[dict]:
             continue
         padded = list(row) + [""] * (len(HEADERS) - len(row))
 
-        def recorded(index: int, value):
-            return value if padded[index] not in ("", None) else None
-
         records.append({
             "date": row_date.isoformat(),
-            "steps": recorded(1, metrics.get("steps")),
-            "total_burn": recorded(2, metrics.get("total_cals")),
-            "active_calories": recorded(
-                3,
-                metrics.get("active_cals"),
-            ),
+            "steps": safe_int(padded[1], None),
+            "total_burn": safe_float(padded[2], None),
+            "active_calories": safe_float(padded[3], None),
             "sleep_hours": metrics.get("sleep_hours"),
             "resting_heart_rate": metrics.get("rhr"),
             "weight": metrics.get("weight"),
             "hrv": metrics.get("hrv"),
+            "dietary_cals": safe_float(padded[8], None),
+            "protein": safe_float(padded[9], None),
             "exercise_minutes": metrics.get("exercise_minutes"),
             "cardio_fitness": metrics.get("cardio_fitness"),
             "walking_heart_rate": metrics.get(
@@ -8630,7 +8916,10 @@ def healthcoach_reports_menu_text() -> str:
         "2. Weekly report\n"
         "3. Goals\n"
         "4. Heart health\n"
-        "5. Back"
+        "5. 7-day averages\n"
+        "6. 30-day averages\n"
+        "7. Weight history\n"
+        "8. Back"
     )
 
 
@@ -22326,7 +22615,57 @@ def process_telegram_update(update):
                 )
                 return
 
-            if lowered in {"5", "back"}:
+            period_days = (
+                7
+                if lowered in {
+                    "5",
+                    "7-day averages",
+                    "7 day averages",
+                }
+                else 30
+                if lowered in {
+                    "6",
+                    "30-day averages",
+                    "30 day averages",
+                }
+                else None
+            )
+            if period_days is not None:
+                try:
+                    message = get_formatted_completed_day_report(
+                        reference_date=today,
+                        days=period_days,
+                    )
+                except Exception:
+                    logging.exception(
+                        "Completed-day averages lookup failed"
+                    )
+                    send_telegram_msg(
+                        "I couldn't load the completed-day averages "
+                        "right now. No health data was changed.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(message, chat_id=chat_id)
+                return
+
+            if lowered in {"7", "weight history"}:
+                try:
+                    message = get_formatted_weight_history(
+                        reference_date=today,
+                    )
+                except Exception:
+                    logging.exception("Weight history lookup failed")
+                    send_telegram_msg(
+                        "I couldn't load Weight History right now. "
+                        "No health data was changed.",
+                        chat_id=chat_id,
+                    )
+                    return
+                send_telegram_msg(message, chat_id=chat_id)
+                return
+
+            if lowered in {"8", "back"}:
                 update_conversation(
                     chat_id=chat_id,
                     current_step="main",
