@@ -82,7 +82,7 @@ class HeartHealthReportTests(unittest.TestCase):
             ["Heart health"],
             keyboard["keyboard"],
         )
-        self.assertIn("5. Back", message)
+        self.assertIn("8. Back", message)
 
     def test_reports_routes_to_heart_health_period_menu(self) -> None:
         conversation = {
