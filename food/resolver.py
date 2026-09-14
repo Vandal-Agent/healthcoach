@@ -187,15 +187,15 @@ def find_by_exact_pantry_name(
     return next(iter(matches.values()))
 
 
-def normalized_food_tokens(value: str | None) -> set[str]:
+def normalized_food_terms(value: str | None) -> list[str]:
     """
-    Return meaningful deterministic food-name tokens.
+    Return meaningful deterministic food-name terms in input order.
 
     This normalizes obvious singular/plural wording but does not infer
     a different food.
     """
     if not value:
-        return set()
+        return []
 
     cleaned = value.lower()
     cleaned = cleaned.replace("’", "'")
@@ -224,7 +224,7 @@ def normalized_food_tokens(value: str | None) -> set[str]:
         "tortillas": "tortilla",
     }
 
-    tokens = set()
+    terms = []
 
     for token in cleaned.split():
         normalized = replacements.get(token, token)
@@ -240,9 +240,46 @@ def normalized_food_tokens(value: str | None) -> set[str]:
         if normalized in ignored:
             continue
 
-        tokens.add(normalized)
+        terms.append(normalized)
 
-    return tokens
+    return terms
+
+
+def normalized_food_tokens(value: str | None) -> set[str]:
+    """Return meaningful deterministic food-name tokens."""
+    return set(normalized_food_terms(value))
+
+
+def saved_item_required_term_groups(
+    food_name: str | None,
+) -> list[set[str]]:
+    """Return strict-to-broad food terms for saved-item suggestions."""
+    normalized_name = str(food_name or "").replace("&", " and ")
+    terms = normalized_food_terms(normalized_name)
+
+    if "with" in terms:
+        terms = terms[:terms.index("with")]
+
+    if not terms:
+        return []
+
+    if len(terms) >= 3 and terms[-2] == "and":
+        return [{terms[-3], terms[-1]}]
+
+    serving_terms = {
+        "bowl",
+        "cup",
+        "piece",
+        "portion",
+        "slice",
+    }
+    if len(terms) >= 2 and terms[-1] in serving_terms:
+        return [
+            {terms[-2], terms[-1]},
+            {terms[-2]},
+        ]
+
+    return [{terms[-1]}]
 
 
 def nutrient_completeness(row: dict[str, Any]) -> int:
@@ -513,6 +550,131 @@ def get_active_nutrition(
     return dict(row) if row else None
 
 
+def find_saved_item_suggestions(
+    food_name: str,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Return relevant user-saved Foods and Saved Recipes."""
+    requested_tokens = normalized_food_tokens(food_name)
+    if not requested_tokens or limit <= 0:
+        return []
+
+    required_term_groups = saved_item_required_term_groups(food_name)
+    if not required_term_groups:
+        return []
+
+    initialize_database()
+    with get_connection(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                foods.food_id,
+                foods.canonical_name,
+                foods.serving_description,
+                saved_recipes.saved_recipe_id
+            FROM foods
+            LEFT JOIN saved_recipes
+              ON saved_recipes.food_id = foods.food_id
+            WHERE (
+                    saved_recipes.saved_recipe_id IS NOT NULL
+                    OR foods.verification_source IN (
+                        'user_package_label',
+                        'user_entered'
+                    )
+                  )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM food_consolidations
+                    WHERE food_consolidations.duplicate_food_id =
+                          foods.food_id
+              )
+            ORDER BY lower(foods.canonical_name), foods.food_id
+            """
+        ).fetchall()
+
+    candidates = []
+    for row in rows:
+        item = dict(row)
+        candidate_tokens = normalized_food_tokens(
+            item.get("canonical_name")
+        )
+        item["_normalized_tokens"] = candidate_tokens
+        item["item_type"] = (
+            "recipe"
+            if item.get("saved_recipe_id") is not None
+            else "food"
+        )
+        candidates.append(item)
+
+    suggestions = []
+    for required_terms in required_term_groups:
+        suggestions = [
+            item
+            for item in candidates
+            if required_terms.issubset(item["_normalized_tokens"])
+        ]
+        if suggestions:
+            break
+
+    for item in candidates:
+        item.pop("_normalized_tokens", None)
+
+    return suggestions[:limit]
+
+
+def is_active_saved_item(
+    *,
+    food_id: int,
+    item_type: str,
+    saved_recipe_id: int | None = None,
+) -> bool:
+    """Return whether a suggestion still represents an active saved item."""
+    if item_type not in {"food", "recipe"}:
+        return False
+
+    initialize_database()
+    with get_connection(DATABASE_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT
+                foods.verification_status,
+                foods.verification_source,
+                saved_recipes.saved_recipe_id
+            FROM foods
+            LEFT JOIN saved_recipes
+              ON saved_recipes.food_id = foods.food_id
+            WHERE foods.food_id = ?
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM food_consolidations
+                    WHERE food_consolidations.duplicate_food_id =
+                          foods.food_id
+              )
+            LIMIT 1
+            """,
+            (int(food_id),),
+        ).fetchone()
+
+    if row is None:
+        return False
+
+    item = dict(row)
+    if item_type == "recipe":
+        return (
+            saved_recipe_id is not None
+            and item.get("saved_recipe_id") is not None
+            and int(item["saved_recipe_id"]) == int(saved_recipe_id)
+        )
+
+    return (
+        item.get("saved_recipe_id") is None
+        and item.get("verification_status") == "verified"
+        and item.get("verification_source")
+        in {"user_package_label", "user_entered"}
+    )
+
+
 def resolve_food(
     *,
     food_name: str,
@@ -598,6 +760,7 @@ def resolve_food(
             "request": request,
             "food": None,
             "nutrition": None,
+            "suggestions": find_saved_item_suggestions(name),
         }
 
     return {

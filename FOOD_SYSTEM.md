@@ -851,6 +851,14 @@ single word such as `salad` cannot select a longer personalized food name.
 Close matches are labeled on the verified-nutrition review and are never
 logged until the user explicitly chooses Log It.
 
+When a food description cannot be resolved confidently but shares a relevant
+name with user-entered Saved Foods or Saved Recipes, food logging offers those
+saved items together in one labeled list. Selecting an item asks for servings
+and then uses the normal nutrition review and final logging confirmation.
+Choosing None of these preserves the selected meal and entry date while asking
+for a different description. Unrelated saved items are not shown, and the
+suggestion step never writes to the Food Ledger.
+
 An exact My Pantry display name may also resolve to that item's trusted linked
 Food even when the saved provider name is longer or its serving differs. The
 verified-nutrition review labels this as a Pantry nutrition match before the

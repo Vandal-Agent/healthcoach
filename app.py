@@ -38,6 +38,8 @@ from food.library import (
     add_food_with_nutrition,
     add_user_nutrition_version,
     archive_user_saved_food,
+    get_active_nutrition,
+    get_food,
     list_nutrition_ready_foods,
     list_user_saved_foods,
     save_barcode_mapping,
@@ -158,6 +160,7 @@ from food.barcode_provider import lookup_barcode_nutrition
 from food.restaurant_advisor import recommend_restaurant_entrees
 from food.usda_provider import normalize_barcode
 from food.resolver import (
+    is_active_saved_item,
     is_trusted_saved_food,
     normalized_food_tokens,
     resolve_food,
@@ -332,6 +335,13 @@ def menu_reply_markup(message):
         rows = [
             ["Log It", "Enter custom nutrition"],
             ["Edit", "Cancel"],
+        ]
+        one_time = True
+    elif message.startswith("Did you mean one of these saved items?"):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [
+            choices[index:index + 3]
+            for index in range(0, len(choices), 3)
         ]
         one_time = True
     elif (
@@ -686,6 +696,12 @@ def menu_reply_markup(message):
             ["Dessert"],
             ["Back", "Cancel"],
         ]
+        one_time = True
+    elif (
+        message.startswith("How many servings of ")
+        and "did you have?" in message
+    ):
+        rows = [["0.5", "1", "1.5", "2"]]
         one_time = True
     elif "How many servings of this saved recipe?" in message:
         rows = [["0.5", "1", "1.5", "2"], ["Back", "Cancel"]]
@@ -3772,6 +3788,26 @@ def format_pending_nutrition_confirmation(
         ]
     )
 
+    return "\n".join(lines)
+
+
+def format_saved_item_suggestions(
+    suggestions: list[dict],
+) -> str:
+    """Format uncertain Saved Food and Saved Recipe matches."""
+    lines = ["Did you mean one of these saved items?", ""]
+    for index, item in enumerate(suggestions, start=1):
+        item_label = (
+            "Recipe"
+            if item.get("item_type") == "recipe"
+            else "Food"
+        )
+        lines.append(
+            f"{index}. {item.get('canonical_name')} ({item_label})"
+        )
+    lines.append(f"{len(suggestions) + 1}. None of these")
+    lines.append("")
+    lines.append("Nothing has been logged yet.")
     return "\n".join(lines)
 
 
@@ -23252,6 +23288,169 @@ def process_telegram_update(update):
         and active_conversation.get("conversation_type")
         == "food_interpretation"
         and active_conversation.get("current_step")
+        == "saved_item_selection"
+    ):
+        known_data = dict(active_conversation.get("known_data") or {})
+        suggestions = list(
+            known_data.get("_saved_item_suggestions") or []
+        )
+        lowered = text.lower().strip()
+
+        if lowered in {
+            "none",
+            "none of these",
+            str(len(suggestions) + 1),
+        }:
+            prompt_for_corrected_food(
+                chat_id=chat_id,
+                known_data=known_data,
+                message="Please describe the food a different way.",
+            )
+            return
+
+        selected_item = None
+        if lowered.isdigit():
+            selected_index = int(lowered) - 1
+            if 0 <= selected_index < len(suggestions):
+                selected_item = suggestions[selected_index]
+        else:
+            for suggestion in suggestions:
+                if lowered == str(
+                    suggestion.get("canonical_name") or ""
+                ).lower():
+                    selected_item = suggestion
+                    break
+
+        if selected_item is None:
+            send_telegram_msg(
+                format_saved_item_suggestions(suggestions),
+                chat_id=chat_id,
+            )
+            return
+
+        update_conversation(
+            chat_id=chat_id,
+            current_step="saved_item_servings",
+            known_data={
+                **known_data,
+                "_selected_saved_item": selected_item,
+            },
+            missing_fields=["servings"],
+        )
+        send_telegram_msg(
+            "How many servings of "
+            f"{selected_item.get('canonical_name')} did you have?\n\n"
+            "Choose 0.5, 1, 1.5, or 2.",
+            chat_id=chat_id,
+        )
+        return
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "food_interpretation"
+        and active_conversation.get("current_step")
+        == "saved_item_servings"
+    ):
+        known_data = dict(active_conversation.get("known_data") or {})
+        selected_item = known_data.get("_selected_saved_item") or {}
+
+        serving_text = text.strip()
+        if serving_text == "½":
+            serving_text = "0.5"
+
+        try:
+            servings = float(serving_text)
+        except (TypeError, ValueError):
+            servings = 0
+
+        if servings <= 0 or servings > 4:
+            send_telegram_msg(
+                "Enter a serving amount greater than 0 and no more "
+                "than 4.",
+                chat_id=chat_id,
+            )
+            return
+
+        food_id = selected_item.get("food_id")
+        food = get_food(int(food_id)) if food_id is not None else None
+        nutrition = (
+            get_active_nutrition(int(food_id))
+            if food_id is not None
+            else None
+        )
+        item_type = selected_item.get("item_type")
+        if (
+            food is None
+            or nutrition is None
+            or not is_active_saved_item(
+                food_id=int(food_id),
+                item_type=str(item_type or ""),
+                saved_recipe_id=selected_item.get("saved_recipe_id"),
+            )
+        ):
+            prompt_for_corrected_food(
+                chat_id=chat_id,
+                known_data=known_data,
+                message=(
+                    "That saved item is no longer available. "
+                    "Please describe the food again."
+                ),
+            )
+            return
+
+        pending_components = [
+            {
+                "role": "Recipe" if item_type == "recipe" else "Food",
+                "food_id": food["food_id"],
+                "canonical_name": food["canonical_name"],
+                "restaurant": food.get("restaurant"),
+                "size": None,
+                "quantity": servings,
+                "calories": nutrition.get("calories"),
+                "protein_g": nutrition.get("protein_g"),
+                "verification_source": food.get(
+                    "verification_source"
+                ),
+                "saved_item_type": item_type,
+                "saved_recipe_id": selected_item.get(
+                    "saved_recipe_id"
+                ),
+            }
+        ]
+
+        update_conversation(
+            chat_id=chat_id,
+            current_step="nutrition_confirmation",
+            known_data={
+                **known_data,
+                "quantity": servings,
+                "_pending_components": pending_components,
+            },
+            missing_fields=[],
+        )
+        prompt_message_id = send_telegram_msg(
+            format_pending_nutrition_confirmation(
+                pending_components,
+                meal_category=known_data.get("meal_category"),
+                entry_date=known_data.get("_entry_date"),
+            ),
+            chat_id=chat_id,
+        )
+        if isinstance(prompt_message_id, int):
+            update_conversation(
+                chat_id=chat_id,
+                known_data={
+                    "_nutrition_prompt_message_id": prompt_message_id,
+                },
+            )
+        return
+
+    if (
+        active_conversation
+        and active_conversation.get("conversation_type")
+        == "food_interpretation"
+        and active_conversation.get("current_step")
         == "manual_label_confirmation"
     ):
         lowered = text.lower().strip()
@@ -23549,6 +23748,32 @@ def process_telegram_update(update):
                     "The pending nutrition record is incomplete, "
                     "so nothing was logged.",
                     chat_id=chat_id,
+                )
+                return
+
+            unavailable_saved_item = next(
+                (
+                    component
+                    for component in pending_components
+                    if component.get("saved_item_type")
+                    and not is_active_saved_item(
+                        food_id=int(component["food_id"]),
+                        item_type=str(component["saved_item_type"]),
+                        saved_recipe_id=component.get(
+                            "saved_recipe_id"
+                        ),
+                    )
+                ),
+                None,
+            )
+            if unavailable_saved_item is not None:
+                prompt_for_corrected_food(
+                    chat_id=chat_id,
+                    known_data=known_data,
+                    message=(
+                        "That saved item is no longer available. "
+                        "Please describe the food again."
+                    ),
                 )
                 return
 
@@ -25494,6 +25719,23 @@ def process_telegram_update(update):
                         },
                     )
 
+                return
+
+            suggestions = list(resolution.get("suggestions") or [])
+            if suggestions:
+                update_conversation(
+                    chat_id=chat_id,
+                    current_step="saved_item_selection",
+                    known_data={
+                        **known_data,
+                        "_saved_item_suggestions": suggestions,
+                    },
+                    missing_fields=[],
+                )
+                send_telegram_msg(
+                    format_saved_item_suggestions(suggestions),
+                    chat_id=chat_id,
+                )
                 return
 
             try:
