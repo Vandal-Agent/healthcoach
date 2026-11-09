@@ -314,7 +314,17 @@ def menu_reply_markup(message):
     """Return an iPhone-friendly Telegram keyboard for menu messages."""
     one_time = False
 
-    if "Undo this food entry?" in message:
+    if message.startswith("Save to Quick Log — choose a category:"):
+        rows = [["Breakfast", "Lunch"], ["Dinner", "Snack"], ["Back"]]
+    elif message.startswith("Quick Log — choose a category:"):
+        rows = [["Breakfast", "Lunch"], ["Dinner", "Snack"], ["Back", "Cancel"]]
+    elif message.startswith("Quick Log — "):
+        choices = re.findall(r"(?m)^(\d+)\. ", message)
+        rows = [choices[i:i + 4] for i in range(0, len(choices), 4)]
+        rows.append(["Other food", "Done", "Back"])
+        if "Undo | Change amount | Save to Quick Log" in message:
+            rows.extend([["Undo", "Change amount"], ["Save to Quick Log"]])
+    elif "Undo this food entry?" in message:
         rows = [["Yes", "No"]]
         one_time = True
     elif (
@@ -400,10 +410,16 @@ def menu_reply_markup(message):
         rows = [["Save", "Edit", "Cancel"]]
         one_time = True
     elif (
-        ("Anything else for " in message or "Anything else from " in message)
+        (
+            "Anything else for " in message
+            or "Anything else from " in message
+            or "Anything else to log?" in message
+        )
         and "1. Yes" in message
     ):
         rows = [["Yes", "No"]]
+        if "3. Save to Quick Log" in message:
+            rows.append(["Save to Quick Log"])
         one_time = True
     elif any(
         marker in message
@@ -2338,6 +2354,7 @@ def prompt_for_corrected_food(
                 "meal_category": meal_category,
                 "restaurant": context.get("restaurant"),
                 "_entry_date": entry_date.isoformat(),
+                **quick_log_context(context),
             },
             missing_fields=[],
             original_message="",
@@ -9859,6 +9876,322 @@ def handle_food_photo_conversation(
     return True
 
 
+QUICK_LOG_CATEGORIES = ("Breakfast", "Lunch", "Dinner", "Snack")
+QUICK_LOG_SNACK_MEALS = {"before breakfast", "school snack", "afternoon snack", "dessert"}
+
+
+def quick_log_context(data):
+    return {
+        key: data[key]
+        for key in ("_quick_log_category", "_quick_log_last", "_quick_log_save_entries")
+        if key in data
+    }
+
+
+def quick_log_meal(now):
+    """Choose the main meal in the existing time-of-day windows."""
+    if now.hour < 11:
+        return "breakfast"
+    if now.hour < 16:
+        return "lunch"
+    return "dinner"
+
+
+def quick_log_category_choice(reply):
+    for index, category in enumerate(QUICK_LOG_CATEGORIES, 1):
+        if reply in {str(index), category.lower()}:
+            return category
+    return None
+
+
+def quick_log_category_prompt(*, saving=False):
+    heading = (
+        "Save to Quick Log — choose a category:"
+        if saving else "Quick Log — choose a category:"
+    )
+    choices = [f"{i}. {name}" for i, name in enumerate(QUICK_LOG_CATEGORIES, 1)]
+    return "\n".join([heading, "", *choices, "", "Reply Back to return."])
+
+
+def quick_log_favorite_name(favorite):
+    return format_food_display_name(
+        canonical_name=favorite["canonical_name"],
+        restaurant=favorite.get("restaurant"),
+    )
+
+
+def show_quick_log(chat_id, category, *, last_entry=None, notice=None, save_entries=None):
+    """Show one category and bind its displayed choices to favorite IDs."""
+    meals = QUICK_LOG_SNACK_MEALS if category == "Snack" else {category.lower()}
+    favorites = [
+        favorite for favorite in list_food_favorites()
+        if favorite["meal_category"] in meals
+    ]
+    lines = [f"Quick Log — {category}", ""]
+    if notice:
+        lines.extend([notice, ""])
+    if last_entry:
+        lines.extend(["Did you eat anything else?", ""])
+    if not favorites:
+        lines.extend(["No favorites saved here yet.", ""])
+    for index, favorite in enumerate(favorites, 1):
+        quantity = format_display_number(favorite["quantity"])
+        serving = favorite["serving_description"]
+        amount = serving if favorite["quantity"] == 1 else f"{quantity} × {serving}"
+        lines.append(f"{index}. {quick_log_favorite_name(favorite)} — {amount}")
+    lines.extend(["", "Other food | Done | Back"])
+    if last_entry:
+        lines.append("Undo | Change amount | Save to Quick Log")
+    start_conversation(
+        chat_id=chat_id,
+        conversation_type="healthcoach_menu",
+        current_step="quick_log_list",
+        known_data={
+            "_quick_log_category": category,
+            "_quick_log_ids": [favorite["food_favorite_id"] for favorite in favorites],
+            "_quick_log_last": last_entry,
+            "_quick_log_save_entries": (
+                save_entries if save_entries is not None else ([last_entry] if last_entry else [])
+            ),
+        },
+        missing_fields=[],
+    )
+    send_telegram_msg("\n".join(lines), chat_id=chat_id)
+
+
+def quick_log_sync_notice(entry_date, notice):
+    try:
+        sync_food_ledger_totals_to_sheet(entry_date)
+    except Exception:
+        logging.exception("Quick Log Google Sheet sync failed")
+        return notice + " The Google Sheet totals could not be updated."
+    return notice
+
+
+def offer_quick_log_save(
+    chat_id, entries, *, return_conversation=None, category=None, last_entry=None,
+):
+    known_data = {
+        "_quick_log_save_entries": entries,
+        "_quick_log_return": return_conversation,
+        "_quick_log_category": category,
+        "_quick_log_last": last_entry,
+    }
+    if len(entries) == 1:
+        step = "quick_log_save_category"
+        message = quick_log_category_prompt(saving=True)
+    else:
+        step = "quick_log_save_pick"
+        choices = [f"{i}. {entry['name']}" for i, entry in enumerate(entries, 1)]
+        message = "\n".join(["Choose a food to save as a favorite:", "", *choices, "", "Back"])
+    start_conversation(
+        chat_id=chat_id, conversation_type="healthcoach_menu",
+        current_step=step, known_data=known_data, missing_fields=[],
+    )
+    send_telegram_msg(message, chat_id=chat_id)
+
+
+def return_from_quick_log_save(chat_id, data, last_entry, notice=None):
+    category = data.get("_quick_log_category")
+    previous = data.get("_quick_log_return")
+    if category:
+        show_quick_log(
+            chat_id, category, last_entry=last_entry, notice=notice,
+            save_entries=data["_quick_log_save_entries"],
+        )
+    elif previous:
+        start_conversation(
+            chat_id=chat_id, conversation_type="food_meal",
+            current_step=previous["current_step"], known_data=previous["known_data"],
+            missing_fields=[],
+        )
+        prompt_id = send_telegram_msg(
+            (notice + "\n\n" if notice else "")
+            + "Anything else to log?\n1. Yes\n2. No\n3. Save to Quick Log",
+            chat_id=chat_id,
+        )
+        if type(prompt_id) is int:
+            update_conversation(
+                chat_id=chat_id, known_data={"_food_meal_prompt_message_id": prompt_id},
+            )
+    else:
+        start_conversation(
+            chat_id=chat_id, conversation_type="healthcoach_menu",
+            current_step="favorites", known_data={}, missing_fields=[],
+        )
+        send_telegram_msg(
+            (notice + "\n\n" if notice else "") + healthcoach_favorites_menu_text(),
+            chat_id=chat_id,
+        )
+
+
+def handle_quick_log_menu(chat_id, step, reply, data):
+    if step == "quick_log_category":
+        if reply == "back":
+            update_conversation(chat_id=chat_id, current_step="favorites")
+            send_telegram_msg(healthcoach_favorites_menu_text(), chat_id=chat_id)
+        elif category := quick_log_category_choice(reply):
+            show_quick_log(chat_id, category)
+        else:
+            send_telegram_msg(quick_log_category_prompt(), chat_id=chat_id)
+        return
+
+    category = data.get("_quick_log_category")
+    last_entry = data.get("_quick_log_last")
+    save_entries = data.get("_quick_log_save_entries", [])
+
+    if step in {"quick_log_save_pick", "quick_log_save_category"}:
+        entries = save_entries
+        if reply in {"back", "cancel"}:
+            return_from_quick_log_save(chat_id, data, last_entry)
+            return
+        if step == "quick_log_save_pick":
+            choice = int(reply) if reply.isascii() and reply.isdecimal() and len(reply) < 5 else 0
+            if 1 <= choice <= len(entries):
+                update_conversation(
+                    chat_id=chat_id, current_step="quick_log_save_category",
+                    known_data={"_quick_log_save_entry": entries[choice - 1]},
+                )
+                send_telegram_msg(quick_log_category_prompt(saving=True), chat_id=chat_id)
+            else:
+                offer_quick_log_save(
+                    chat_id, entries, return_conversation=data.get("_quick_log_return"),
+                    category=category, last_entry=last_entry,
+                )
+            return
+
+        destination = quick_log_category_choice(reply)
+        if destination is None:
+            send_telegram_msg(quick_log_category_prompt(saving=True), chat_id=chat_id)
+            return
+        entry = data.get("_quick_log_save_entry") or entries[0]
+        try:
+            save_food_favorite_from_entry(
+                entry["id"],
+                meal_category=destination.lower(),
+            )
+        except ValueError as error:
+            notice = str(error)
+        else:
+            notice = f"Saved {entry['name']} to {destination} Quick Log."
+        return_from_quick_log_save(chat_id, data, last_entry, notice)
+        return
+
+    if step == "quick_log_amount":
+        if reply == "back":
+            show_quick_log(chat_id, category, last_entry=last_entry, save_entries=save_entries)
+            return
+        try:
+            quantity = float(reply)
+            if not math.isfinite(quantity) or quantity <= 0:
+                raise ValueError
+        except ValueError:
+            send_telegram_msg("Enter a positive amount in servings, or reply Back.", chat_id=chat_id)
+            return
+        updated = update_food_entry(last_entry["id"], quantity=quantity)
+        notice = "That food entry no longer exists."
+        if updated:
+            notice = quick_log_sync_notice(
+                date.fromisoformat(last_entry["date"]),
+                f"Changed {last_entry['name']} to {format_display_number(quantity)} servings.",
+            )
+        show_quick_log(
+            chat_id, category, last_entry=last_entry if updated else None,
+            notice=notice, save_entries=save_entries if updated else None,
+        )
+        return
+
+    if reply in {"done", "back"}:
+        next_step = "favorites" if reply == "done" else "quick_log_category"
+        update_conversation(chat_id=chat_id, current_step=next_step)
+        prompt = healthcoach_favorites_menu_text() if reply == "done" else quick_log_category_prompt()
+        send_telegram_msg(prompt, chat_id=chat_id)
+        return
+    if reply == "other food":
+        now = datetime.now(PACIFIC_TZ)
+        start_conversation(
+            chat_id=chat_id, conversation_type="food_meal", current_step="awaiting_food",
+            known_data={
+                "meal_category": quick_log_meal(now),
+                "_entry_date": now.date().isoformat(),
+                "_quick_log_category": category,
+                "_quick_log_last": last_entry,
+                "_quick_log_save_entries": save_entries,
+            },
+            missing_fields=[],
+        )
+        send_telegram_msg("What food did you have? Reply Back to return.", chat_id=chat_id, remove_keyboard=True)
+        return
+    if last_entry and reply == "undo":
+        removed = delete_food_entry(last_entry["id"])
+        notice = "That food entry no longer exists."
+        if removed:
+            notice = quick_log_sync_notice(
+                date.fromisoformat(last_entry["date"]), f"Removed {last_entry['name']}."
+            )
+        show_quick_log(chat_id, category, notice=notice)
+        return
+    if last_entry and reply == "change amount":
+        update_conversation(chat_id=chat_id, current_step="quick_log_amount")
+        send_telegram_msg("Enter the new amount in servings, or reply Back.", chat_id=chat_id, remove_keyboard=True)
+        return
+    if save_entries and reply == "save to quick log":
+        offer_quick_log_save(chat_id, save_entries, category=category, last_entry=last_entry)
+        return
+
+    by_id = {favorite["food_favorite_id"]: favorite for favorite in list_food_favorites()}
+    ids = data.get("_quick_log_ids", [])
+    choice = int(reply) if reply.isascii() and reply.isdecimal() and len(reply) < 5 else 0
+    if 1 <= choice <= len(ids):
+        favorite = by_id.get(ids[choice - 1])
+    else:
+        matches = [
+            by_id[favorite_id] for favorite_id in ids if favorite_id in by_id
+            and quick_log_favorite_name(by_id[favorite_id]).lower() == reply
+        ]
+        favorite = matches[0] if len(matches) == 1 else None
+    if favorite is None:
+        show_quick_log(
+            chat_id, category, last_entry=last_entry, save_entries=save_entries,
+            notice="Choose an item from this list.",
+        )
+        return
+
+    now = datetime.now(PACIFIC_TZ)
+    meal = quick_log_meal(now)
+    food_id = int(favorite["food_id"])
+    quantity = float(favorite["quantity"])
+    name = quick_log_favorite_name(favorite)
+    if find_recent_duplicate_entry(
+        entry_date=now.date(), meal_category=meal, food_id=food_id,
+        quantity=quantity, window_minutes=5,
+    ):
+        show_quick_log(
+            chat_id, category, last_entry=last_entry, save_entries=save_entries,
+            notice=f"{name} was just logged.",
+        )
+        return
+    try:
+        entry = add_food_entry(
+            entry_date=now.date(), meal_category=meal, food_id=food_id, quantity=quantity,
+            logging_source="telegram_ai", original_text="Quick logged from favorites",
+            quantity_is_estimated=False, user_confirmed=True,
+        )
+    except ValueError as error:
+        show_quick_log(
+            chat_id, category, last_entry=last_entry, save_entries=save_entries,
+            notice=str(error),
+        )
+        return
+    notice = quick_log_sync_notice(
+        now.date(), f"Logged {name} under {meal.title()}."
+    )
+    show_quick_log(
+        chat_id, category, notice=notice,
+        last_entry={"id": entry["food_entry_id"], "name": name, "date": now.date().isoformat()},
+    )
+
+
 def process_telegram_update(update):
     message = update.get("message") or update.get("edited_message") or {}
     if not message:
@@ -10481,6 +10814,39 @@ def process_telegram_update(update):
     active_conversation = get_active_conversation(chat_id)
     forced_food_entry_date = None
 
+    if active_conversation:
+        quick_data = active_conversation.get("known_data") or {}
+        quick_category = quick_data.get("_quick_log_category")
+        quick_step = active_conversation.get("current_step")
+        quick_type = active_conversation.get("conversation_type")
+        if (
+            quick_category
+            and quick_type in {"food_meal", "food_interpretation"}
+            and lowered_text in {"back", "cancel"}
+        ):
+            show_quick_log(
+                chat_id, quick_category, last_entry=quick_data.get("_quick_log_last"),
+                save_entries=quick_data.get("_quick_log_save_entries"),
+            )
+            return
+        if (
+            quick_type == "food_meal"
+            and quick_step in {"meal_anything_else", "restaurant_anything_else"}
+            and quick_data.get("_quick_log_saved_candidates")
+            and lowered_text in {"3", "save to quick log"}
+        ):
+            prompt_id = quick_data.get("_food_meal_prompt_message_id")
+            if prompt_id is not None and message_id is not None and int(message_id) <= int(prompt_id):
+                return
+            offer_quick_log_save(
+                chat_id, quick_data["_quick_log_saved_candidates"],
+                return_conversation={
+                    "current_step": quick_step,
+                    "known_data": quick_data,
+                },
+            )
+            return
+
     if (
         active_conversation
         and active_conversation.get("conversation_type")
@@ -10567,6 +10933,10 @@ def process_telegram_update(update):
         )
         lowered = text.lower().strip()
         today = datetime.now(PACIFIC_TZ).date()
+
+        if current_step in {"quick_log_save_pick", "quick_log_save_category"} and lowered == "cancel":
+            handle_quick_log_menu(chat_id, current_step, lowered, known_data)
+            return
 
         if lowered in {"cancel", "exit", "quit", "close"}:
             cancel_conversation(chat_id)
@@ -20968,33 +21338,19 @@ def process_telegram_update(update):
             )
             return
 
+        if current_step in {"favorite_quick_select", "favorite_quick_confirmation"}:
+            update_conversation(chat_id=chat_id, current_step="quick_log_category")
+            send_telegram_msg(quick_log_category_prompt(), chat_id=chat_id)
+            return
+
+        if current_step and current_step.startswith("quick_log_"):
+            handle_quick_log_menu(chat_id, current_step, lowered, known_data)
+            return
+
         if current_step == "favorites":
             if lowered in {"1", "quick log", "quick"}:
-                favorites = list_food_favorites()
-                if not favorites:
-                    send_telegram_msg(
-                        "You do not have any saved favorites yet.",
-                        chat_id=chat_id,
-                    )
-                    return
-                update_conversation(
-                    chat_id=chat_id,
-                    current_step="favorite_quick_select",
-                    known_data={
-                        "_favorite_ids": [
-                            int(item["food_favorite_id"])
-                            for item in favorites
-                        ],
-                    },
-                    missing_fields=[],
-                )
-                send_telegram_msg(
-                    format_favorite_choices(
-                        favorites,
-                        action="log",
-                    ),
-                    chat_id=chat_id,
-                )
+                update_conversation(chat_id=chat_id, current_step="quick_log_category")
+                send_telegram_msg(quick_log_category_prompt(), chat_id=chat_id)
                 return
 
             if lowered in {"2", "save today's food", "save today"}:
@@ -21074,7 +21430,6 @@ def process_telegram_update(update):
             return
 
         if current_step in {
-            "favorite_quick_select",
             "favorite_save_select",
             "favorite_remove_select",
         }:
@@ -21123,20 +21478,9 @@ def process_telegram_update(update):
                         chat_id=chat_id,
                     )
                     return
-                update_conversation(
-                    chat_id=chat_id,
-                    current_step="favorite_save_confirmation",
-                    known_data={"_entry_id": entry_id},
-                    missing_fields=[],
-                )
-                send_telegram_msg(
-                    "Save this favorite?\n\n"
-                    f"Food: {entry['canonical_name']}\n"
-                    f"Meal: {str(entry['meal_category']).title()}\n"
-                    f"Quantity: {format_display_number(float(entry['quantity']))}\n\n"
-                    "1. Yes\n2. No",
-                    chat_id=chat_id,
-                )
+                offer_quick_log_save(chat_id, [{
+                    "id": entry_id, "name": entry["canonical_name"],
+                }])
                 return
 
             favorites = list_food_favorites()
@@ -21145,11 +21489,7 @@ def process_telegram_update(update):
                 send_telegram_msg(
                     format_favorite_choices(
                         favorites,
-                        action=(
-                            "remove"
-                            if current_step == "favorite_remove_select"
-                            else "log"
-                        ),
+                        action="remove",
                     ),
                     chat_id=chat_id,
                 )
@@ -21170,23 +21510,14 @@ def process_telegram_update(update):
                 )
                 return
 
-            is_remove = current_step == "favorite_remove_select"
             update_conversation(
                 chat_id=chat_id,
-                current_step=(
-                    "favorite_remove_confirmation"
-                    if is_remove
-                    else "favorite_quick_confirmation"
-                ),
+                current_step="favorite_remove_confirmation",
                 known_data={"_favorite_id": favorite_id},
                 missing_fields=[],
             )
             send_telegram_msg(
-                (
-                    "Remove this favorite?\n\n"
-                    if is_remove
-                    else "Quick-log this favorite?\n\n"
-                )
+                "Remove this favorite?\n\n"
                 + f"Food: {favorite['canonical_name']}\n"
                 + f"Meal: {str(favorite['meal_category']).title()}\n"
                 + f"Quantity: {format_display_number(float(favorite['quantity']))}\n\n"
@@ -21197,7 +21528,6 @@ def process_telegram_update(update):
 
         if current_step in {
             "favorite_save_confirmation",
-            "favorite_quick_confirmation",
             "favorite_remove_confirmation",
         }:
             if lowered in {"2", "no", "back"}:
@@ -21217,7 +21547,6 @@ def process_telegram_update(update):
             if lowered not in {"1", "yes"}:
                 prompt = {
                     "favorite_save_confirmation": "Save this favorite?",
-                    "favorite_quick_confirmation": "Quick-log this favorite?",
                     "favorite_remove_confirmation": "Remove this favorite?",
                 }[current_step]
                 send_telegram_msg(
@@ -21247,92 +21576,6 @@ def process_telegram_update(update):
                     if removed
                     else "That favorite no longer exists."
                 )
-
-            else:
-                favorite_id = int(
-                    known_data.get("_favorite_id") or 0
-                )
-                favorite = next(
-                    (
-                        item for item in list_food_favorites()
-                        if int(item["food_favorite_id"])
-                        == favorite_id
-                    ),
-                    None,
-                )
-                if favorite is None:
-                    send_telegram_msg(
-                        "That favorite no longer exists.",
-                        chat_id=chat_id,
-                    )
-                    return
-                duplicate = find_recent_duplicate_entry(
-                    entry_date=today,
-                    meal_category=favorite["meal_category"],
-                    food_id=int(favorite["food_id"]),
-                    quantity=float(favorite["quantity"]),
-                    window_minutes=5,
-                )
-                if duplicate is not None:
-                    update_conversation(
-                        chat_id=chat_id,
-                        current_step="favorites",
-                        known_data={},
-                        missing_fields=[],
-                    )
-                    send_telegram_msg(
-                        "That exact favorite was logged within the "
-                        "last five minutes, so it was not logged again.\n\n"
-                        + healthcoach_favorites_menu_text(),
-                        chat_id=chat_id,
-                    )
-                    return
-                try:
-                    add_food_entry(
-                        entry_date=today,
-                        meal_category=favorite["meal_category"],
-                        food_id=int(favorite["food_id"]),
-                        quantity=float(favorite["quantity"]),
-                        logging_source="telegram_ai",
-                        original_text="Quick logged from favorites",
-                        quantity_is_estimated=False,
-                        user_confirmed=True,
-                    )
-                except ValueError as error:
-                    update_conversation(
-                        chat_id=chat_id,
-                        current_step="favorites",
-                        known_data={},
-                        missing_fields=[],
-                    )
-                    send_telegram_msg(
-                        str(error) + "\n\n"
-                        + healthcoach_favorites_menu_text(),
-                        chat_id=chat_id,
-                    )
-                    return
-                except Exception:
-                    logging.exception("Favorite quick log failed")
-                    send_telegram_msg(
-                        "The favorite could not be logged.",
-                        chat_id=chat_id,
-                    )
-                    return
-                try:
-                    sync_food_ledger_totals_to_sheet(today)
-                except Exception:
-                    logging.exception(
-                        "Favorite Google Sheet sync failed"
-                    )
-                    result_message = (
-                        f"Quick logged {favorite['canonical_name']}, "
-                        "but the Google Sheet totals could not be updated."
-                    )
-                else:
-                    result_message = (
-                        f"Quick logged {favorite['canonical_name']} for "
-                        f"{str(favorite['meal_category']).title()}."
-                    )
 
             update_conversation(
                 chat_id=chat_id,
@@ -24062,6 +24305,13 @@ def process_telegram_update(update):
                 "cancel",
                 "keep first",
             }:
+                if category := known_data.get("_quick_log_category"):
+                    show_quick_log(
+                        chat_id, category, last_entry=known_data.get("_quick_log_last"),
+                        save_entries=known_data.get("_quick_log_save_entries"),
+                        notice="The earlier food entry was kept.",
+                    )
+                    return
                 cancel_conversation(chat_id)
 
                 send_telegram_msg(
@@ -24287,6 +24537,24 @@ def process_telegram_update(update):
                     )
                 return
 
+            quick_log_candidates = [
+                {
+                    "id": component["entry"]["food_entry_id"],
+                    "name": component["canonical_name"],
+                    "date": target_entry_date.isoformat(),
+                }
+                for component in logged_entries
+            ]
+            if category := known_data.get("_quick_log_category"):
+                latest = quick_log_candidates[-1]
+                names = ", ".join(entry["name"] for entry in quick_log_candidates)
+                show_quick_log(
+                    chat_id, category, last_entry=latest,
+                    notice=f"Logged {names} under {meal_category.title()}.",
+                    save_entries=quick_log_candidates,
+                )
+                return
+
             complete_conversation(chat_id)
 
             start_conversation(
@@ -24301,6 +24569,7 @@ def process_telegram_update(update):
                     "meal_category": meal_category,
                     "restaurant": restaurant,
                     "_entry_date": target_entry_date.isoformat(),
+                    "_quick_log_saved_candidates": quick_log_candidates,
                 },
                 missing_fields=[],
                 original_message=original_message,
@@ -24379,6 +24648,7 @@ def process_telegram_update(update):
                     ),
                     "1. Yes",
                     "2. No",
+                    "3. Save to Quick Log",
                 ]
             )
 
@@ -24773,6 +25043,7 @@ def process_telegram_update(update):
             ),
             known_data={
                 **interpretation.model_dump(),
+                **quick_log_context(meal_context),
                 **(
                     {"_entry_date": entry_date.isoformat()}
                     if entry_date is not None
@@ -25706,10 +25977,9 @@ def process_telegram_update(update):
         == "confirmation"
     ):
         lowered = text.lower().strip()
+        known_data = active_conversation.get("known_data") or {}
 
         if lowered in {"1", "correct", "yes"}:
-            known_data = active_conversation.get("known_data") or {}
-
             food_name = known_data.get("food_name")
             size = known_data.get("size")
             brand = known_data.get("brand")

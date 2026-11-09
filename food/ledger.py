@@ -499,10 +499,11 @@ def copy_food_entries_to_date(
 
 def save_food_favorite_from_entry(
     food_entry_id: int,
+    *,
+    meal_category: str | None = None,
 ) -> dict[str, Any]:
-    """Save one logged Food entry's food, quantity, and meal as a favorite."""
+    """Save a logged food and portion in the chosen favorites category."""
     initialize_database()
-    timestamp = current_timestamp()
 
     with get_connection(DATABASE_PATH) as connection:
         entry = connection.execute(
@@ -517,8 +518,22 @@ def save_food_favorite_from_entry(
         if entry is None:
             raise ValueError("Food entry not found.")
 
-        future_food_id = active_food_id(int(entry["food_id"]))
+    return save_food_favorite(
+        food_id=int(entry["food_id"]),
+        quantity=float(entry["quantity"]),
+        meal_category=meal_category if meal_category is not None else entry["meal_category"],
+    )
 
+
+def save_food_favorite(
+    *, food_id: int, quantity: float, meal_category: str,
+) -> dict[str, Any]:
+    """Save a library food and portion without creating a ledger entry."""
+    initialize_database()
+    future_food_id = active_food_id(food_id)
+    category = normalize_meal_category(meal_category)
+    timestamp = current_timestamp()
+    with get_connection(DATABASE_PATH) as connection:
         connection.execute(
             """
             INSERT INTO food_favorites (
@@ -534,8 +549,8 @@ def save_food_favorite_from_entry(
             """,
             (
                 future_food_id,
-                float(entry["quantity"]),
-                entry["meal_category"],
+                float(quantity),
+                category,
                 timestamp,
                 timestamp,
             ),
@@ -556,8 +571,8 @@ def save_food_favorite_from_entry(
             """,
             (
                 future_food_id,
-                float(entry["quantity"]),
-                entry["meal_category"],
+                float(quantity),
+                category,
             ),
         ).fetchone()
 
